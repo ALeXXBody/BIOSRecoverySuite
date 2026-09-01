@@ -51,8 +51,19 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm bios_recovery.spec
 
+      - name: Build Windows installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: BIOSRecoverySuite-windows
-          path: dist/BIOSRecoverySuite/
+          path: |
+            dist/BIOSRecoverySuite/
+            dist/BIOSRecoverySuite-Setup-*.exe
