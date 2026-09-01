@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QToolBar,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QObject
+from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
+from PySide6.QtGui import QIcon
 
 from bios_recovery.engines.bios_analyzer import BiosAnalyzer, BiosType
 from bios_recovery.engines.me_cleaner import IntelMECleaner
@@ -41,6 +42,8 @@ from bios_recovery.engines.bios_extractor import BiosExtractor
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
 from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.ec_tab import ECTab
+from bios_recovery.gui.update_dialog import UpdateDialog, CheckWorker
+from bios_recovery import __version__
 
 
 class WorkerThread(QThread):
@@ -83,7 +86,39 @@ class MainWindow(QMainWindow):
         self._threads = []
 
         self._build_ui()
+        self.setWindowIcon(self._app_icon())
         self.statusBar().showMessage("Ready - Open a BIOS file to begin")
+        QTimer.singleShot(3000, self._auto_update_check)
+
+    def _app_icon(self) -> QIcon:
+        candidates = []
+        if getattr(sys, "frozen", False):
+            base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+            candidates.append(os.path.join(base, "assets", "icon.png"))
+            candidates.append(os.path.join(os.path.dirname(sys.executable), "assets", "icon.png"))
+        else:
+            root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            candidates.append(os.path.join(root, "assets", "icon.png"))
+        for c in candidates:
+            if os.path.exists(c):
+                return QIcon(c)
+        return QIcon()
+
+    def _auto_update_check(self):
+        """Quiet startup check - only surfaces a dialog when an update exists."""
+        self._update_worker = CheckWorker()
+        self._update_worker.found.connect(self._show_update_dialog)
+        self._update_worker.start()
+
+    def _show_update_dialog(self, release):
+        self._update_dialog = UpdateDialog(self)
+        self._update_dialog.present_release(release)
+        self._update_dialog.show()
+        self._update_dialog.raise_()
+
+    def check_for_updates(self):
+        self._update_dialog = UpdateDialog(self)
+        self._update_dialog.exec()
 
     def _build_ui(self):
         central = QWidget()
@@ -135,6 +170,7 @@ class MainWindow(QMainWindow):
         tool_menu.addAction("&EC Patching", lambda: self.tabs.setCurrentWidget(self.ec_tab))
 
         help_menu = menubar.addMenu("&Help")
+        help_menu.addAction("&Check for Updates...", self.check_for_updates)
         help_menu.addAction("&About", self.show_about)
 
     def _build_main_tab(self):
@@ -766,7 +802,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About BIOS Recovery Suite",
-            "BIOS Recovery Suite v1.0.0\n\n"
+            f"BIOS Recovery Suite v{__version__}\n\n"
             "Professional BIOS repair, analysis, ME cleaning,\n"
             "DMI extraction, and password removal tool.\n\n"
             "Supports all major BIOS manufacturers.\n\n"

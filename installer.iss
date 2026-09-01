@@ -2,7 +2,7 @@
 ; Compiled on CI with ISCC.exe after the PyInstaller build.
 
 #define MyAppName "BIOS Recovery Suite"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "ALeXXBody"
 #define MyAppExeName "BIOSRecoverySuite.exe"
 
@@ -16,6 +16,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=dist
 OutputBaseFilename=BIOSRecoverySuite-Setup-{#MyAppVersion}
+SetupIconFile=assets\icon.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
