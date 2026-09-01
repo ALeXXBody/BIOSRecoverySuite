@@ -92,3 +92,45 @@ LBE (Laptop Bios Extractor) by EgyFixLab is the inspiration for this tool. Its k
 - `CmosPwd` - Legacy BIOS password decryption
 - `pwgen-for-bios` - Master password generators
 - `spi_flash_auto_unlocker` - Automated password removal from dumps
+
+## SPI Programmer Integration (flashrom)
+
+- **Programmers**: `ch341a_spi` (low-cost CH341A clip), `ft2232_spi` (FTDI), `linux_spi`
+  (SoC SPI), `buspirate_spi`, `dediprog`, `realtek_mst_i2c_spi`.
+- flashrom surfaced as a subprocess; the engine auto-discovers the binary on PATH plus
+  common Windows/Linux install locations (`C:\Program Files\flashrom\flashrom.exe`,
+  `/usr/sbin/flashrom`).
+- Invocation contract used by `spi_flasher.py`:
+  - List supported programmers: `flashrom --list-supported programmer`
+  - Identify chip: `flashrom -p <prog> --flash-name`
+  - Read: `flashrom -p <prog> -r <file>`
+  - Write: `flashrom -p <prog> -w <file> [-v]`
+  - Erase: `flashrom -p <prog> -E`
+- Progress is parsed from `==> NN%` markers in flashrom's stderr.
+- **Safety model**: writes and erases are gated behind explicit UI consent; a full read
+  backup is taken before any write; `verify` after write is on by default.
+
+## EC Firmware Patching (Embedded Controller)
+
+- **Role**: On most laptops the EC owns the KBC and enforces the setup-password state,
+  so modern password holds (Lenovo/HP gen 2-3) persist in `EC` flash, not just NVRAM.
+- **Common EC silicon**:
+  | Vendor | Typical chips | Disambiguation strings |
+  |---|---|---|
+  | ITE | IT8518, IT8531, IT8528, IT8587 | `ITE`, `IT85`, `IT87`, `8528` |
+  | Nuvoton | NPCE793, NPCE795, NPCX  | `NPCE`, `NPCX`, `Nuvoton` |
+  | Microchip | MEC1322, MEC1501 | `MEC1`, `MICROCHIP` |
+  | ENE | KB9012, KB9022 | `ENE`, `KB90` |
+- **Layout**: 2-chip design images the EC ROM in the top of the SPI dump (often the last
+  256-512KB); standalone EC flashes are exactly 1 chip. The engine scans from the first
+  controller signature and trims trailing `FF` padding.
+- **Password markers scanned**: `PasswordStatus`, `UnLock`, `UNLock`,
+  UTF-16LE "Pass", `SecurityFeatures`, `secFPass`, `PayloadLock`, `HashPass`,
+  `PassHash`, `KBC_PW`.
+- **Checksums**: many older ITE/Nuvoton EC images store an 8-bit XOR checksum in the
+  final byte; the engine reports validity and can recompute it.
+- **Patch policy**: byte patches live in `bios_recovery/patches/ec_patches.json` and are
+  loaded at runtime, so community-verified signatures can be contributed without code
+  changes. Every entry has a `verified` flag; the engine refuses to apply unverified
+  patches unless the operator explicitly confirms. No hardcoded unverified byte patches
+  ship in code.

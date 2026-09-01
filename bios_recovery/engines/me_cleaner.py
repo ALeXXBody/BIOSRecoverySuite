@@ -57,8 +57,6 @@ class IntelMECleaner:
         b"LOCM": "LOCM (LOCM)",
         b"ISHC": "ISHC (ISHC)",
         b"WCOD": "WCOD (WCOD)",
-        b"LOCL": "LOCL (LOCL)",
-        b"WCOD": "WCOD (WCOD)",
     }
 
     def clean(

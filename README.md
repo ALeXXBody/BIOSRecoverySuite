@@ -13,6 +13,8 @@ Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password re
 - **Password Removal** - Remove setup/admin passwords from AMI, Insyde, Phoenix, Dell, HP, Lenovo firmware
 - **Master Password Generator** - Generate master passwords for Dell, HP, and Insyde systems
 - **BIOS Extraction** - Extract BIOS from vendor EXE, PFS, COM, FL1, and other formats
+- **SPI Flasher** - Read/write/erase/verify SPI flash through flashrom (CH341A, FT2232, etc.)
+- **EC Patching** - Locate and analyze Embedded Controller firmware, scan for password flags, extract regions, and apply data-driven patches
 - **Hex Viewer** - Inspect raw bytes of any firmware image
 
 ## Supported Manufacturers
@@ -88,6 +90,42 @@ Generate master passwords:
 - HP
 - Insyde (Acer/HP)
 
+### SPI Flasher Tab
+Program SPI flash chips with flashrom:
+- Auto-detect supported programmers (`ch341a_spi`, `ft2232_spi`, `linux_spi`, ...)
+- Identify the installed chip
+- **Read** the full chip to a backup file
+- **Write** an image (requires an explicit consent check AND an automatic pre-write backup)
+- **Erase** the chip (requires an explicit consent check)
+- Every destructive action must be consciously confirmed in the UI.
+
+### EC Patching Tab
+Analyze the Embedded Controller firmware inside a dump:
+- Detect OEM DMI chassis type, model, and version
+- Locate the EC region by controller signatures (ITE, Nuvoton, Microchip MEC, ENE)
+- Scan for password/security flags (`PasswordStatus`, `UnLock`, `KBC_PW`, ...)
+- Extract the EC firmware region to a standalone file
+- Apply patches from the **data-driven registry** (`bios_recovery/patches/ec_patches.json`).
+  Only `verified` patches apply automatically; unverified patches require typing an
+  explicit acceptance phrase. The registry is community-extendable without code changes.
+
+## Testing
+
+The test suite runs against **structurally-valid synthetic fixtures** (no real hardware or real dumps needed):
+
+```bash
+pip install pytest
+pytest tests/ -v
+```
+
+- `tests/fixture_builder.py` - generates realistic dumps: an Intel flash-descriptor +
+  ME + GbE + firmware-volume + SMBIOS + NVRAM image, a Dell PFS package, and full-size
+  EC dumps with ITE markers and an XOR checksum.
+- The SPI flasher tests use a fake `tests/fake_flashrom.py` shim (flashrom itself needs
+  real hardware and is never run in CI).
+- EC patches are intentionally NOT hardware-verified; the engine refuses unverified patches
+  by default.
+
 ## Command Line Usage
 
 ```bash
@@ -114,13 +152,22 @@ bios_recovery/
 │   ├── dmi_extractor.py      # SMBIOS/DMI parsing
 │   ├── password_remover.py   # Password removal & generation
 │   ├── bios_extractor.py     # Vendor package extraction
-│   └── bios_repair.py        # Auto-repair engine
+│   ├── bios_repair.py        # Auto-repair engine
+│   ├── spi_flasher.py        # flashrom-based SPI programmer integration
+│   └── ec_patcher.py         # EC firmware analysis + patch registry
+├── patches/
+│   └── ec_patches.json       # data-driven EC patch registry
 ├── manufacturers/
 │   └── profiles.py           # Manufacturer-specific knowledge
 ├── gui/
 │   ├── main_window.py        # Qt main window
-│   └── styles.py             # Theme stylesheets
+│   ├── spi_tab.py            # SPI flasher tab
+│   └── ec_tab.py             # EC patching tab
 └── utils/
+tests/
+├── fixture_builder.py        # synthetic BIOS/EC fixture generators
+├── fake_flashrom.py          # deterministic flashrom test double
+└── test_*.py                 # regression suites
 ```
 
 ## Disclaimer

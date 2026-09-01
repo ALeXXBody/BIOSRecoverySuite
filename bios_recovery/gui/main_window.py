@@ -39,6 +39,8 @@ from bios_recovery.engines.password_remover import PasswordRemover
 from bios_recovery.engines.bios_repair import BiosRepairEngine
 from bios_recovery.engines.bios_extractor import BiosExtractor
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
+from bios_recovery.gui.spi_tab import SPITab
+from bios_recovery.gui.ec_tab import ECTab
 
 
 class WorkerThread(QThread):
@@ -100,6 +102,8 @@ class MainWindow(QMainWindow):
         self.extract_tab = self._build_extract_tab()
         self.hex_tab = self._build_hex_tab()
         self.passgen_tab = self._build_passgen_tab()
+        self.spi_tab = SPITab(self)
+        self.ec_tab = ECTab(self)
 
         self.tabs.addTab(self.main_tab, "Overview")
         self.tabs.addTab(self.repair_tab, "Repair")
@@ -109,6 +113,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.extract_tab, "Extract")
         self.tabs.addTab(self.hex_tab, "Hex Viewer")
         self.tabs.addTab(self.passgen_tab, "Passwords")
+        self.tabs.addTab(self.spi_tab, "SPI Flasher")
+        self.tabs.addTab(self.ec_tab, "EC Patching")
 
         self._build_menubar()
 
@@ -125,6 +131,8 @@ class MainWindow(QMainWindow):
         tool_menu.addAction("&Clean ME", lambda: self.tabs.setCurrentWidget(self.me_tab))
         tool_menu.addAction("&Extract DMI", lambda: self.tabs.setCurrentWidget(self.dmi_tab))
         tool_menu.addAction("Remove &Passwords", lambda: self.tabs.setCurrentWidget(self.password_tab))
+        tool_menu.addAction("SPI &Flasher", lambda: self.tabs.setCurrentWidget(self.spi_tab))
+        tool_menu.addAction("&EC Patching", lambda: self.tabs.setCurrentWidget(self.ec_tab))
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction("&About", self.show_about)
@@ -432,6 +440,8 @@ class MainWindow(QMainWindow):
             self.dmi_file.setText(path)
             self.password_file.setText(path)
             self.extract_file.setText(path)
+            self.ec_tab.current_dump = path
+            self.ec_tab.ec_file.setText(path)
             self.statusBar().showMessage(f"Loaded: {path}")
             self.run_analysis()
 

@@ -1,0 +1,28 @@
+{
+  "patches": [
+    {
+      "key": "lenovo_t430_e147_gen3_disable_payload_flag",
+      "vendor": "Lenovo",
+      "generation": "T430/X230 (Ivy Bridge, gen 3)",
+      "controller": "ITE4532",
+      "description": "Zeroes the classic ITE KBC payload-lock 'PasswordStatus' flag seen on many Ivy Bridge thinkpads.",
+      "signature_hex": "50617373776f7264537461747573",
+      "patch_hex": "0000000000000000000000000000",
+      "offset_hint": "EC firmware region",
+      "verified": false,
+      "source": "community-reported, not hardware-verified"
+    },
+    {
+      "key": "lenovo_t430_e147_gen3_disable_unlock_flag",
+      "vendor": "Lenovo",
+      "generation": "T430/X230 (Ivy Bridge, gen 3)",
+      "controller": "ITE4532",
+      "description": "Zeros the 'UnLock' marker which some Lenovo EC images use as the password state switch.",
+      "signature_hex": "556e4c6f636b",
+      "patch_hex": "000000000000",
+      "offset_hint": "EC firmware region",
+      "verified": false,
+      "source": "community-reported, not hardware-verified"
+    }
+  ]
+}

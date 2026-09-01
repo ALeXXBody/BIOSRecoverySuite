@@ -154,7 +154,9 @@ class BiosAnalyzer:
 
     def _find_regions(self, data: bytes, bios_type: BiosType) -> list[RegionInfo]:
         if bios_type == BiosType.INTEL_IFD:
-            return self._parse_intel_ifd(data)
+            regions = self._parse_intel_ifd(data)
+            self._search_firmware_volumes(data, regions)
+            return regions
         regions = []
         self._search_firmware_volumes(data, regions)
         self._search_me_region(data, regions)
@@ -184,7 +186,6 @@ class BiosAnalyzer:
             return regions
 
         region_defs = [
-            (0, RegionType.FLASH_DESCRIPTOR, "Flash Descriptor"),
             (1, RegionType.BIOS, "BIOS"),
             (2, RegionType.INTEL_ME, "Intel ME"),
             (3, RegionType.GBE, "GbE"),
@@ -228,7 +229,7 @@ class BiosAnalyzer:
             fv_start = max(0, idx - 0x28)
             if fv_start + 0x30 <= len(data):
                 try:
-                    fv_size = struct.unpack_from("<Q", data, fv_start + 0x10)[0]
+                    fv_size = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
                     if fv_size > 0 and fv_size < len(data):
                         regions.append(RegionInfo(
                             region_type=RegionType.BIOS,

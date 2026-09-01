@@ -174,7 +174,7 @@ class BiosExtractor:
             if idx + 0x10 <= len(data):
                 try:
                     pfs_size = struct.unpack_from("<I", data, idx + 0x04)[0]
-                    if 0 < pfs_size < len(data):
+                    if 0 < pfs_size <= len(data) and idx + pfs_size <= len(data):
                         output_file = os.path.join(output_dir, f"pfs_segment_{idx:#x}.bin")
                         with open(output_file, "wb") as f:
                             f.write(data[idx:idx + pfs_size])
@@ -382,7 +382,7 @@ class BiosExtractor:
                 fv_start = max(0, idx - 0x28)
                 if fv_start + 0x30 <= len(data):
                     try:
-                        fv_size = struct.unpack_from("<Q", data, fv_start + 0x10)[0]
+                        fv_size = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
                         if 0 < fv_size < len(data):
                             regions.append((fv_start, min(fv_size, len(data) - fv_start)))
                     except struct.error:
@@ -419,7 +419,7 @@ class BiosExtractor:
             fv_start = max(0, idx - 0x28)
             if fv_start + 0x30 <= len(data):
                 try:
-                    fv_size = struct.unpack_from("<Q", data, fv_start + 0x10)[0]
+                    fv_size = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
                     if 0 < fv_size < len(data):
                         regions.append((fv_start, min(fv_size, len(data) - fv_start)))
                 except struct.error:

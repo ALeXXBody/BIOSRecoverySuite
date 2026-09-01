@@ -60,11 +60,15 @@ class PasswordRemover:
     ]
 
     KNOWN_PASSWORD_PATTERNS = {
-        PasswordType.AMI_SETUP_PASSWORD: [b"AMITSESetup", b"AMITSE"],
+        PasswordType.AMI_SETUP_PASSWORD: [
+            b"AMITSESetup",
+            b"AMITSE",
+            b"A\x00M\x00I\x00T\x00S\x00E\x00S\x00e\x00t\x00u\x00p\x00",
+        ],
         PasswordType.PHOENIX_PASSWORD: [b"Phoenix", b"phoenix"],
-        PasswordType.LENOVO_PASSWORD: [b"cE!", b"\x00\x00\x00\x00\x00\x00\x00\x00"],
+        PasswordType.LENOVO_PASSWORD: [b"cE!"],
         PasswordType.DELL_ADMIN_PASSWORD: [b"8FC8", b"BF97", b"CF1B"],
-        PasswordType.HP_PASSWORD: [b"Admin", b"admin", b"\x00\x00\x00\x00\x00\x00"],
+        PasswordType.HP_PASSWORD: [b"Admin", b"admin"],
     }
 
     def remove_passwords(
