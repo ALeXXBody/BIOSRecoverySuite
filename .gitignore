@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Build
+*.spec
+*.exe
+*.msi
+*.app

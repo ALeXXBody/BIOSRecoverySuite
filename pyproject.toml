@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "BIOSRecoverySuite"
+version = "1.0.0"
+description = "Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password removal tool"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "ALeXXBody"}
+]
+keywords = ["bios", "firmware", "repair", "intel-me", "dmi", "uefi", "password"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Firmware",
+]
+dependencies = [
+    "PySide6>=6.5.0",
+    "pyinstaller>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+bios-recovery = "bios_recovery.main:main"
+
+[tool.setuptools.packages.find]
+include = ["bios_recovery*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
