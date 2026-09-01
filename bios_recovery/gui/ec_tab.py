@@ -71,7 +71,6 @@ class ECTab(QWidget):
         patch_row = QHBoxLayout()
         self.patch_combo = QComboBox()
         self.patch_combo.currentIndexChanged.connect(self._patch_desc_changed)
-        self._reload_patch_list()
         patch_row.addWidget(self.patch_combo, 1)
         self.patch_apply_btn = QPushButton("Apply Patch")
         self.patch_apply_btn.clicked.connect(self.apply_patch)
@@ -96,6 +95,9 @@ class ECTab(QWidget):
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(140)
         layout.addWidget(self.log_text)
+
+        # Everything must exist before the registry is loaded into the widgets.
+        self._reload_patch_list()
 
     def _reload_patch_list(self):
         self._patches = self.patcher.list_patches()
