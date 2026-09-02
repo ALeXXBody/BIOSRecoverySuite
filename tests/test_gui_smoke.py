@@ -27,8 +27,45 @@ def test_main_window_constructs(qapp):
     w = MainWindow()
     titles = [w.tabs.tabText(i) for i in range(w.tabs.count())]
     for expected in ["Overview", "Repair", "ME Cleaner", "DMI", "Security",
-                     "Extract", "Hex Viewer", "Passwords", "SPI Flasher", "EC Patching"]:
+                     "Extract", "Hex Viewer", "Passwords", "SPI Flasher",
+                     "EC Patching", "Lenovo Unlock"]:
         assert expected in titles, f"missing tab: {expected}"
+
+
+def test_lenovo_tab_scan_and_apply(qapp, uefi_patch_image, tmp_path, monkeypatch):
+    """Full Lenovo tab flow against the synthetic patched-driver fixture."""
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+
+    from bios_recovery.gui.lenovo_tab import LenovoTab
+
+    tab = LenovoTab()
+    tab.current_dump = uefi_patch_image
+    tab.run_scan()
+    assert tab.groups_table.rowCount() >= 4
+    total_matches = sum(int(tab.groups_table.item(i, 2).text())
+                        for i in range(tab.groups_table.rowCount()))
+    assert total_matches >= 3
+
+    tab.run_detect()
+    assert "Lenovo firmware detected: YES" in tab.detect_text.toPlainText()
+
+    # select every group and apply
+    from PySide6.QtCore import Qt
+    for i in range(tab.groups_table.rowCount()):
+        tab.groups_table.item(i, 0).setCheckState(Qt.Checked)
+    tab.apply_patches()
+    out = uefi_patch_image.rsplit(".", 1)[0] + "_patched.bin"
+    assert os.path.exists(out)
+
+
+def test_lenovo_tab_dxe_registry_populates(qapp):
+    from bios_recovery.gui.lenovo_tab import LenovoTab
+
+    tab = LenovoTab()
+    assert tab.dxe_table.columnCount() == 5
+    assert isinstance(tab._dxe_entries, list)
 
 
 def test_ec_tab_registry_loaded(qapp):

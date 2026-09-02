@@ -15,6 +15,7 @@ Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password re
 - **BIOS Extraction** - Extract BIOS from vendor EXE, PFS, COM, FL1, and other formats
 - **SPI Flasher** - Read/write/erase/verify SPI flash through flashrom (CH341A, FT2232, etc.)
 - **EC Patching** - Locate and analyze Embedded Controller firmware, scan for password flags, extract regions, and apply data-driven patches
+- **Lenovo Unlock** - UEFIPatch-compatible pattern patcher for ThinkPads: WLAN/WWAN whitelist removal, hidden Advanced menu unlock, LNVBBSEC tamper-flag fix, and badcaps-style DXE driver replacement for supervisor-password removal
 - **Hex Viewer** - Inspect raw bytes of any firmware image
 
 ## Supported Manufacturers
@@ -98,6 +99,14 @@ Program SPI flash chips with flashrom:
 - **Write** an image (requires an explicit consent check AND an automatic pre-write backup)
 - **Erase** the chip (requires an explicit consent check)
 - Every destructive action must be consciously confirmed in the UI.
+
+### Lenovo Unlock Tab
+Community-proven unlock workflow for Lenovo machines:
+- Detects Lenovo firmware, the `cE!` runtime backdoor (LenovoH2O method), and the `LNVBBSEC` tamper flag
+- Dry-run scans the built-in UEFIPatch-format registry (xx30 WLAN whitelist, xx60/xx70/xx80 advanced menu + WWAN whitelist, xx40+ tamper fix) — only matching patterns are offered
+- Applies pattern patches into raw and LZMA-compressed firmware volumes with full FFS checksum/alignment/pad-file handling
+- **DXE driver replacement** for supervisor-password removal: either apply binaries from the registry (`bios_recovery/patches/dxe_replacements.json`) or auto-derive them by diffing an original dump against an autopatched dump
+- Pattern sources: digmorepaka/thinkpad-firmware-patches, Aldair402/thinkpad-t460s-biosmod, badcaps autopatch thread
 
 ### EC Patching Tab
 Analyze the Embedded Controller firmware inside a dump:

@@ -42,6 +42,7 @@ from bios_recovery.engines.bios_extractor import BiosExtractor
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
 from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.ec_tab import ECTab
+from bios_recovery.gui.lenovo_tab import LenovoTab
 from bios_recovery.gui.update_dialog import UpdateDialog, CheckWorker
 from bios_recovery import __version__
 
@@ -139,6 +140,7 @@ class MainWindow(QMainWindow):
         self.passgen_tab = self._build_passgen_tab()
         self.spi_tab = SPITab(self)
         self.ec_tab = ECTab(self)
+        self.lenovo_tab = LenovoTab(self)
 
         self.tabs.addTab(self.main_tab, "Overview")
         self.tabs.addTab(self.repair_tab, "Repair")
@@ -150,6 +152,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.passgen_tab, "Passwords")
         self.tabs.addTab(self.spi_tab, "SPI Flasher")
         self.tabs.addTab(self.ec_tab, "EC Patching")
+        self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock")
 
         self._build_menubar()
 
@@ -168,6 +171,7 @@ class MainWindow(QMainWindow):
         tool_menu.addAction("Remove &Passwords", lambda: self.tabs.setCurrentWidget(self.password_tab))
         tool_menu.addAction("SPI &Flasher", lambda: self.tabs.setCurrentWidget(self.spi_tab))
         tool_menu.addAction("&EC Patching", lambda: self.tabs.setCurrentWidget(self.ec_tab))
+        tool_menu.addAction("&Lenovo Unlock", lambda: self.tabs.setCurrentWidget(self.lenovo_tab))
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction("&Check for Updates...", self.check_for_updates)
@@ -478,6 +482,7 @@ class MainWindow(QMainWindow):
             self.extract_file.setText(path)
             self.ec_tab.current_dump = path
             self.ec_tab.ec_file.setText(path)
+            self.lenovo_tab.set_file(path)
             self.statusBar().showMessage(f"Loaded: {path}")
             self.run_analysis()
 

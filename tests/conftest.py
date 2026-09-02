@@ -31,3 +31,14 @@ def ec_firmware(fixtures):
 @pytest.fixture(scope="session")
 def ec_dump(fixtures):
     return fixtures["ec_dump.bin"]
+
+
+@pytest.fixture(scope="session")
+def uefi_patch_image(fixtures):
+    return fixtures["uefi_patch.bin"]
+
+
+@pytest.fixture(scope="session")
+def patcher():
+    from bios_recovery.engines.uefi_patcher import UEFIPatcher
+    return UEFIPatcher()

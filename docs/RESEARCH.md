@@ -134,3 +134,35 @@ LBE (Laptop Bios Extractor) by EgyFixLab is the inspiration for this tool. Its k
   changes. Every entry has a `verified` flag; the engine refuses to apply unverified
   patches unless the operator explicitly confirms. No hardcoded unverified byte patches
   ship in code.
+
+## Lenovo Unlocking (ThinkPad)
+
+### The three generations of methods
+1. **cE! runtime backdoor (up to ~2019/2020 BIOSes)** — `H2OFormBrowserDxe` checks for an
+   NVRAM variable named `cE!` (GUID `6ACCE65D-DA35-4B39-B64B-5ED927A7DC7E`); if present,
+   every setup form is shown. Runtime tool: LenovoH2O-Unlocker. Later BIOSes removed the
+   check, so the app only *detects* applicability.
+2. **UEFIPatch pattern patches (xx30-xx80 ThinkPads)** — byte patterns inside DXE drivers
+   (`LenovoWmaPolicyDxe` for whitelist, `SystemFormBrowserCoreDxe` for the hidden Advanced
+   menu). Applied offline to a dump, then flashed back. Sources: digmorepaka/
+   thinkpad-firmware-patches, Aldair402/thinkpad-t460s-biosmod. Our engine is
+   UEFIPatch-format compatible and handles LZMA-compressed sections natively.
+3. **badcaps autopatch (SVP removal, up to 8th gen)** — replaces the password-check DXE
+   driver with a patched one and cleans NVRAM state. Booting the patched image turns the
+   supervisor password prompt into a one-time bypass (enter any character, confirm
+   hardware ID, press space twice), then the original image is flashed back. The driver
+   binaries are community-distributed (badcaps thread); our app supports the replacement
+   step via `dxe_replacements.json` + auto-derivation by diffing original vs. patched dumps.
+
+### Tamper protection (LNVBBSEC)
+xx40+ ThinkPads verify FV signatures; after modifying a signed FV the marker
+`4C 4E 56 42 42 53 45 43 FB` (`LNVBBSEC`+FB) must be flipped to `...FF`, else the
+machine beeps (e.g. 010225 error codes) on boot. Shipped as the `xx40_plus_tamper_fix` group.
+
+### Signature/csum facts used by the engine
+- FFS header checksum: sum of header bytes (IntegrityCheck + State zeroed) ≡ 0 mod 256
+- FFS file checksum: only when `FFS_ATTRIB_CHECKSUM` (0x40), else byte = 0xAA
+- FFS data alignment: `2^((attrs & 0x38) >> 3)`, minimum 8; pad files (type 0xF0) fill gaps
+- LZMA GUID-defined section: GUID `EE4E5898-...`, DataOffset 0x18, payload = LZMA-alone
+  (5 props + 8 size) — Python `lzma.FORMAT_ALONE` compatible
+- FV header checksum: 16-bit sum over the 0x48-byte header ≡ 0 mod 0x10000

@@ -241,6 +241,106 @@ def build_ec_image_dump() -> bytes:
     return bytes(data)
 
 
+# ---------------------------------------------------------------------------
+# UEFI FV / FFS fixtures (for the UEFIPatch engine)
+# ---------------------------------------------------------------------------
+
+UEFI_PATCH_TARGET_GUID = "721C8B66-426C-4E86-8E99-3457C46AB0B9"   # SystemFormBrowserCoreDxe
+UEFI_PATCH_OTHER_GUID = "79E0EDD7-9D1D-4F41-AE1A-F896169E5216"    # LenovoWmaPolicyDxe
+ADV_PATTERN = bytes.fromhex("04320b483cc2e14abb16a73fadda475f")
+ADV_REPLACEMENT = bytes.fromhex("778b1d826d24964e8e103467d56ab1ba")
+WW_PATTERN = bytes.fromhex("C8390B747A")
+TAMPER_MARKER = bytes.fromhex("4C4E564242534543FB")
+
+
+def _ffs2_fv_header(fv_len: int) -> bytes:
+    """Valid EFI_FIRMWARE_VOLUME_HEADER with the FFS2 file system GUID."""
+    hdr = bytearray(0x48)
+    hdr[0x10:0x20] = uuid.UUID("8C8CE578-8A3D-4F1C-9935-896185C32DD3").bytes_le
+    struct.pack_into("<Q", hdr, 0x20, fv_len)
+    hdr[0x28:0x2C] = b"_FVH"
+    struct.pack_into("<I", hdr, 0x2C, 0x0004EFFF & ~0x00000800)  # clear erase-polarity bit
+    struct.pack_into("<H", hdr, 0x30, 0x48)
+    struct.pack_into("<H", hdr, 0x32, 0)              # checksum placeholder
+    hdr[0x37] = 0x02                                  # revision
+    struct.pack_into("<II", hdr, 0x38, fv_len // 0x1000, 0x1000)
+    struct.pack_into("<II", hdr, 0x40, 0, 0)
+    struct.pack_into("<H", hdr, 0x32, (0x10000 - sum(hdr)) & 0xFFFF)
+    return bytes(hdr)
+
+
+def _ffs_header(guid: str, ftype: int, attrs: int, body: bytes, state: int = 0x07,
+                file_guid_override: str | None = None) -> bytes:
+    size = 0x18 + len(body)
+    hdr = bytearray(0x18)
+    hdr[0:16] = uuid.UUID(file_guid_override or guid).bytes_le
+    hdr[0x12] = ftype
+    hdr[0x13] = attrs
+    hdr[0x14] = size & 0xFF
+    hdr[0x15] = (size >> 8) & 0xFF
+    hdr[0x16] = (size >> 16) & 0xFF
+    hdr[0x17] = state
+    probe = bytearray(hdr)
+    probe[0x10] = 0
+    probe[0x11] = 0
+    probe[0x17] = 0
+    hdr[0x10] = (0x100 - (sum(probe) & 0xFF)) & 0xFF
+    if attrs & 0x40:
+        hdr[0x11] = (0x100 - (sum(body) & 0xFF)) & 0xFF
+    else:
+        hdr[0x11] = 0xAA
+    return bytes(hdr) + body
+
+
+def _section(stype: int, payload: bytes) -> bytes:
+    total = 4 + len(payload)
+    hdr = struct.pack("<I", total)[:3] + bytes([stype])
+    return hdr + payload
+
+
+def _pad_ffs(ffs: bytes, alignment: int = 8) -> bytes:
+    pad = (-len(ffs)) % alignment
+    return ffs + b"\xFF" * pad
+
+
+def build_uefi_patch_image() -> bytes:
+    """Small FV containing:
+      * file A (LenovoWmaPolicyDxe GUID, type DRIVER, file-checksum attr) whose
+        PE32 section sits inside a GUID-defined LZMA section and carries the
+        advanced-menu pattern,
+      * file B (type FREEFORM) with a raw PE32 section carrying the WWAN
+        whitelist pattern + the LNVBBSEC tamper marker,
+      * file C (type APPLICATION) as trailing sibling used to verify splicing.
+    """
+    import lzma as _lzma
+
+    # file A: LZMA GUID-defined section wrapping a PE32 section
+    pe_body_a = b"\x00" * 0x40 + ADV_PATTERN + b"\x00" * 0x20
+    pe_sec_a = _section(0x10, pe_body_a)
+    compressed = _lzma.compress(pe_sec_a, format=_lzma.FORMAT_ALONE,
+                                filters=[{"id": _lzma.FILTER_LZMA1, "preset": 9,
+                                          "dict_size": 1 << 24}])
+    guid_sec_a = (uuid.UUID("EE4E5898-3914-4259-9D6E-DC7BD79403CF").bytes_le
+                  + struct.pack("<HH", 0x18, 0x01) + compressed)
+    lzma_sec = _section(0x02, guid_sec_a)
+    file_a = _ffs_header(UEFI_PATCH_TARGET_GUID, 0x07, 0x40, lzma_sec)
+
+    # file B: raw PE32 section with whitelist pattern + tamper marker
+    pe_body_b = WW_PATTERN + b"\x11" * 0x10 + TAMPER_MARKER + b"\x22" * 0x08
+    file_b = _ffs_header(UEFI_PATCH_OTHER_GUID, 0x15, 0x00, _section(0x10, pe_body_b))
+
+    # file C: trailing sibling (APPLICATION) with unique filler
+    file_c = _ffs_header("6F6D2D0C-C56A-4C4F-9E5A-2B3A0F97C2B1", 0x09, 0x00,
+                         _section(0x19, b"DRIVER-C-PAYLOAD" * 4))
+
+    fv_len = 0x10000
+    body = _pad_ffs(file_a) + _pad_ffs(file_b) + _pad_ffs(file_c)
+    assert len(body) + 0x48 <= fv_len
+    fv = _ffs2_fv_header(fv_len) + body
+    fv += b"\xFF" * (fv_len - len(fv))
+    return fv
+
+
 def write_fixtures(outdir: str) -> dict[str, str]:
     """Write all fixtures to disk. Returns {name: path}."""
     os.makedirs(outdir, exist_ok=True)
@@ -249,6 +349,7 @@ def write_fixtures(outdir: str) -> dict[str, str]:
         "dell_pfs.bin": build_dell_pfs_image(),
         "ec_firmware.bin": build_ec_firmware(),
         "ec_dump.bin": build_ec_image_dump(),
+        "uefi_patch.bin": build_uefi_patch_image(),
     }
     paths = {}
     for name, data in fixtures.items():

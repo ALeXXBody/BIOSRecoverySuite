@@ -1,3 +1,3 @@
 """BIOS Recovery Suite - package metadata."""
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"

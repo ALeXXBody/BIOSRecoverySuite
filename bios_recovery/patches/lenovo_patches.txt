@@ -1,0 +1,42 @@
+# Lenovo / ThinkPad UEFI patch registry (UEFIPatch-compatible patterns)
+#
+# Every line below is applied ONLY where its byte pattern is found, so it is
+# safe to scan any image: non-matching patterns do nothing.
+#
+# Sources (community research, thanks to the original authors):
+#  - github.com/digmorepaka/thinkpad-firmware-patches   (xx30..xx80 collections)
+#  - github.com/Aldair402/thinkpad-t460s-biosmod        (xx60/xx70/xx80 sets)
+#  - badcaps "LENOVO BIOS AUTO-PATCHER" thread (Knucklegrumble + community)
+#  - github.com/n4ru/1vyrain, SmokelessRuntimeEFIPatcher (context/method)
+#
+# ALWAYS verify a second SPI dump before flashing anything.
+
+#@group xx30_wlan_whitelist
+#@models T430 T430s T530 W530 X230 X230t L430 L530 (and other xx30)
+#@desc LenovoWmaPolicyDxe WLAN/WWAN whitelist removal (AllowUntrusted function patched)
+#@source github.com/digmorepaka/thinkpad-firmware-patches (xx30 set)
+79E0EDD7-9D1D-4F41-AE1A-F896169E5216 10 P:100BC841390B0F84:100BC841390B90E9
+79E0EDD7-9D1D-4F41-AE1A-F896169E5216 10 P:00000045390B0F84:00000045390B90E9
+79E0EDD7-9D1D-4F41-AE1A-F896169E5216 10 P:100BC841394B0474:100BC841394B04EB
+79E0EDD7-9D1D-4F41-AE1A-F896169E5216 10 P:0F846CFFFFFFEBAF:9090909090909090
+
+#@group xx60_xx80_advanced_menu
+#@models T460 T460s T470 T470s T480 T480s X260 X270 X280 X1C6 P50s P51 P52
+#@desc Unlock hidden Advanced menu via SystemFormBrowserCoreDxe form visibility
+#@source github.com/Aldair402/thinkpad-t460s-biosmod
+721C8B66-426C-4E86-8E99-3457C46AB0B9 10 P:04320b483cc2e14abb16a73fadda475f:778b1d826d24964e8e103467d56ab1ba
+32442D09-1D11-4E27-8AAB-90FE6ACB0489 10 P:04320b483cc2e14abb16a73fadda475f:778b1d826d24964e8e103467d56ab1ba
+
+#@group xx60_xx80_wwan_whitelist
+#@models T460 T460s T470 T470s T480 T480s X260 X270 X280 (xx60/xx70/xx80)
+#@desc LenovoWmaPolicyDxe WWAN whitelist removal (3 pattern variants)
+#@source github.com/Aldair402/thinkpad-t460s-biosmod
+79E0EDD7-9D1D-4F41-AE1A-F896169E5216 10 P:C8390B747A:C8390B7400
+79E0EDD7-9D1D-4F41-AE1A-F896169E5216 10 P:44394B047425:44394B04EB25
+79E0EDD7-9D1D-4F41-AE1A-F896169E5216 10 P:0F84DA000000:E9DB00000000
+
+#@group xx40_plus_tamper_fix
+#@models xx40 and newer soldered-flash ThinkPads (T440p T460 T470 T480 X1C*)
+#@desc Disable LNVBBSEC anti-tamper flag (required after modifying signed FVs)
+#@source github.com/digmorepaka/thinkpad-firmware-patches (tamper protection step)
+FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF 0 P:4C4E564242534543FB:4C4E564242534543FF
