@@ -603,6 +603,8 @@ class MainWindow(QMainWindow):
         thread.error.connect(lambda e: self._show_error(e))
         self._threads.append(thread)
         thread.start()
+        # prune finished workers so the list does not grow unboundedly
+        self._threads = [t for t in self._threads if t.isRunning() or t is thread]
         return thread
 
     def _show_error(self, error: str):
