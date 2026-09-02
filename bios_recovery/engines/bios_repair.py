@@ -3,6 +3,7 @@
 import struct
 import os
 import hashlib
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
@@ -145,8 +146,10 @@ class BiosRepairEngine:
             report.operations.append(f"Fixed FPT checksum at {fpt_offset:#x}")
 
     def _clear_me_region(self, data: bytearray, report: RepairReport) -> None:
-        temp_input = "_temp_me_input.bin"
-        temp_output = "_temp_me_output.bin"
+        fd_in, temp_input = tempfile.mkstemp(prefix="brs_me_in_", suffix=".bin")
+        os.close(fd_in)
+        fd_out, temp_output = tempfile.mkstemp(prefix="brs_me_out_", suffix=".bin")
+        os.close(fd_out)
 
         try:
             with open(temp_input, "wb") as f:
@@ -163,16 +166,16 @@ class BiosRepairEngine:
             else:
                 report.warnings.append(f"ME cleaning skipped: {clean_result.status.name}")
         finally:
-            for temp in (temp_input, temp_output):
-                if os.path.exists(temp):
-                    os.remove(temp)
+            self._safe_remove((temp_input, temp_output))
 
     def _clear_security(self, data: bytearray, report: RepairReport) -> None:
         from bios_recovery.engines.password_remover import PasswordRemover
         remover = PasswordRemover()
 
-        temp_input = "_temp_pw_input.bin"
-        temp_output = "_temp_pw_output.bin"
+        fd_in, temp_input = tempfile.mkstemp(prefix="brs_pw_in_", suffix=".bin")
+        os.close(fd_in)
+        fd_out, temp_output = tempfile.mkstemp(prefix="brs_pw_out_", suffix=".bin")
+        os.close(fd_out)
 
         try:
             with open(temp_input, "wb") as f:
@@ -190,9 +193,16 @@ class BiosRepairEngine:
                     data[:] = bytearray(new_data)
                     report.operations.append(f"Removed {len(result.found_passwords)} password structures")
         finally:
-            for temp in (temp_input, temp_output):
-                if os.path.exists(temp):
-                    os.remove(temp)
+            self._safe_remove((temp_input, temp_output))
+
+    @staticmethod
+    def _safe_remove(paths) -> None:
+        for path in paths:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
 
     def _verify_alignment(self, data: bytearray, report: RepairReport) -> None:
         if len(data) % 0x1000 != 0:

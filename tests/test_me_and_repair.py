@@ -69,3 +69,32 @@ def test_auto_repair_fixes_checksum(intel_ifd, tmp_path):
         fixed = f.read()
     checksum = sum(fixed[0x1010:0x1010 + 0x20]) & 0xFF
     assert checksum == 0, "FPT checksum should match after repair"
+
+
+def test_auto_repair_readonly_cwd(intel_ifd, tmp_path, monkeypatch):
+    """Regression: repair used to write '_temp_me_input.bin' into the CWD.
+
+    When the app is launched from Program Files the CWD is not writable and
+    auto-repair failed with [Errno 13] Permission denied. Temps must go to the
+    system temp directory instead. Simulated here with a CWD that cannot hold
+    files (non-existent directory), which breaks every relative-path write.
+    """
+    src = tmp_path / "src.bin"
+    src.write_bytes(open(intel_ifd, "rb").read())
+    out = tmp_path / "out.bin"
+
+    # make the process CWD point at a directory that no longer exists:
+    # every relative-path write then fails, like an unwritable Program Files CWD
+    ghost = tmp_path / "ghost_cwd"
+    ghost.mkdir()
+    monkeypatch.chdir(ghost)
+    ghost.rmdir()
+
+    report = BiosRepairEngine().auto_repair(str(src), str(out))
+    assert report.success
+    assert os.path.exists(out)
+    with open(out, "rb") as f:
+        assert f.read(4) == b"\x5a\xa5\xf0\x0f"
+    # no temp litter anywhere near the source directory
+    litter = [p for p in tmp_path.iterdir() if p.name.startswith("_temp")]
+    assert not litter
