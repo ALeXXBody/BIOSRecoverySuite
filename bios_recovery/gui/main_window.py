@@ -39,6 +39,10 @@ from bios_recovery.engines.dmi_extractor import DMIExtractor
 from bios_recovery.engines.password_remover import PasswordRemover
 from bios_recovery.engines.bios_repair import BiosRepairEngine
 from bios_recovery.engines.bios_extractor import BiosExtractor
+from bios_recovery.engines.hp_unlocker import HPUnlocker
+from bios_recovery.engines.me_injector import MEInjector
+from bios_recovery.engines.dmi_clone import DMIClone
+from bios_recovery.utils import master_passwords
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
 from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.ec_tab import ECTab
@@ -80,6 +84,9 @@ class MainWindow(QMainWindow):
         self.password_remover = PasswordRemover()
         self.repair_engine = BiosRepairEngine()
         self.bios_extractor = BiosExtractor()
+        self.hp_unlocker = HPUnlocker()
+        self.me_injector = MEInjector()
+        self.dmi_clone = DMIClone()
         self.manufacturer_profiles = ManufacturerProfiles()
 
         self.current_file = None
@@ -294,11 +301,54 @@ class MainWindow(QMainWindow):
         self.me_clean_btn.clicked.connect(self.clean_me)
         layout.addWidget(self.me_clean_btn)
 
+        inject_group = QGroupBox("Inject Clean ME/TXE Region (repair corrupted ME)")
+        inject_layout = QVBoxLayout(inject_group)
+        inject_layout.addWidget(QLabel(
+            "Replaces the whole ME region with a clean firmware image of the\n"
+            "same version (drag the clean .bin from your ME repository)."))
+        inject_row = QHBoxLayout()
+        self.me_clean_file = QLineEdit()
+        self.me_clean_file.setPlaceholderText("Path to clean ME region image (.bin)")
+        inject_row.addWidget(self.me_clean_file, 1)
+        me_browse = QPushButton("Browse...")
+        me_browse.clicked.connect(self.browse_clean_me)
+        inject_row.addWidget(me_browse)
+        inject_layout.addLayout(inject_row)
+        self.me_inject_btn = QPushButton("Inject Clean ME")
+        self.me_inject_btn.clicked.connect(self.inject_me)
+        inject_layout.addWidget(self.me_inject_btn)
+        layout.addWidget(inject_group)
+
         self.me_text = QPlainTextEdit()
         self.me_text.setReadOnly(True)
         layout.addWidget(self.me_text, 1)
 
         return widget
+
+    def browse_clean_me(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open clean ME image", "",
+                                              "Binary (*.bin);;All Files (*)")
+        if path:
+            self.me_clean_file.setText(path)
+
+    def inject_me(self):
+        if not self.current_file:
+            return
+        clean_path = self.me_clean_file.text().strip()
+        if not clean_path or not os.path.exists(clean_path):
+            QMessageBox.warning(self, "No Clean Image", "Select a clean ME region image first.")
+            return
+        self.me_inject_btn.setEnabled(False)
+        try:
+            result = self.me_injector.inject(self.current_file, clean_path,
+                                             self.current_file.rsplit(".", 1)[0] + "_mefixed.bin")
+        finally:
+            self.me_inject_btn.setEnabled(True)
+        if result["success"]:
+            self.me_text.setPlainText(result["message"])
+            self.statusBar().showMessage("ME region injected")
+        else:
+            QMessageBox.warning(self, "Inject Failed", result["message"])
 
     def _build_dmi_tab(self):
         widget = QWidget()
@@ -318,11 +368,65 @@ class MainWindow(QMainWindow):
         self.dmi_extract_btn.clicked.connect(self.extract_dmi)
         layout.addWidget(self.dmi_extract_btn)
 
+        clone_group = QGroupBox("Clone DMI Identity (old dump -> new dump)")
+        clone_layout = QVBoxLayout(clone_group)
+        clone_layout.addWidget(QLabel(
+            "Carries serials/UUID/MAC data from the original dump into a clean\n"
+            "BIOS image so the machine keeps its identity after a reflash."))
+        clone_row = QHBoxLayout()
+        clone_row.addWidget(QLabel("Old dump:"))
+        self.clone_old_edit = QLineEdit()
+        self.clone_old_edit.setReadOnly(True)
+        clone_row.addWidget(self.clone_old_edit, 1)
+        clone_layout.addLayout(clone_row)
+
+        new_row = QHBoxLayout()
+        new_row.addWidget(QLabel("New dump:"))
+        self.clone_new_edit = QLineEdit()
+        self.clone_new_edit.setPlaceholderText("Clean/new BIOS image to receive the identity")
+        new_row.addWidget(self.clone_new_edit, 1)
+        new_browse = QPushButton("Browse...")
+        new_browse.clicked.connect(self.browse_clone_new)
+        new_row.addWidget(new_browse)
+        clone_layout.addLayout(new_row)
+
+        self.dmi_clone_btn = QPushButton("Clone DMI Into New Dump")
+        self.dmi_clone_btn.clicked.connect(self.clone_dmi)
+        clone_layout.addWidget(self.dmi_clone_btn)
+        layout.addWidget(clone_group)
+
         self.dmi_text = QPlainTextEdit()
         self.dmi_text.setReadOnly(True)
         layout.addWidget(self.dmi_text, 1)
 
         return widget
+
+    def browse_clone_new(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open new/clean BIOS dump", "",
+                                              "Binary (*.bin *.rom *.fd);;All Files (*)")
+        if path:
+            self.clone_new_edit.setText(path)
+
+    def clone_dmi(self):
+        old_path = self.clone_old_edit.text().strip() or self.current_file
+        new_path = self.clone_new_edit.text().strip()
+        if not old_path or not os.path.exists(old_path):
+            QMessageBox.warning(self, "No Old Dump", "Load the original dump first.")
+            return
+        if not new_path or not os.path.exists(new_path):
+            QMessageBox.warning(self, "No New Dump", "Select the new/clean BIOS image.")
+            return
+        self.dmi_clone_btn.setEnabled(False)
+        try:
+            result = self.dmi_clone.clone(old_path, new_path,
+                                          new_path.rsplit(".", 1)[0] + "_dmiclone.bin")
+        finally:
+            self.dmi_clone_btn.setEnabled(True)
+        if result["success"]:
+            self.dmi_text.setPlainText(result["message"])
+            self.statusBar().showMessage("DMI identity cloned")
+        else:
+            QMessageBox.warning(self, "Clone Failed", result["message"])
 
     def _build_password_tab(self):
         widget = QWidget()
@@ -345,6 +449,16 @@ class MainWindow(QMainWindow):
         self.remove_btn = QPushButton("Remove All Passwords")
         self.remove_btn.clicked.connect(self.remove_passwords)
         layout.addWidget(self.remove_btn)
+
+        hp_group = QGroupBox("HP Unlock (ProBook / EliteBook / ZBook dumps)")
+        hp_layout = QVBoxLayout(hp_group)
+        hp_layout.addWidget(QLabel(
+            "Clears the HP admin password storage inside the dump\n"
+            "(UserCred block on modern UEFI, $VSS/BiosUser entries on legacy BIOSes)."))
+        self.hp_unlock_btn = QPushButton("Unlock HP Dump")
+        self.hp_unlock_btn.clicked.connect(self.hp_unlock)
+        hp_layout.addWidget(self.hp_unlock_btn)
+        layout.addWidget(hp_group)
 
         self.password_text = QPlainTextEdit()
         self.password_text.setReadOnly(True)
@@ -423,35 +537,31 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        brand_group = QGroupBox("Master Password Generator")
+        brand_group = QGroupBox("Master Password Generator (dogbert algorithms)")
         brand_layout = QVBoxLayout(brand_group)
 
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Manufacturer:"))
-        self.gen_manufacturer = QComboBox()
-        self.gen_manufacturer.addItems([
-            "Dell",
-            "HP",
-            "Insyde (Acer/HP)",
-            "Phoenix",
-            "Samsung",
-        ])
-        row1.addWidget(self.gen_manufacturer, 1)
+        row1.addWidget(QLabel("BIOS type:"))
+        self.gen_generator = QComboBox()
+        self._gen_keys = list(master_passwords.GENERATORS.keys())
+        for key in self._gen_keys:
+            label, _fn = master_passwords.GENERATORS[key]
+            self.gen_generator.addItem(label, key)
+        self.gen_generator.setCurrentIndex(0)
+        row1.addWidget(self.gen_generator, 1)
         brand_layout.addLayout(row1)
 
+        hint = QLabel("Input: the hash/serial shown after 3 wrong passwords "
+                      "(or the system date for ASUS).")
+        hint.setWordWrap(True)
+        brand_layout.addWidget(hint)
+
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Input (Service Tag / Code):"))
+        row2.addWidget(QLabel("Input:"))
         self.gen_input = QLineEdit()
+        self.gen_input.setPlaceholderText("e.g. 12345 / 03133610 / CNU1234ABC / 2013-12-31")
         row2.addWidget(self.gen_input, 1)
         brand_layout.addLayout(row2)
-
-        row3 = QHBoxLayout()
-        row3.addWidget(QLabel("Dell suffix:"))
-        self.gen_suffix = QComboBox()
-        self.gen_suffix.addItems(["595B", "D35B", "2A7B", "A95B", "1D3B", "6FF1", "1F66", "BF97", "8FC8"])
-        self.gen_suffix.setCurrentText("595B")
-        row3.addWidget(self.gen_suffix)
-        brand_layout.addLayout(row3)
 
         self.generate_btn = QPushButton("Generate Password")
         self.generate_btn.clicked.connect(self.generate_passwords)
@@ -483,6 +593,7 @@ class MainWindow(QMainWindow):
             self.ec_tab.current_dump = path
             self.ec_tab.ec_file.setText(path)
             self.lenovo_tab.set_file(path)
+            self.clone_old_edit.setText(path)
             self.statusBar().showMessage(f"Loaded: {path}")
             self.run_analysis()
 
@@ -631,6 +742,25 @@ class MainWindow(QMainWindow):
             lines.append(f"  - {msg}")
         self.me_text.setPlainText("\n".join(lines))
 
+    def hp_unlock(self):
+        if not self.current_file:
+            return
+        self.hp_unlock_btn.setEnabled(False)
+        try:
+            report = self.hp_unlocker.unlock(self.current_file,
+                                             self.current_file.rsplit(".", 1)[0] + "_unlocked.bin")
+        finally:
+            self.hp_unlock_btn.setEnabled(True)
+        lines = [f"Style: {report['style'] or 'unknown'}",
+                 f"Success: {report['success']}",
+                 f"Output: {report['output_path']}"]
+        lines.extend(f"  - {m}" for m in report["messages"])
+        self.password_text.setPlainText("\n".join(lines))
+        if not report["success"]:
+            QMessageBox.warning(self, "HP Unlock", "\n".join(report["messages"]))
+        else:
+            self.statusBar().showMessage("HP dump unlocked")
+
     def extract_dmi(self):
         if not self.current_file:
             return
@@ -772,35 +902,22 @@ class MainWindow(QMainWindow):
         self.hex_text.setPlainText("\n".join(lines))
 
     def generate_passwords(self):
-        manufacturer = self.gen_manufacturer.currentText()
+        key = self.gen_generator.currentData()
         user_input = self.gen_input.text().strip()
         if not user_input:
-            QMessageBox.warning(self, "Input Required", "Please enter the service tag or code.")
+            QMessageBox.warning(self, "Input Required", "Please enter the hash, serial or date.")
             return
-
-        lines = []
-        if manufacturer == "Dell":
-            suffix = self.gen_suffix.currentText()
-            passwords = self.password_remover.generate_dell_master_password(user_input, suffix)
-            lines.append(f"Dell Master Password for SN: {user_input} (suffix {suffix})")
-            lines.extend(f"  {p}" for p in passwords)
-        elif manufacturer == "HP":
-            pw = self.password_remover.generate_hp_master_password(user_input)
-            lines.append(f"HP Master Password: {pw}")
-        elif manufacturer == "Insyde (Acer/HP)":
-            pw = self.password_remover.generate_insyde_master_password(user_input)
-            lines.append(f"Insyde Master Password: {pw}")
-        elif manufacturer == "Phoenix":
-            try:
-                raw = int(user_input)
-                pw = f"{(raw * 3 + 7) % 100000:05d}"
-                lines.append(f"Phoenix Master Password: {pw}")
-            except ValueError:
-                lines.append("Invalid input for Phoenix password generation")
-        elif manufacturer == "Samsung":
-            lines.append("Samsung password generation requires full code (12 hex digits).")
-            lines.append(f"Input: {user_input}")
-
+        label, _fn = master_passwords.GENERATORS[key]
+        lines = [f"{label}", f"Input: {user_input}", ""]
+        try:
+            results = master_passwords.generate(key, user_input)
+        except Exception as e:
+            self.gen_text.setPlainText(f"Could not generate a password:\n{e}")
+            return
+        for name, pwd in results:
+            lines.append(f"{name:<28}: {pwd}")
+        lines.append("")
+        lines.append("Passwords are encoded for US QWERTY keyboard layout.")
         self.gen_text.setPlainText("\n".join(lines))
 
     def show_about(self):

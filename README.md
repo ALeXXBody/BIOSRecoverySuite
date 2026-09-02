@@ -11,10 +11,13 @@ Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password re
 - **Intel ME Cleaner** - Clear/neuter ME, TXE, and CSME regions with HAP/AltMeDisable support
 - **DMI / SMBIOS Extraction** - Extract system, board, and BIOS information from dumps
 - **Password Removal** - Remove setup/admin passwords from AMI, Insyde, Phoenix, Dell, HP, Lenovo firmware
-- **Master Password Generator** - Generate master passwords for Dell, HP, and Insyde systems
+- **Master Password Generator** - Real reverse-engineered algorithms (dogbert): Phoenix/HP/Compaq/FSI 5-decimal, FSI 8-hex & 5x4-hex & 6x4-decimal, Insyde H2O, Samsung, Sony 4x4, HP Mini, ASUS system-date
 - **BIOS Extraction** - Extract BIOS from vendor EXE, PFS, COM, FL1, and other formats
 - **SPI Flasher** - Read/write/erase/verify SPI flash through flashrom (CH341A, FT2232, etc.)
 - **EC Patching** - Locate and analyze Embedded Controller firmware, scan for password flags, extract regions, and apply data-driven patches
+- **HP Unlock** - Clear HP ProBook/EliteBook/ZBook admin passwords from dumps (UserCred + $VSS/BiosUser wiping)
+- **ME/TXE Injector** - Repair corrupted ME regions by injecting a clean firmware image with version verification
+- **DMI Clone** - Carry serials/UUID/MAC identity from an old dump into a new BIOS image
 - **Lenovo Unlock** - UEFIPatch-compatible pattern patcher for ThinkPads: WLAN/WWAN whitelist removal, hidden Advanced menu unlock, LNVBBSEC tamper-flag fix, and badcaps-style DXE driver replacement for supervisor-password removal
 - **Hex Viewer** - Inspect raw bytes of any firmware image
 

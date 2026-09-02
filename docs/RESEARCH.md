@@ -174,3 +174,33 @@ machine beeps (e.g. 010225 error codes) on boot. Shipped as the `xx40_plus_tampe
 - LZMA GUID-defined section: GUID `EE4E5898-...`, DataOffset 0x18, payload = LZMA-alone
   (5 props + 8 size) — Python `lzma.FORMAT_ALONE` compatible
 - FV header checksum: 16-bit sum over the 0x48-byte header ≡ 0 mod 0x10000
+
+## IndiaFix / RC-Unlocker style tooling (v1.4.0)
+
+### HP dump unlock (RC Unlocker / HP Unlocker mechanism)
+Ported from schorschii's public HPUnlocker.py (same core the indiafix drag-drop
+HP unlockers implement):
+- **Modern HP UEFI**: UTF-16LE `UserCred` structure -> 100-byte credential block
+  zeroed, with flag bytes 10..13 of the block set to 0xFF.
+- **Legacy HP BIOS**: every `$VSS` entry keyed `BiosUser` (UTF-16LE) has its
+  value region wiped with 0xFF up to the `AA 55` marker.
+Limitations: G8+ (32MB, Sure Start protected) dumps may need additional steps;
+the engine reports detection rather than blindly patching when nothing matches.
+
+### ME/TXE injection (indiafix ME Injector / LRT workflow)
+Instead of disabling a corrupted ME, replace it: locate the ME region via the
+flash descriptor, verify the clean image carries CSME firmware ($MN2), reject
+oversized images, FF-pad undersized ones, rewrite the region in place.
+Clean ME repositories are distributed on indiafix/LRT ecosystems.
+
+### DMI identity clone (All-in-One BIOS Edit 'DMI auto input')
+Locate `_SM_` EPS + table in both dumps and copy the identity block old->new at
+matched offsets, so a fresh BIOS keeps the machine's serial/UUID/MAC identity.
+
+### Master password algorithms (dogbert, GPL-2+ port)
+Phoenix/HP/Compaq/FSI 5-decimal (buggy-CRC16 brute force), FSI 8-hex + 5x4-hex
+(CRC16-CCITT table), FSI 6x4-decimal (XOR/nibble-interleave), Insyde H2O 8-decimal
+(salted arithmetic), Samsung (rotation-matrix keys, scancode + ASCII + hex),
+Sony 4x4 OTP (RSA-64 with public constants), HP Mini (substitution tables),
+ASUS system-date. Dell: the real algorithm is a modified-MD5 with suffix tables
+(595B/D35B/2A7B/1F66/6FF1) - still a heuristic placeholder in this suite.
