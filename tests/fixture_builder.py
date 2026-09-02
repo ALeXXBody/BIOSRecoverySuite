@@ -341,6 +341,37 @@ def build_uefi_patch_image() -> bytes:
     return fv
 
 
+# real GUIDs from the badcaps autopatch driver set
+AUTOpatch_BOOTOPTION_GUID = "E0746C42-D3F9-4F8B-B211-1410957B9FF5"
+AUTOpatch_TRANSLATE_GUID = "826BCF56-BAC4-43F4-8EA1-8CDF0A121ABD"
+
+
+def build_autopatch_fixture(dxe_dir: str | None = None) -> bytes:
+    """Driver FV containing the real autopatch target FFS GUIDs, followed by a
+    separate NVRAM volume FV whose header matches the shipped clean .vol (same
+    prefix, size, checksum) but with different body content, so the NVRAM
+    replace pass is exercisable."""
+    filler = bytes(range(256)) * 3
+
+    ffs_boot = _ffs_header(AUTOpatch_BOOTOPTION_GUID, 0x07, 0x00,
+                           _section(0x10, filler[:600]))
+    ffs_translate = _ffs_header(AUTOpatch_TRANSLATE_GUID, 0x07, 0x00,
+                                _section(0x10, filler[:900]))
+    body = _pad_ffs(ffs_boot) + _pad_ffs(ffs_translate)
+
+    fv_len = 0x10000
+    fv1 = _ffs2_fv_header(fv_len) + body
+    fv1 += b"\xFF" * (fv_len - len(fv1))
+
+    vol_path = os.path.join(dxe_dir or os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "bios_recovery", "patches", "dxe"),
+        "NVRAM_EfiSystemNvDataFvGuid.vol")
+    nvram = bytearray(open(vol_path, "rb").read())
+    # alter body (keep 72-byte header) so a replace has a detectable effect
+    nvram[0x48:0x148] = b"\x5A" * 0x100
+    return fv1 + bytes(nvram)
+
+
 def write_fixtures(outdir: str) -> dict[str, str]:
     """Write all fixtures to disk. Returns {name: path}."""
     os.makedirs(outdir, exist_ok=True)
@@ -350,6 +381,7 @@ def write_fixtures(outdir: str) -> dict[str, str]:
         "ec_firmware.bin": build_ec_firmware(),
         "ec_dump.bin": build_ec_image_dump(),
         "uefi_patch.bin": build_uefi_patch_image(),
+        "autopatch.bin": build_autopatch_fixture(),
     }
     paths = {}
     for name, data in fixtures.items():

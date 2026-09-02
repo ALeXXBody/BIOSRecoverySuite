@@ -1,3 +1,20 @@
 {
-  "replacements": []
+  "replacements": [
+    {
+      "key": "autopatch_bootoption",
+      "file": "E0746C42-D3F9-4F8B-B211-1410957B9FF5.ffs",
+      "target_guid": "E0746C42-D3F9-4F8B-B211-1410957B9FF5",
+      "description": "Patched BootOption driver (autopatch pass 1a). Part of the supervisor-password one-time-bypass flow for Lenovo machines up to 8th gen.",
+      "verified": false,
+      "source": "badcaps 'LENOVO BIOS AUTO-PATCHER' v0.2 (credits Knucklegrumble and the badcaps thread 65996 contributors)"
+    },
+    {
+      "key": "autopatch_translate_service",
+      "file": "826BCF56-BAC4-43F4-8EA1-8CDF0A121ABD.ffs",
+      "target_guid": "826BCF56-BAC4-43F4-8EA1-8CDF0A121ABD",
+      "description": "Patched LenovoTranslateService driver (autopatch pass 1b). Part of the supervisor-password one-time-bypass flow for Lenovo machines up to 8th gen.",
+      "verified": false,
+      "source": "badcaps 'LENOVO BIOS AUTO-PATCHER' v0.2 (credits Knucklegrumble and the badcaps thread 65996 contributors)"
+    }
+  ]
 }

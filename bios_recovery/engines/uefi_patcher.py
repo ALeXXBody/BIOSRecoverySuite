@@ -759,6 +759,93 @@ class UEFIPatcher:
         return derived
 
     # ------------------------------------------------------------------ #
+    #  NVRAM clean pass (autopatch step 2)                               #
+    # ------------------------------------------------------------------ #
+
+    def replace_nvram_volume(self, image_path: str, output_path: str,
+                             vol_path: str) -> dict:
+        """Replace a firmware volume in-place with the supplied clean image.
+
+        Faithful to the reference autopatcher: a target FV matches when its
+        first 48 bytes (ZeroVector + FileSystemGuid + FvLength) are identical,
+        AND its total size and header checksum equal the replacement's. The
+        volume is then overwritten in place (sizes must match)."""
+        with open(image_path, "rb") as f:
+            image = bytearray(f.read())
+        with open(vol_path, "rb") as f:
+            vol = f.read()
+        if len(vol) < 0x48:
+            return {"success": False, "message": "volume image too small"}
+
+        pattern = vol[:48]
+        vol_size = int.from_bytes(vol[0x20:0x23], "little")   # FvLength, low 3 bytes
+        vol_checksum = int.from_bytes(vol[0x32:0x34], "little")
+
+        def _finish(res):
+            with open(output_path, "wb") as f:
+                f.write(bytes(image))
+            return res
+
+        pos = image.find(pattern)
+        if pos < 0:
+            return _finish({"success": False,
+                            "message": "no matching firmware volume found in image (NVRAM layout differs)",
+                            "skipped": True})
+        # FvLength low 3 bytes live at FV header offset 0x20..0x22 (little)
+        tgt_size = int.from_bytes(image[pos + 0x20:pos + 0x23], "little")
+        tgt_checksum = int.from_bytes(image[pos + 0x32:pos + 0x34], "little")
+        if tgt_size != vol_size:
+            return _finish({"success": False, "skipped": True,
+                            "message": f"volume size mismatch (image {tgt_size} vs replacement {vol_size}) - skipped"})
+        if tgt_checksum != vol_checksum:
+            return _finish({"success": False, "skipped": True,
+                            "message": f"volume header checksum mismatch (image 0x{tgt_checksum:x} vs "
+                                       f"replacement 0x{vol_checksum:x}) - skipped"})
+        image[pos:pos + len(vol)] = vol
+        return _finish({"success": True, "message": f"NVRAM volume replaced at 0x{pos:X}",
+                        "output_path": output_path, "offset": pos})
+
+    def run_autopatch(self, image_path: str, output_path: str,
+                      include_nvram: bool = True) -> dict:
+        """Full badcaps-style flow: DXE driver replacement, then NVRAM clean."""
+        import shutil
+        shutil.copyfile(image_path, output_path)
+        report = {"steps": [], "success": True}
+        patches_dir = os.path.dirname(self.patches_path)
+
+        for entry in self.load_dxe_replacements():
+            bin_path = os.path.join(patches_dir, "dxe", entry["file"])
+            if not os.path.exists(bin_path):
+                report["steps"].append({"step": entry["key"], "ok": False,
+                                        "message": f"binary missing: {entry['file']}"})
+                continue
+            nxt = output_path + ".tmp"
+            res = self.replace_ffs_file(output_path, nxt, entry["target_guid"], bin_path)
+            if res["success"]:
+                shutil.move(nxt, output_path)
+                report["steps"].append({"step": entry["key"], "ok": True,
+                                        "message": res["message"]})
+            else:
+                report["steps"].append({"step": entry["key"], "ok": False,
+                                        "message": res["message"],
+                                        "skipped": res.get("skipped", False)})
+
+        if include_nvram:
+            vol_path = os.path.join(patches_dir, "dxe", "NVRAM_EfiSystemNvDataFvGuid.vol")
+            if os.path.exists(vol_path):
+                nxt = output_path + ".tmp"
+                res = self.replace_nvram_volume(output_path, nxt, vol_path)
+                if res["success"]:
+                    shutil.move(nxt, output_path)
+                report["steps"].append({"step": "nvram_clean", "ok": res["success"],
+                                        "message": res["message"],
+                                        "skipped": res.get("skipped", False)})
+
+        report["output_path"] = output_path
+        report["success"] = any(s["ok"] for s in report["steps"])
+        return report
+
+    # ------------------------------------------------------------------ #
     #  Lenovo-specific detection helpers                                 #
     # ------------------------------------------------------------------ #
 

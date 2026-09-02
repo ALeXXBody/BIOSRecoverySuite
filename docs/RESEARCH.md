@@ -147,12 +147,20 @@ LBE (Laptop Bios Extractor) by EgyFixLab is the inspiration for this tool. Its k
    menu). Applied offline to a dump, then flashed back. Sources: digmorepaka/
    thinkpad-firmware-patches, Aldair402/thinkpad-t460s-biosmod. Our engine is
    UEFIPatch-format compatible and handles LZMA-compressed sections natively.
-3. **badcaps autopatch (SVP removal, up to 8th gen)** — replaces the password-check DXE
-   driver with a patched one and cleans NVRAM state. Booting the patched image turns the
-   supervisor password prompt into a one-time bypass (enter any character, confirm
-   hardware ID, press space twice), then the original image is flashed back. The driver
-   binaries are community-distributed (badcaps thread); our app supports the replacement
-   step via `dxe_replacements.json` + auto-derivation by diffing original vs. patched dumps.
+3. **badcaps autopatch (SVP removal, up to 8th gen)** — replaces two DXE drivers with
+   patched ones (`E0746C42-D3F9-4F8B-B211-1410957B9FF5` "BootOption" and
+   `826BCF56-BAC4-43F4-8EA1-8CDF0A121ABD` "LenovoTranslateService") and optionally cleans
+   the NVRAM store FV (EFI_SYSTEM_NV_DATA_FV_GUID `FFF12B8D-7696-4C8B-A985-2747075B4F50`,
+   replaced in place only when size AND header checksum match). Booting the patched image
+   turns the supervisor password prompt into a ONE-TIME BYPASS: enter any character,
+   confirm hardware ID, press space twice, power off, then flash the original image back
+   and reset settings to factory default.
+   **Shipped binaries**: `bios_recovery/patches/dxe/*.ffs` + `NVRAM_EfiSystemNvDataFvGuid.vol`
+   from the badcaps autopatcher v0.2 distribution (credits: Knucklegrumble and the
+   badcaps thread 65996 contributors; DXE patch by the original thread authors). They are
+   community repair artifacts distributed as-is, NOT verified by us — apply at your own
+   risk. `dxe_replacements.json` also supports auto-derivation by diffing an original vs
+   autopatched dump pair.
 
 ### Tamper protection (LNVBBSEC)
 xx40+ ThinkPads verify FV signatures; after modifying a signed FV the marker

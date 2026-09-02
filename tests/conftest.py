@@ -42,3 +42,8 @@ def uefi_patch_image(fixtures):
 def patcher():
     from bios_recovery.engines.uefi_patcher import UEFIPatcher
     return UEFIPatcher()
+
+
+@pytest.fixture(scope="session")
+def autopatch_image(fixtures):
+    return fixtures["autopatch.bin"]

@@ -118,6 +118,13 @@ class LenovoTab(QWidget):
         self.dxe_consent = QCheckBox(
             "I understand driver replacement modifies critical firmware code")
         dxe_layout.addWidget(self.dxe_consent)
+
+        autopatch_row = QHBoxLayout()
+        self.autopatch_btn = QPushButton("Run Full Autopatch (drivers + NVRAM clean)")
+        self.autopatch_btn.clicked.connect(self.run_full_autopatch)
+        autopatch_row.addWidget(self.autopatch_btn)
+        autopatch_row.addStretch(1)
+        dxe_layout.addLayout(autopatch_row)
         layout.addWidget(dxe_group)
 
         self.log_text = QPlainTextEdit()
@@ -295,6 +302,36 @@ class LenovoTab(QWidget):
                                     f"{applied} replacement(s) applied.\nOutput: {work}")
         else:
             QMessageBox.warning(self, "Nothing Applied", "No replacements were applied.")
+
+    def run_full_autopatch(self):
+        if not self._require_file():
+            return
+        if not self.dxe_consent.isChecked():
+            QMessageBox.warning(self, "Consent Required",
+                                "Tick the consent box before running the autopatch.")
+            return
+        out = self.current_dump.rsplit(".", 1)[0] + "_PATCHED.bin"
+        try:
+            report = self.patcher.run_autopatch(self.current_dump, out)
+        except Exception as e:
+            QMessageBox.critical(self, "Autopatch Failed", str(e))
+            return
+        for s in report["steps"]:
+            tag = "OK " if s["ok"] else ("SKIP" if s.get("skipped") else "FAIL")
+            self._log(f"[{tag}] {s['step']}: {s['message']}")
+        QMessageBox.information(
+            self, "Autopatch Complete",
+            "Patched image written to:\n" + out + "\n\n[ HOW TO USE THE PATCH ]\n"
+            "1. Flash the PATCHED image\n"
+            "2. Boot and enter BIOS settings (ENTER/F1)\n"
+            "3. Enter any character when asked for Supervisor Password\n"
+            "4. Press Enter when it shows Hardware ID\n"
+            "5. Press Space twice when asked\n"
+            "6. Power off\n"
+            "7. Flash the ORIGINAL image back\n"
+            "8. Reset BIOS settings to factory default\n\n"
+            "You may need to hold the anti-tamper switch (tape) while booting,\n"
+            "and remove the disk if it is locked.")
 
     def derive_from_pair(self):
         orig, _ = QFileDialog.getOpenFileName(self, "Original (unpatched) dump",
