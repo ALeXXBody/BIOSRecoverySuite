@@ -89,6 +89,8 @@ class ECPatcher:
             b"8587",
             b"8528E",
             b"8518",
+            b"IT8218",
+            b"8218",
             b"\x80\x04",   # ITE reporter ID used in many EC images
         ],
         ECController.NUVOTON: [

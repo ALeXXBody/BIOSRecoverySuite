@@ -25,6 +25,25 @@ def test_ec_controller_detection(ec_firmware):
     assert "IT8587E" in analysis.raw[:0x20].decode("latin1")
 
 
+def test_it8218_lenovo_15ahp9_style_detection(ec_dump):
+    """Real-world case: Lenovo 15AHP9 with ITE IT8218VG EC.
+
+    The 2-chip design keeps the EC image in the top of the main SPI dump;
+    the analyzer must recognise the IT8218 signature family and the GUI
+    extract step must produce a chip-writable image.
+    """
+    patcher = ECPatcher()
+    with open(ec_dump, "rb") as f:
+        data = f.read()
+    analysis = patcher.analyze_ec(data)
+    assert analysis.found, "EC image expected in the top of the dump"
+    assert analysis.controller == ECController.ITE
+    assert analysis.size >= 0x10000, "EC image must be at least one 64KB block"
+    # 'IT8218' must now feed the controller classification
+    assert any(sig == b"IT8218" for sig in patcher.CONTROLLER_SIGNATURES[ECController.ITE])
+    assert patcher.extract_ec(ec_dump, ec_dump + ".ec.bin").status.name == "SUCCESS"
+
+
 def test_password_flags_scanned(ec_dump):
     patcher = ECPatcher()
     analysis = patcher.analyze_ec(open(ec_dump, "rb").read())
