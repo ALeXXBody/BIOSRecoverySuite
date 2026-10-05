@@ -142,47 +142,97 @@ class ECPatcher:
         return os.path.join(os.path.dirname(here), "patches", "ec_patches.json")
 
     def find_ec_region(self, data: bytes) -> tuple[int, int]:
-        """Return (offset, size) of the EC firmware within a full dump."""
-        candidates = []
+        """Return (offset, size) of the EC firmware within a dump.
 
+        Handles both layouts:
+          * standalone EC chip dump  ->  offset 0, whole file (it *is* the EC)
+          * full SPI image (2-chip Lenovo designs) -> EC image in the TOP of
+            the dump; signature hits found deep inside the BIOS area are
+            noise and are rejected.
+
+        Strategy: score candidate offsets by how many controller-family AND
+        behavioral markers cluster around them; prefer the highest-offset
+        cluster; size is derived from content (EOF / FF runs) with a hard
+        512KB cap - EC images never exceed that.
+        """
+        if not data:
+            return -1, -1
+
+        families = list(self.CONTROLLER_SIGNATURES.values())
+        all_markers = [s for fam in families for s in fam] + self.KBC_MARKERS
+
+        # ---- standalone read (whole file looks like EC firmware) ---------
+        window = min(len(data), 0x20000)
+        head = data[:window]
+        head_hits = sum(1 for s in all_markers if s in head)
+        # a genuine EC image carries several markers; a BIOS head almost
+        # never accumulates that many inside its first 128KB
+        if head_hits >= 3:
+            return 0, len(data)
+
+        # ---- find candidate signature offsets ----------------------------
+        candidates = []
         for sig_group in self.CONTROLLER_SIGNATURES.values():
             for sig in sig_group:
-                idx = data.find(sig)
-                if idx >= 0:
-                    candidates.append(idx)
-
+                idx = 0
+                while True:
+                    idx = data.find(sig, idx)
+                    if idx < 0:
+                        break
+                    candidates.append((idx, sig_group))
+                    idx += 1
         if not candidates:
             return -1, -1
 
-        earliest = min(candidates)
+        # ---- score each candidate by marker density in its neighbourhood --
+        # a real EC image shows multiple distinct family/behavioral markers
+        # within a 64KB window; noise shows one lonely short hit
+        SCORE_RADIUS = 0x20000
+        best = None
+        for off, fam in candidates:
+            lo, hi = max(0, off - SCORE_RADIUS), min(len(data), off + SCORE_RADIUS)
+            distinct = sum(1 for m in all_markers if m in data[lo:hi])
+            score = (distinct, off)               # density first, high offsets win ties
+            if best is None or score > best:
+                best = score
+        distinct, start = best
 
-        start = earliest & ~0xFFF
+        # lonely short-string hit inside BIOS area with no marker company:
+        # reject rather than mislabel a 32MB region as "EC"
+        short_noise = {b"\x80\x04", b"ITE", b"ENE", b"8218"}
+        if distinct < 2:
+            hit_sig = next((s for s in all_markers if data.find(s, max(0, start - 8)) == start)
+                           or None, None)
+            if start < len(data) - 0x40000 or (hit_sig in short_noise):
+                return -1, -1
+
+        start &= ~0xFFF
         if start < 0:
             start = 0
 
-        remaining = len(data) - start
-        if remaining <= 0x10000:
-            return start, remaining
+        # ---- derive a sane end -------------------------------------------
+        MAX_EC = 0x80000  # 512KB covers every known EC image
+        end = len(data)
+        # walk back over trailing FF padding (partial + whole blocks)
+        end = self._strip_ff_tail(data, start, end)
+        # hard cap
+        if end - start > MAX_EC:
+            end = start + MAX_EC
+        size = end - start
+        if size < 0x10000:
+            size = min(0x10000, len(data) - start)
+        return start, size
 
-        ff_tail = 0
-        tail_start = max(len(data) - 0x40000, start)
-        if tail_start > start + 0x10:
-            for i in range(len(data) - 1, tail_start - 1, -1):
-                if data[i] == 0xFF:
-                    ff_tail += 1
-                else:
-                    break
-        else:
-            ff_tail = 0
+    @staticmethod
+    def _strip_ff_tail(data: bytes, start: int, end: int) -> int:
+        """Trim trailing 0xFF padding down to the last non-FF byte."""
+        while end > start + 0x100 and data[end - 1] == 0xFF:
+            end -= 1
+        return end
 
-        if ff_tail > 0 and len(data) - ff_tail >= start:
-            end = len(data) - ff_tail
-        else:
-            end = len(data)
-            while end - start > 0x80000:
-                end = min(len(data), start + 0x80000)
-
-        return start, end - start
+    def _strip_ff_run(self, data, start, end):
+        # placeholder kept for API compatibility
+        return self._strip_ff_tail(data, start, end)
 
     def analyze_ec(self, data: bytes) -> ECAnalysis:
         offset, size = self.find_ec_region(data)

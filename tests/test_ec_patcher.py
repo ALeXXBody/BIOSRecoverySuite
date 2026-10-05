@@ -2,7 +2,8 @@
 
 import os
 
-from bios_recovery.engines.ec_patcher import ECPatcher, ECController, ECStatus
+from bios_recovery.engines.ec_patcher import ECController, ECPatcher, ECStatus
+from tests.fixture_builder import build_ec_firmware
 
 
 def test_ec_found_in_top_of_dump(ec_dump):
@@ -109,3 +110,61 @@ def test_missing_signature_reports_pattern_missing(intel_ifd, tmp_path):
     )
     # An Intel flash-descriptor dump carries no EC 'UnLock' marker
     assert result.status == ECStatus.PATTERN_MISSING
+
+def _make_spi_15ahp9_style(BIG: int, ec: bytes, noise: bytes | None,
+                           noise_off: int | None) -> bytes:
+    """Full Lenovo-style SPI: pseudorandom BIOS area, optional stray noise
+    hit low in the image, real EC image in the TOP of the dump."""
+    data = bytearray(bytes((i * 7 + 0x5B) & 0xFF for i in range(BIG)))
+    if noise is not None:
+        data[noise_off:noise_off + len(noise)] = noise
+    start = BIG - len(ec)
+    data[start:] = ec
+    return bytes(data)
+
+
+def test_noise_hit_in_bios_area_not_reported_as_ec():
+    """Regression for a reported failure: Lenovo 15AHP9 32MB dump.
+
+    A stray short ITE marker hit deep inside the BIOS area used to make the
+    analyzer label everything from there to EOF as 'EC' (33MB extract).
+    The EC must be found in the top of the dump instead, bounded in size.
+    """
+    BIG = 0x2000000  # 32MB, as the user's dump
+    ec = build_ec_firmware()
+    assert len(ec) == 0x40000
+
+    # real dump: EC at top + a stray 2-byte ITE-family hit at 0x21000
+    spi = _make_spi_15ahp9_style(BIG, ec, b"\x80\x04", 0x21000)
+    analysis = ECPatcher().analyze_ec(spi)
+    assert analysis.found
+    assert analysis.offset >= BIG - 0x180000, f"offset {analysis.offset:#x} wrong"
+    assert analysis.offset & 0xFFF == 0
+    assert analysis.size <= 0x80000, f"size {analysis.size:#x} unbounded!"
+
+    # extraction must write ONLY the EC region
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(spi)
+        path = f.name
+    out = "/tmp/ec_extract_regression.bin"
+    try:
+        result = ECPatcher().extract_ec(path, out)
+        assert result.status == ECStatus.SUCCESS
+        with open(out, "rb") as f:
+            extracted = f.read()
+        assert len(extracted) <= 0x80000, f"extracted {len(extracted)} bytes!"
+        assert extracted == spi[analysis.offset:analysis.offset + analysis.size]
+    finally:
+        os.unlink(path)
+        if os.path.exists(out):
+            os.unlink(out)
+
+
+def test_pure_noise_rejected():
+    """A BIOS-only image with one lone short ITE-family hit must not be
+    mislabeled as EC firmware."""
+    data = bytearray(bytes((i * 7 + 0x5B) & 0xFF for i in range(0x100000)))
+    data[0x21000:0x21002] = b"\x80\x04"
+    analysis = ECPatcher().analyze_ec(bytes(data))
+    assert not analysis.found, "lone noise hit must not count as EC"
