@@ -55,13 +55,24 @@ class ECTab(QWidget):
         override_group = QGroupBox("Manual region override (if auto-detect is wrong)")
         override_layout = QVBoxLayout(override_group)
 
-        self.override_check = QCheckBox("Use manual offset/size instead of auto-detect")
+        self.override_check = QCheckBox(
+            "Use manual chip size instead of auto-detect")
         override_layout.addWidget(self.override_check)
+
+        hint = QLabel(
+            "Leave the offset BLANK to take the selected size ending at the "
+            "detected end of the EC region (recommended -- the chip size is "
+            "known, the exact offset is the uncertain part).\n"
+            "Fill in the offset to force an exact position instead."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #888;")
+        override_layout.addWidget(hint)
 
         size_row = QHBoxLayout()
         size_row.addWidget(QLabel("Offset:"))
         self.override_offset = QLineEdit()
-        self.override_offset.setPlaceholderText("hex, e.g. 1FC0000")
+        self.override_offset.setPlaceholderText("blank = auto-anchor at region end")
         size_row.addWidget(self.override_offset, 1)
         size_row.addWidget(QLabel("Size:"))
         self.override_size = QComboBox()
@@ -175,24 +186,33 @@ class ECTab(QWidget):
     def _override_region(self):
         """Return (offset, size) from the manual controls, or (None, None).
 
-        Falls back to auto-detection when the override box is unchecked or the
-        offset field is blank/invalid.
+        Three cases:
+          * box unchecked              -> (None, None), use auto-detection.
+          * box checked, offset blank  -> (None, size): END-ANCHORED. The engine
+            places the region as the last ``size`` bytes before the detected end
+            of the EC region. This is the mode to use when the detected SIZE is
+            wrong but the chip capacity is known -- e.g. a 256KB IT8218VG that
+            the heuristics keep reporting as 128KB.
+          * box checked, offset filled -> (offset, size), used verbatim.
         """
         if not self.override_check.isChecked():
             return None, None
+        size_text = self.override_size.currentText().split()[0]
+        size = int(size_text, 16)
         raw = self.override_offset.text().strip()
         if not raw:
-            return None, None
+            return None, size
         try:
             offset = int(raw, 16)
         except ValueError:
             QMessageBox.warning(
                 self, "Bad offset",
-                f"'{raw}' is not a valid hex offset. Example: 1FC0000",
+                f"'{raw}' is not a valid hex offset. Example: 1FC0000\n\n"
+                "Leave the offset blank to anchor the region at its detected "
+                "end using the selected chip size.",
             )
             return None, None
-        size_text = self.override_size.currentText().split()[0]
-        return offset, int(size_text, 16)
+        return offset, size
 
     def analyze(self):
         if not self.current_dump:
@@ -226,9 +246,12 @@ class ECTab(QWidget):
         ]
         for flag in analysis.password_flags[:40]:
             lines.append(f"    [{flag['name']}] at 0x{flag['offset_in_image']:X}")
-        if off_override is not None:
+        if off_override is not None or size_override is not None:
             lines.append("")
-            lines.append("  (manual override active -- verify before flashing)")
+            lines.append("  (manual chip size active -- verify before flashing)")
+            if off_override is None:
+                lines.append(
+                    f"  (size 0x{size_override:X} anchored at the detected end)")
         self.analysis_text.setPlainText("\n".join(lines))
         self.last_extracted = analysis
         self._log(f"Analyzed EC at 0x{analysis.offset:X} ({analysis.size:,} bytes).")
@@ -245,10 +268,10 @@ class ECTab(QWidget):
         result = self.patcher.extract_ec(self.current_dump, out, off_override, size_override)
         self._log(result.message)
         if result.status == ECStatus.SUCCESS:
-            if off_override is not None:
+            if off_override is not None or size_override is not None:
                 QMessageBox.information(
                     self, "Extract",
-                    result.message + "\n\nExtracted using the MANUAL override -- "
+                    result.message + "\n\nExtracted using a MANUAL chip size -- "
                     "double-check this is the right region before flashing.",
                 )
             else:

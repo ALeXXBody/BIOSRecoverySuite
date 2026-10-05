@@ -282,7 +282,63 @@ def test_ec_tab_override_analyze_reports_manual(qapp, dialogs, tmp_path):
     text = tab.analysis_text.toPlainText()
     assert "Offset: 0x10000" in text, text
     assert "0x40000" in text, text
-    assert "manual override active" in text, text
+    assert "manual chip size active" in text, text
+
+
+def test_ec_tab_blank_offset_anchors_at_region_end(qapp, dialogs, tmp_path):
+    """The regression fix: chip capacity is known, the exact offset is not.
+
+    The reported failure was a 256KB IT8218VG being detected as 128KB, so a
+    truncated 128KB image got written. The user must be able to state the
+    capacity and have the region placed at its detected end -- that yields the
+    full 256KB without needing to know the offset by heart.
+    """
+    from bios_recovery.gui.ec_tab import ECTab
+
+    import random
+    random.seed(99)
+    total = 0x2000000
+    ec_size = 0x40000
+    ec_off = total - ec_size
+    data = bytearray(random.getrandbits(8) for _ in range(total))
+    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
+    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x20000:0x20009] = b"IT8218VG "      # markers in the SECOND HALF
+    ec[0x20100:0x20106] = b"ITE8\x02\x00"
+    data[ec_off:] = ec
+    dump = str(tmp_path / "ec_256k.bin")
+    with open(dump, "wb") as f:
+        f.write(bytes(data))
+    out = str(tmp_path / "ec_256k_out.bin")
+
+    tab = ECTab()
+    tab.current_dump = dump
+    tab.extract_path.setText(out)
+
+    tab.override_check.setChecked(True)
+    tab.override_offset.setText("")           # blank -> anchor at region end
+    tab.override_size.setCurrentText("0x40000 (256 KB)")
+
+    assert tab._override_region() == (None, 0x40000)
+
+    tab.extract_ec()
+    with open(out, "rb") as f:
+        got = f.read()
+    assert len(got) == 262144, f"wrote {len(got)} bytes, expected 262144"
+    assert got == bytes(data)[ec_off:ec_off + ec_size]
+    assert b"IT8218VG" in got
+
+
+def test_ec_tab_unchecked_override_uses_auto(qapp, dialogs, tmp_path):
+    """Unticking the box must fall back to auto-detection, not keep the size."""
+    from bios_recovery.gui.ec_tab import ECTab
+
+    tab = ECTab()
+    tab.override_check.setChecked(False)
+    tab.override_offset.setText("10000")
+    tab.override_size.setCurrentText("0x80000 (512 KB)")
+    assert tab._override_region() == (None, None)
 
 
 def test_ec_tab_bad_hex_offset_is_rejected_safely(qapp, dialogs, tmp_path):

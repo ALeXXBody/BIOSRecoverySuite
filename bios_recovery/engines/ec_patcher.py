@@ -199,42 +199,94 @@ class ECPatcher:
         scored.sort(reverse=True)
 
         MAX_EC = 0x80000   # 512KB covers every known EC image
+        MIN_EC = 0x10000   # 64KB floor: nothing smaller is a real EC image
         # Real EC chips are 128/256/512KB, and a manufacturer embeds the EC
-        # firmware as exactly one chip-sized block. Snapping to those sizes is
-        # far more reliable than guessing where the image begins: the marker
-        # hit can be anywhere INSIDE the image, but the region's END is
-        # unambiguous (end-of-dump, or the padding that follows it).
+        # firmware as exactly one chip-sized block whose END is unambiguous
+        # (end-of-dump, or the padding that follows it).
         STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
 
-        start, size = -1, -1
+        # Search a little beyond MAX_EC so a genuine 512KB blob is
+        # distinguishable from one where the walk simply hit the search limit.
+        SEARCH = MAX_EC + 0x10000
+
+        best = None          # (distinct, start, size)
         for distinct, anchor in scored[:32]:
-            _blob_start, blob_end = self._blob_bounds(data, anchor, MAX_EC)
-            # the region must end after the marker cluster
+            blob_start, blob_end = self._blob_bounds(data, anchor, SEARCH)
             if blob_end <= anchor:
                 blob_end = anchor + 1
-            # smallest standard chip size that still contains the cluster
-            span = next((p for p in STD_EC_SIZES if blob_end - p <= anchor), None)
-            if span is not None and blob_end - span >= 0:
-                start, size = blob_end - span, span
-                break
+            blob_len = blob_end - blob_start
 
-        if start < 0:
-            # Nothing produced a chip-sized region: report not-found rather than
-            # guessing, so the user can fall back to the manual override.
+            # Trustworthy only when the backward walk terminated on REAL
+            # padding, which bounds the region start exactly. A blob that
+            # reaches the search limit instead merely ran out of room, so its
+            # start is unknown and must not be reported as an image boundary.
+            delimits_start = blob_start > 0 and blob_len < SEARCH
+            if delimits_start and MIN_EC <= blob_len <= MAX_EC:
+                # Snap DOWN: the blob is an upper bound on the image, since
+                # firmware is routinely FF-padded inside the image itself.
+                span = next(
+                    (p for p in STD_EC_SIZES if p >= blob_len),
+                    None,
+                )
+                if span is None:
+                    span = STD_EC_SIZES[-1]
+                if blob_end - span >= 0 and (
+                    best is None or distinct > best[0]
+                ):
+                    best = (distinct, blob_end - span, span)
+                    break
+
+        if best is None:
+            # No padding boundary anywhere near the cluster, so the region START
+            # cannot be derived from content. Marker positions are useless for
+            # the size: a real EC image carries its identifying strings wherever
+            # the vendor put them, and deriving the size from a marker hit
+            # reports a 256KB chip as 128KB whenever the markers land in the
+            # second half. Flashing the wrong bytes to the EC bricks the
+            # machine, so refuse and let the user state the chip capacity.
             return -1, -1
 
-        # lonely short-string hit inside the BIOS area with no marker company:
-        # reject rather than mislabel a huge region as "EC"
-        short_noise = {b"\x80\x04", b"ITE", b"ENE", b"8218"}
-        if distinct < 2:
-            hit_sig = next(
-                (s for s in all_markers if data.find(s, max(0, anchor - 8)) == anchor),
-                None,
-            )
-            if start < len(data) - MAX_EC or (hit_sig in short_noise):
-                return -1, -1
+        return best[1], best[2]
 
-        return start, size
+    def find_ec_region_end(self, data: bytes) -> int:
+        """Return the END offset of the EC region, or -1 if unknown.
+
+        The end of the region is the most reliable fact available: it is either
+        the end of the dump or the erased (0xFF) flash that follows the region.
+        Combined with the known chip capacity this pins the start exactly, which
+        is why the manual override can be end-anchored.
+        """
+        if not data:
+            return -1
+
+        families = list(self.CONTROLLER_SIGNATURES.values())
+        all_markers = [s for fam in families for s in fam] + self.KBC_MARKERS
+        candidates = []
+        for sig_group in self.CONTROLLER_SIGNATURES.values():
+            for sig in sig_group:
+                idx = 0
+                while True:
+                    idx = data.find(sig, idx)
+                    if idx < 0:
+                        break
+                    candidates.append(idx)
+                    idx += 1
+        if not candidates:
+            return -1
+
+        radius = 0x20000
+        best = None
+        for off in candidates:
+            lo, hi = max(0, off - radius), min(len(data), off + radius)
+            distinct = sum(1 for m in all_markers if m in data[lo:hi])
+            score = (distinct, off)
+            if best is None or score > best:
+                best = score
+        anchor = best[1]
+        _blob_start, blob_end = self._blob_bounds(data, anchor, 0x80000)
+        if blob_end <= anchor:
+            blob_end = anchor + 1
+        return blob_end
 
     @staticmethod
     def _is_pad_block(block: bytes) -> bool:
@@ -262,22 +314,52 @@ class ECPatcher:
         BLOCK = 0x1000
         total = len(data)
         pos = (anchor // BLOCK) * BLOCK
+        # A lone 4KB run of 0xFF occurs inside ordinary firmware, so a single
+        # padding block must NOT be treated as a region boundary. Require
+        # consecutive padding blocks: real inter-region gaps are far larger
+        # than that, so this tolerates stray FF inside the image without
+        # walking straight through a genuine boundary.
+        PAD_RUN = 2
 
+        # Walk outwards in both directions until PAD_RUN consecutive padding
+        # blocks are seen, then report the boundary position -- the offset
+        # where padding BEGAN, not where the walk gave up. The padding run
+        # itself is not part of the region.
         start = pos
         floor = max(0, pos - max_span)
+        run = 0
+        boundary = None
         while start > floor:
             prev = start - BLOCK
             if prev < 0:
                 break
             if cls._is_pad_block(data[prev:prev + BLOCK]):
-                break
+                if boundary is None:
+                    boundary = start      # last real-content block
+                run += 1
+                if run >= PAD_RUN:
+                    start = boundary
+                    break
+            else:
+                run = 0
+                boundary = None
             start = prev
 
         end = min(total, pos + BLOCK)
         ceiling = min(total, pos + max_span)
+        run = 0
+        boundary = None
         while end < ceiling:
             if cls._is_pad_block(data[end:end + BLOCK]):
-                break
+                if boundary is None:
+                    boundary = end        # padding starts here
+                run += 1
+                if run >= PAD_RUN:
+                    end = boundary
+                    break
+            else:
+                run = 0
+                boundary = None
             end = min(total, end + BLOCK)
 
         return start, min(end, total)
@@ -293,6 +375,53 @@ class ECPatcher:
         # placeholder kept for API compatibility
         return self._strip_ff_tail(data, start, end)
 
+    def resolve_region(
+        self,
+        data: bytes,
+        offset: Optional[int] = None,
+        size: Optional[int] = None,
+    ) -> tuple[int, int, str]:
+        """Resolve the EC region to (offset, size, error).
+
+        Three modes:
+          * offset AND size given  -> used verbatim.
+          * size only              -> END-ANCHORED. The chip capacity is known
+            hardware truth, and the region's end is reliably detectable, so the
+            region is placed as the last ``size`` bytes before that end. This is
+            the mode that fixes a chip whose capacity the heuristics misjudge.
+          * neither                 -> auto-detection.
+        """
+        size = int(size) if size else None
+
+        if offset is not None and offset >= 0 and size:
+            offset = int(offset)
+            if offset + size > len(data):
+                return -1, -1, (
+                    f"Region 0x{offset:X}+0x{size:X} runs past the end of the "
+                    f"file (0x{len(data):X} bytes)."
+                )
+            return offset, size, ""
+
+        if size:
+            end = self.find_ec_region_end(data)
+            if end < 0:
+                return -1, -1, (
+                    "Could not locate the end of the EC region. Enter an offset "
+                    "manually, or check that this file is a full SPI dump."
+                )
+            offset = end - size
+            if offset < 0:
+                return -1, -1, (
+                    f"A 0x{size:X}-byte region ending at 0x{end:X} would start "
+                    f"before the beginning of the file."
+                )
+            return offset, size, ""
+
+        offset, size = self.find_ec_region(data)
+        if offset < 0:
+            return -1, -1, ""
+        return offset, size, ""
+
     def analyze_ec(
         self,
         data: bytes,
@@ -306,21 +435,9 @@ class ECPatcher:
         flashing the wrong bytes to the chip -- so the user must be able to pin
         the region themselves.
         """
-        if offset is not None and offset >= 0 and size:
-            offset = int(offset)
-            size = int(size)
-            if offset + size > len(data):
-                return ECAnalysis(
-                    found=False,
-                    message=(
-                        f"Region 0x{offset:X}+0x{size:X} runs past the end of the "
-                        f"file (0x{len(data):X} bytes)."
-                    ),
-                )
-        else:
-            offset, size = self.find_ec_region(data)
-            if offset < 0:
-                return ECAnalysis(found=False)
+        offset, size, error = self.resolve_region(data, offset, size)
+        if error or offset < 0:
+            return ECAnalysis(found=False, message=error)
 
         ec_data = data[offset:offset + size]
         analysis = ECAnalysis(found=True, offset=offset, size=size, raw=ec_data)
@@ -465,27 +582,20 @@ class ECPatcher:
         with open(input_path, "rb") as f:
             data = f.read()
 
-        if offset is not None and offset >= 0 and size:
-            offset = int(offset)
-            size = int(size)
-            if offset + size > len(data):
-                return ECPatchResult(
-                    status=ECStatus.ERROR,
-                    message=(
-                        f"Region 0x{offset:X}+0x{size:X} runs past the end of the "
-                        f"file (0x{len(data):X} bytes)."
-                    ),
-                )
-        else:
-            offset, size = self.find_ec_region(data)
-            if offset < 0:
-                return ECPatchResult(
-                    status=ECStatus.NOT_FOUND,
-                    message=(
-                        "No EC firmware found automatically. Set the offset and "
-                        "size manually (e.g. size 0x40000 for a 256KB IT8218)."
-                    ),
-                )
+        offset, size, error = self.resolve_region(data, offset, size)
+        if error:
+            return ECPatchResult(status=ECStatus.ERROR, message=error)
+        if offset < 0:
+            return ECPatchResult(
+                status=ECStatus.NOT_FOUND,
+                message=(
+                    "Could not delimit the EC region from the dump alone. Tick "
+                    "'Manual region override' and select your chip size (e.g. "
+                    "0x40000 for a 256KB IT8218VG) -- leave the offset blank to "
+                    "anchor the region at its detected end. No bytes were "
+                    "extracted."
+                ),
+            )
 
         with open(output_path, "wb") as f:
             f.write(data[offset:offset + size])

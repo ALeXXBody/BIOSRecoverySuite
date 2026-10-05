@@ -1,6 +1,9 @@
 """Regression tests for the EC firmware analysis and patch engine."""
 
 import os
+import tempfile
+
+import pytest
 
 from bios_recovery.engines.ec_patcher import ECController, ECPatcher, ECStatus
 from tests.fixture_builder import build_ec_firmware
@@ -114,12 +117,20 @@ def test_missing_signature_reports_pattern_missing(intel_ifd, tmp_path):
 def _make_spi_15ahp9_style(BIG: int, ec: bytes, noise: bytes | None,
                            noise_off: int | None) -> bytes:
     """Full Lenovo-style SPI: pseudorandom BIOS area, optional stray noise
-    hit low in the image, real EC image in the TOP of the dump."""
+    hit low in the image, erased-flash gap, then the real EC image in the TOP
+    of the dump.
+
+    The 0xFF gap matters: in a real 2-chip image the region between the end of
+    the BIOS and the start of the EC is unprogrammed flash, so it reads as
+    0xFF. That gap is the only reliable delimiter of the region's start.
+    """
     data = bytearray(bytes((i * 7 + 0x5B) & 0xFF for i in range(BIG)))
     if noise is not None:
         data[noise_off:noise_off + len(noise)] = noise
     start = BIG - len(ec)
     data[start:] = ec
+    # Erase the 1MB below the EC region, the way a real image does.
+    data[start - 0x100000:start] = b"\xFF" * 0x100000
     return bytes(data)
 
 
@@ -179,12 +190,18 @@ def test_pure_noise_rejected():
 def _lenovo_15ahp9_style_dump(seed=1234, ec_size=0x40000, total=0x2000000):
     """32MB 2-chip SPI dump: EC firmware as one chip-sized block at the TOP,
     plus EC-ish strings scattered through the BIOS area (the DXE that talks to
-    the EC really does contain them)."""
+    the EC really does contain them).
+
+    The 1MB immediately below the EC region is erased (0xFF), as it is in a real
+    image: the EC sits at the very top of the second chip and the flash below it
+    was never programmed. That gap is what delimits the region start.
+    """
     import random
     random.seed(seed)
     data = bytearray(random.getrandbits(8) for _ in range(total))
 
     ec_off = total - ec_size
+    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
     ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
     ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
     ec[0x0100:0x0109] = b"IT8218VG "
@@ -263,6 +280,211 @@ def test_extract_with_override_writes_exact_size():
             os.unlink(out)
 
 
+# ---------------------------------------------------------------------------
+# Regression: a 256KB chip was detected as 128KB and the wrong data extracted.
+#
+# Root cause: the region SIZE was inferred from where a marker hit sat inside
+# the image ("smallest chip size that still contains the hit"). Real EC images
+# put their identifying strings in the SECOND HALF, so a 256KB chip whose
+# markers land at +0x20000 resolved to 128KB -- and a 128KB slice was written
+# where 256KB of firmware belongs.
+#
+# The chip capacity is known hardware truth. That is what must drive the size;
+# marker positions must never shrink it.
+# ---------------------------------------------------------------------------
+
+def _late_marker_dump(ec_size=0x40000, total=0x2000000, marker_at=0x20000):
+    """32MB dump whose EC block sits at the top with its markers LATE in the
+    image, and NO 0xFF padding separating it from the BIOS area (so there is no
+    padding boundary to bound the start)."""
+    import random
+    random.seed(4242)
+    data = bytearray(random.getrandbits(8) for _ in range(total))
+    ec_off = total - ec_size
+    # erased-flash gap below the EC region, as in a real 2-chip image
+    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
+    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[marker_at:marker_at + 9] = b"IT8218VG "
+    ec[marker_at + 0x100:marker_at + 0x106] = b"ITE8\x02\x00"
+    ec[marker_at + 0x300:marker_at + 0x304] = b"8218"
+    data[ec_off:] = ec
+    return bytes(data), ec_off
+
+
+def test_late_markers_do_not_shrink_a_256k_chip_to_128k():
+    """The exact reported failure: markers in the second half must not cause a
+    256KB region to be reported (and extracted) as 128KB."""
+    data, ec_off = _late_marker_dump()
+    analysis = ECPatcher().analyze_ec(data)
+    assert analysis.found
+    assert analysis.size == 0x40000, (
+        f"256KB chip reported as 0x{analysis.size:X} ({analysis.size} bytes)"
+    )
+    assert analysis.offset == ec_off
+
+
+@pytest.mark.parametrize("marker_at", [0x18000, 0x20000, 0x28000, 0x30000])
+def test_size_is_independent_of_marker_position(marker_at):
+    """Whatever the marker offset, the answer must be the chip capacity."""
+    data, ec_off = _late_marker_dump(marker_at=marker_at)
+    analysis = ECPatcher().analyze_ec(data)
+    assert analysis.found
+    assert analysis.size == 0x40000, (
+        f"marker at +0x{marker_at:X} gave size 0x{analysis.size:X}"
+    )
+
+
+def test_single_ff_block_inside_firmware_is_not_a_region_boundary():
+    """A lone 4KB erased run inside firmware must not truncate the region.
+    Real inter-region gaps are far larger than one block."""
+    data, ec_off = _late_marker_dump()
+    data = bytearray(data)
+    # erase 4KB in the MIDDLE of the EC image
+    data[ec_off + 0x10000:ec_off + 0x11000] = b"\xFF" * 0x1000
+    analysis = ECPatcher().analyze_ec(bytes(data))
+    assert analysis.found
+    assert analysis.size == 0x40000, f"internal FF run truncated to 0x{analysis.size:X}"
+
+
+def test_end_anchored_extraction_uses_chip_capacity():
+    """Passing only the size must place the region at its detected end.
+
+    This is the fix for the user: 256KB is a hardware fact, the region's end is
+    reliably detectable, so the last 256KB before that end is the EC image.
+    """
+    data, ec_off = _late_marker_dump()
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(data)
+        path = f.name
+    out = "/tmp/ec_end_anchored.bin"
+    try:
+        result = ECPatcher().extract_ec(path, out, offset=None, size=0x40000)
+        assert result.status == ECStatus.SUCCESS, result.message
+        with open(out, "rb") as f:
+            got = f.read()
+        assert len(got) == 0x40000, f"wrote {len(got)} bytes, want 262144"
+        assert got == data[ec_off:ec_off + 0x40000]
+    finally:
+        os.unlink(path)
+        if os.path.exists(out):
+            os.unlink(out)
+
+
+def test_end_anchored_resolve_matches_manual_when_both_agree():
+    """Sanity: end-anchoring with the right capacity reproduces the manual
+    offset exactly, so the two modes cannot disagree."""
+    data, ec_off = _late_marker_dump()
+    p = ECPatcher()
+    anchored = p.resolve_region(data, None, 0x40000)
+    manual = p.resolve_region(data, ec_off, 0x40000)
+    assert anchored == manual
+
+
+def test_end_anchored_respects_0xff_terminated_region():
+    """With a padding tail after the EC, the end is the padding boundary -- the
+    extracted bytes must still be exactly the EC image, not the padding."""
+    import random
+    random.seed(7)
+    total = 0x2000000
+    ec_size = 0x40000
+    data = bytearray(random.getrandbits(8) for _ in range(total))
+    ec_off = 0x100000
+    ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
+    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x0010:0x0019] = b"IT8218VG "
+    data[ec_off:ec_off + ec_size] = ec
+    data[ec_off + ec_size:] = b"\xFF" * (total - ec_off - ec_size)
+
+    p = ECPatcher()
+    offset, size, err = p.resolve_region(bytes(data), None, ec_size)
+    assert err == ""
+    assert size == ec_size
+    assert offset == ec_off, f"anchored offset 0x{offset:X} != 0x{ec_off:X}"
+
+
+def _layout_dump(ec_size, gap_before, marker_pos, total=0x2000000, seed=1234):
+    import random
+    random.seed(seed)
+    d = bytearray(random.getrandbits(8) for _ in range(total))
+    ec_off = total - ec_size
+    if gap_before:
+        d[ec_off - gap_before:ec_off] = b"\xFF" * gap_before
+    ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
+    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[marker_pos:marker_pos + 9] = b"IT8218VG "
+    ec[marker_pos + 0x100:marker_pos + 0x106] = b"ITE8\x02\x00"
+    ec[marker_pos + 0x300:marker_pos + 0x304] = b"8218"
+    d[ec_off:] = ec
+    return bytes(d), ec_off
+
+
+# Real SPI layouts: the EC sits at the top of the dump with erased flash below
+# it, and the vendor may place the identifying strings anywhere in the image.
+LAYOUTS = [
+    ("256KB, 1MB gap, markers late", 0x40000, 0x100000, 0x20000),
+    ("256KB, 1MB gap, markers at start", 0x40000, 0x100000, 0x0100),
+    ("256KB, 64KB gap, markers late", 0x40000, 0x10000, 0x20000),
+    ("256KB, 8KB gap, markers late", 0x40000, 0x2000, 0x20000),
+    ("256KB, 1MB gap, markers at +0x38000", 0x40000, 0x100000, 0x38000),
+    ("512KB, 1MB gap, markers late", 0x80000, 0x100000, 0x20000),
+    ("512KB, 1MB gap, markers at +0x70000", 0x80000, 0x100000, 0x70000),
+]
+
+
+@pytest.mark.parametrize("label,ec_size,gap,mpos", LAYOUTS)
+def test_auto_detect_across_real_layouts(label, ec_size, gap, mpos):
+    data, ec_off = _layout_dump(ec_size, gap, mpos)
+    analysis = ECPatcher().analyze_ec(data)
+    assert analysis.found, f"{label}: not found"
+    assert analysis.size == ec_size, f"{label}: got 0x{analysis.size:X}"
+    assert analysis.offset == ec_off, f"{label}: offset 0x{analysis.offset:X}"
+
+
+@pytest.mark.parametrize("label,ec_size,gap,mpos", LAYOUTS)
+def test_end_anchored_is_exact_for_every_layout(label, ec_size, gap, mpos):
+    """Whatever auto-detect thinks, asking for a capacity must yield exactly
+    that many bytes of the correct region."""
+    data, ec_off = _layout_dump(ec_size, gap, mpos)
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(data)
+        path = f.name
+    out = "/tmp/ec_layout.bin"
+    try:
+        result = ECPatcher().extract_ec(path, out, offset=None, size=ec_size)
+        assert result.status == ECStatus.SUCCESS, f"{label}: {result.message}"
+        with open(out, "rb") as f:
+            got = f.read()
+        assert len(got) == ec_size, f"{label}: wrote {len(got)}"
+        assert got == data[ec_off:ec_off + ec_size], f"{label}: wrong bytes"
+    finally:
+        os.unlink(path)
+        if os.path.exists(out):
+            os.unlink(out)
+
+
+@pytest.mark.parametrize("ec_size", [0x40000, 0x80000])
+def test_undelimitable_region_refuses_rather_than_guessing(ec_size):
+    """With NO erased gap below the EC, the region start is not derivable from
+    content. Reporting a size anyway is what wrote 128KB for a 256KB chip, so
+    the analyzer must refuse and extract nothing."""
+    data, ec_off = _layout_dump(ec_size, 0, 0x0100)
+    assert ECPatcher().analyze_ec(data).found is False
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(data)
+        path = f.name
+    out = "/tmp/ec_undelimitable.bin"
+    try:
+        result = ECPatcher().extract_ec(path, out)
+        assert result.status == ECStatus.NOT_FOUND
+        assert not os.path.exists(out), "must not write a file when undelimitable"
+    finally:
+        os.unlink(path)
+        if os.path.exists(out):
+            os.unlink(out)
+
+
 def test_extract_without_override_explains_how_to_proceed():
     """A not-found result must tell the user how to fix it, not just fail."""
     import os
@@ -274,7 +496,10 @@ def test_extract_without_override_explains_how_to_proceed():
     try:
         result = ECPatcher().extract_ec(path, out)
         assert result.status == ECStatus.NOT_FOUND
-        assert "manually" in result.message.lower()
+        msg = result.message.lower()
+        # the message must tell the user how to proceed, not just that it failed
+        assert "manual region override" in msg
+        assert "0x40000" in msg
     finally:
         os.unlink(path)
         if os.path.exists(out):
