@@ -2,7 +2,7 @@
 ; Compiled on CI with ISCC.exe after the PyInstaller build.
 
 #define MyAppName "BIOS Recovery Suite"
-#define MyAppVersion "0.1.5"
+#define MyAppVersion "0.1.6"
 #define MyAppPublisher "ALeXXBody"
 #define MyAppExeName "BIOSRecoverySuite.exe"
 
@@ -29,6 +29,15 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[InstallDelete]
+; Wipe the previous install before unpacking. Qt resolves DLLs from the app
+; folder FIRST, so a single stale DLL left behind by an older build (a
+; hand-injected ICU, an old Qt, a leftover runtime) shadows the correct
+; system one and QtWidgets fails with "The specified procedure could not be
+; found" even though the new build is perfectly good. The app stores no user
+; data here, so a clean wipe on every install is safe.
+Type: filesandordirs; Name: "{app}\*"
 
 [Files]
 Source: "dist\BIOSRecoverySuite\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
