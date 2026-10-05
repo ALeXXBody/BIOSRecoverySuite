@@ -1,6 +1,7 @@
 """Embedded Controller firmware analysis and patching tab."""
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -46,6 +47,31 @@ class ECTab(QWidget):
         analyze_btn = QPushButton("Analyze EC Firmware")
         analyze_btn.clicked.connect(self.analyze)
         layout.addWidget(analyze_btn)
+
+        # ---- manual region override -------------------------------------
+        # Auto-detection is a heuristic. When it cannot find (or mis-sizes) the
+        # EC region, the user must be able to pin the exact offset and size --
+        # flashing the wrong bytes to the chip is unrecoverable.
+        override_group = QGroupBox("Manual region override (if auto-detect is wrong)")
+        override_layout = QVBoxLayout(override_group)
+
+        self.override_check = QCheckBox("Use manual offset/size instead of auto-detect")
+        override_layout.addWidget(self.override_check)
+
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel("Offset:"))
+        self.override_offset = QLineEdit()
+        self.override_offset.setPlaceholderText("hex, e.g. 1FC0000")
+        size_row.addWidget(self.override_offset, 1)
+        size_row.addWidget(QLabel("Size:"))
+        self.override_size = QComboBox()
+        self.override_size.addItems([
+            "0x20000 (128 KB)", "0x40000 (256 KB)", "0x80000 (512 KB)",
+        ])
+        self.override_size.setCurrentIndex(1)
+        size_row.addWidget(self.override_size)
+        override_layout.addLayout(size_row)
+        layout.addWidget(override_group)
 
         self.analysis_text = QPlainTextEdit()
         self.analysis_text.setReadOnly(True)
@@ -146,16 +172,43 @@ class ECTab(QWidget):
     def _log(self, text: str):
         self.log_text.appendPlainText(text)
 
+    def _override_region(self):
+        """Return (offset, size) from the manual controls, or (None, None).
+
+        Falls back to auto-detection when the override box is unchecked or the
+        offset field is blank/invalid.
+        """
+        if not self.override_check.isChecked():
+            return None, None
+        raw = self.override_offset.text().strip()
+        if not raw:
+            return None, None
+        try:
+            offset = int(raw, 16)
+        except ValueError:
+            QMessageBox.warning(
+                self, "Bad offset",
+                f"'{raw}' is not a valid hex offset. Example: 1FC0000",
+            )
+            return None, None
+        size_text = self.override_size.currentText().split()[0]
+        return offset, int(size_text, 16)
+
     def analyze(self):
         if not self.current_dump:
             QMessageBox.warning(self, "No File", "Open a BIOS/SPI dump first.")
             return
         with open(self.current_dump, "rb") as f:
             data = f.read()
-        analysis = self.patcher.analyze_ec(data)
+        off_override, size_override = self._override_region()
+        analysis = self.patcher.analyze_ec(data, off_override, size_override)
         if not analysis.found:
             self.analysis_text.setPlainText(
-                "No EC firmware found. Tried known controller signatures (ITE, Nuvoton, MEC, ENE)."
+                "No EC firmware found at that region. Tried known controller "
+                "signatures (ITE, Nuvoton, MEC, ENE).\n\n"
+                "If this board keeps the EC firmware on a separate chip, or the "
+                "region is stored unusually, enable the manual override below and "
+                "set the offset/size yourself (0x40000 = 256KB, e.g. for IT8218VG-256)."
             )
             self._log("EC not found.")
             return
@@ -173,6 +226,9 @@ class ECTab(QWidget):
         ]
         for flag in analysis.password_flags[:40]:
             lines.append(f"    [{flag['name']}] at 0x{flag['offset_in_image']:X}")
+        if off_override is not None:
+            lines.append("")
+            lines.append("  (manual override active -- verify before flashing)")
         self.analysis_text.setPlainText("\n".join(lines))
         self.last_extracted = analysis
         self._log(f"Analyzed EC at 0x{analysis.offset:X} ({analysis.size:,} bytes).")
@@ -185,10 +241,20 @@ class ECTab(QWidget):
         if not out:
             out = self.current_dump.rsplit(".", 1)[0] + "_ec.bin"
             self.extract_path.setText(out)
-        result = self.patcher.extract_ec(self.current_dump, out)
+        off_override, size_override = self._override_region()
+        result = self.patcher.extract_ec(self.current_dump, out, off_override, size_override)
         self._log(result.message)
         if result.status == ECStatus.SUCCESS:
-            QMessageBox.information(self, "Extract", result.message)
+            if off_override is not None:
+                QMessageBox.information(
+                    self, "Extract",
+                    result.message + "\n\nExtracted using the MANUAL override -- "
+                    "double-check this is the right region before flashing.",
+                )
+            else:
+                QMessageBox.information(self, "Extract", result.message)
+        else:
+            QMessageBox.warning(self, "Extract failed", result.message)
 
     def apply_patch(self):
         if not self.current_dump:

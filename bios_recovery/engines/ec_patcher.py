@@ -65,6 +65,7 @@ class ECAnalysis:
     has_kbc_config: bool = False
     checksum_valid: Optional[bool] = None
     raw: bytes = b""
+    message: str = ""
 
 
 @dataclass
@@ -186,42 +187,100 @@ class ECPatcher:
 
         # ---- score each candidate by marker density in its neighbourhood --
         # a real EC image shows multiple distinct family/behavioral markers
-        # within a 64KB window; noise shows one lonely short hit
+        # within a 128KB window; noise shows one lonely short hit
         SCORE_RADIUS = 0x20000
-        best = None
-        for off, fam in candidates:
+        scored = []
+        for off, _fam in candidates:
             lo, hi = max(0, off - SCORE_RADIUS), min(len(data), off + SCORE_RADIUS)
             distinct = sum(1 for m in all_markers if m in data[lo:hi])
-            score = (distinct, off)               # density first, high offsets win ties
-            if best is None or score > best:
-                best = score
-        distinct, start = best
+            # density first; on a tie prefer the HIGHEST offset because 2-chip
+            # designs put the EC in the top of the dump.
+            scored.append((distinct, off))
+        scored.sort(reverse=True)
 
-        # lonely short-string hit inside BIOS area with no marker company:
-        # reject rather than mislabel a 32MB region as "EC"
+        MAX_EC = 0x80000   # 512KB covers every known EC image
+        # Real EC chips are 128/256/512KB, and a manufacturer embeds the EC
+        # firmware as exactly one chip-sized block. Snapping to those sizes is
+        # far more reliable than guessing where the image begins: the marker
+        # hit can be anywhere INSIDE the image, but the region's END is
+        # unambiguous (end-of-dump, or the padding that follows it).
+        STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
+
+        start, size = -1, -1
+        for distinct, anchor in scored[:32]:
+            _blob_start, blob_end = self._blob_bounds(data, anchor, MAX_EC)
+            # the region must end after the marker cluster
+            if blob_end <= anchor:
+                blob_end = anchor + 1
+            # smallest standard chip size that still contains the cluster
+            span = next((p for p in STD_EC_SIZES if blob_end - p <= anchor), None)
+            if span is not None and blob_end - span >= 0:
+                start, size = blob_end - span, span
+                break
+
+        if start < 0:
+            # Nothing produced a chip-sized region: report not-found rather than
+            # guessing, so the user can fall back to the manual override.
+            return -1, -1
+
+        # lonely short-string hit inside the BIOS area with no marker company:
+        # reject rather than mislabel a huge region as "EC"
         short_noise = {b"\x80\x04", b"ITE", b"ENE", b"8218"}
         if distinct < 2:
-            hit_sig = next((s for s in all_markers if data.find(s, max(0, start - 8)) == start)
-                           or None, None)
-            if start < len(data) - 0x40000 or (hit_sig in short_noise):
+            hit_sig = next(
+                (s for s in all_markers if data.find(s, max(0, anchor - 8)) == anchor),
+                None,
+            )
+            if start < len(data) - MAX_EC or (hit_sig in short_noise):
                 return -1, -1
 
-        start &= ~0xFFF
-        if start < 0:
-            start = 0
-
-        # ---- derive a sane end -------------------------------------------
-        MAX_EC = 0x80000  # 512KB covers every known EC image
-        end = len(data)
-        # walk back over trailing FF padding (partial + whole blocks)
-        end = self._strip_ff_tail(data, start, end)
-        # hard cap
-        if end - start > MAX_EC:
-            end = start + MAX_EC
-        size = end - start
-        if size < 0x10000:
-            size = min(0x10000, len(data) - start)
         return start, size
+
+    @staticmethod
+    def _is_pad_block(block: bytes) -> bool:
+        """True when a block is entirely 0xFF.
+
+        0xFF is *erased* flash, so it always terminates programmed content.
+        All-zero blocks are deliberately NOT treated as padding: firmware is
+        routinely zero-padded out to the full chip capacity, and cutting the
+        region at the first zero run would truncate the image the user needs to
+        flash. Zeros therefore stay inside the region.
+        """
+        if not block:
+            return True
+        return block.count(0xFF) == len(block)
+
+    @classmethod
+    def _blob_bounds(cls, data: bytes, anchor: int, max_span: int) -> tuple[int, int]:
+        """Walk out from a marker hit to the enclosing firmware blob.
+
+        Scans in 4KB blocks in both directions and stops at the first block
+        that is pure 0xFF padding, or at the end of the file. Scanning
+        per-block (rather than per-byte) means small 0xFF runs *inside* the
+        firmware do not truncate the region.
+        """
+        BLOCK = 0x1000
+        total = len(data)
+        pos = (anchor // BLOCK) * BLOCK
+
+        start = pos
+        floor = max(0, pos - max_span)
+        while start > floor:
+            prev = start - BLOCK
+            if prev < 0:
+                break
+            if cls._is_pad_block(data[prev:prev + BLOCK]):
+                break
+            start = prev
+
+        end = min(total, pos + BLOCK)
+        ceiling = min(total, pos + max_span)
+        while end < ceiling:
+            if cls._is_pad_block(data[end:end + BLOCK]):
+                break
+            end = min(total, end + BLOCK)
+
+        return start, min(end, total)
 
     @staticmethod
     def _strip_ff_tail(data: bytes, start: int, end: int) -> int:
@@ -234,10 +293,34 @@ class ECPatcher:
         # placeholder kept for API compatibility
         return self._strip_ff_tail(data, start, end)
 
-    def analyze_ec(self, data: bytes) -> ECAnalysis:
-        offset, size = self.find_ec_region(data)
-        if offset < 0:
-            return ECAnalysis(found=False)
+    def analyze_ec(
+        self,
+        data: bytes,
+        offset: Optional[int] = None,
+        size: Optional[int] = None,
+    ) -> ECAnalysis:
+        """Analyse the EC firmware inside ``data``.
+
+        ``offset``/``size`` override auto-detection. This matters because the
+        EC region cannot always be found automatically, and a wrong guess means
+        flashing the wrong bytes to the chip -- so the user must be able to pin
+        the region themselves.
+        """
+        if offset is not None and offset >= 0 and size:
+            offset = int(offset)
+            size = int(size)
+            if offset + size > len(data):
+                return ECAnalysis(
+                    found=False,
+                    message=(
+                        f"Region 0x{offset:X}+0x{size:X} runs past the end of the "
+                        f"file (0x{len(data):X} bytes)."
+                    ),
+                )
+        else:
+            offset, size = self.find_ec_region(data)
+            if offset < 0:
+                return ECAnalysis(found=False)
 
         ec_data = data[offset:offset + size]
         analysis = ECAnalysis(found=True, offset=offset, size=size, raw=ec_data)
@@ -366,19 +449,51 @@ class ECPatcher:
             return -1
         return data.find(signature)
 
-    def extract_ec(self, input_path: str, output_path: str) -> ECPatchResult:
+    def extract_ec(
+        self,
+        input_path: str,
+        output_path: str,
+        offset: Optional[int] = None,
+        size: Optional[int] = None,
+    ) -> ECPatchResult:
+        """Extract the EC region to ``output_path``.
+
+        Pass ``offset``/``size`` to override auto-detection. The written file is
+        ALWAYS exactly ``size`` bytes, so it can be flashed straight onto a chip
+        of that capacity.
+        """
         with open(input_path, "rb") as f:
             data = f.read()
-        offset, size = self.find_ec_region(data)
-        if offset < 0:
-            return ECPatchResult(status=ECStatus.NOT_FOUND, message="No EC firmware found")
+
+        if offset is not None and offset >= 0 and size:
+            offset = int(offset)
+            size = int(size)
+            if offset + size > len(data):
+                return ECPatchResult(
+                    status=ECStatus.ERROR,
+                    message=(
+                        f"Region 0x{offset:X}+0x{size:X} runs past the end of the "
+                        f"file (0x{len(data):X} bytes)."
+                    ),
+                )
+        else:
+            offset, size = self.find_ec_region(data)
+            if offset < 0:
+                return ECPatchResult(
+                    status=ECStatus.NOT_FOUND,
+                    message=(
+                        "No EC firmware found automatically. Set the offset and "
+                        "size manually (e.g. size 0x40000 for a 256KB IT8218)."
+                    ),
+                )
+
         with open(output_path, "wb") as f:
             f.write(data[offset:offset + size])
         return ECPatchResult(
             status=ECStatus.SUCCESS,
             offset=offset,
             output_path=output_path,
-            message=f"EC firmware extracted: offset 0x{offset:X}, {size} bytes",
+            message=f"EC firmware extracted: offset 0x{offset:X}, {size} bytes ({size // 1024} KB)",
         )
 
     def _load_patches(self) -> None:

@@ -224,3 +224,79 @@ def test_menu_and_about(window, monkeypatch):
     monkeypatch.setattr(UpdateDialog, "exec", lambda self: None)
     window.show_about()
     window.check_for_updates()
+
+
+# ---------------------------------------------------------------------------
+# EC tab: manual region override (the safety net for a wrong auto-detect)
+# ---------------------------------------------------------------------------
+
+def _ec_dump_with_hidden_region(path):
+    """A dump where auto-detection finds nothing (all 0xFF), so the ONLY way
+    to extract is the manual override. Mirrors boards that store EC firmware
+    in a way the heuristics cannot recognise."""
+    with open(path, "wb") as f:
+        f.write(b"\xFF" * 0x10000 + bytes(range(256)) * 1024)
+    return path
+
+
+def test_ec_tab_manual_override_extracts(qapp, dialogs, tmp_path, monkeypatch):
+    """Checking the override box + filling offset/size must drive extraction."""
+    from bios_recovery.gui.ec_tab import ECTab
+
+    dump = _ec_dump_with_hidden_region(str(tmp_path / "ec_hidden.bin"))
+    out = str(tmp_path / "ec_out.bin")
+
+    tab = ECTab()
+    tab.current_dump = dump
+    tab.extract_path.setText(out)
+
+    # auto-detect alone must find nothing in this dump
+    tab.analyze()
+    assert "No EC firmware" in tab.analysis_text.toPlainText()
+
+    # now pin the region by hand
+    tab.override_check.setChecked(True)
+    tab.override_offset.setText("10000")
+    tab.override_size.setCurrentText("0x40000 (256 KB)")
+
+    tab.extract_ec()
+    assert os.path.exists(out), "override extract produced no file"
+    with open(out, "rb") as f:
+        got = f.read()
+    assert len(got) == 0x40000, f"wrote {len(got)} bytes, expected 0x40000"
+    assert got == bytes(range(256)) * 1024
+
+
+def test_ec_tab_override_analyze_reports_manual(qapp, dialogs, tmp_path):
+    """Analysis under override must succeed and flag that it was manual."""
+    from bios_recovery.gui.ec_tab import ECTab
+
+    dump = _ec_dump_with_hidden_region(str(tmp_path / "ec_hidden2.bin"))
+    tab = ECTab()
+    tab.current_dump = dump
+    tab.override_check.setChecked(True)
+    tab.override_offset.setText("10000")
+    tab.override_size.setCurrentText("0x40000 (256 KB)")
+
+    tab.analyze()
+    text = tab.analysis_text.toPlainText()
+    assert "Offset: 0x10000" in text, text
+    assert "0x40000" in text, text
+    assert "manual override active" in text, text
+
+
+def test_ec_tab_bad_hex_offset_is_rejected_safely(qapp, dialogs, tmp_path):
+    """A typo in the offset box must not crash the tab or extract garbage."""
+    from bios_recovery.gui.ec_tab import ECTab
+
+    dump = _ec_dump_with_hidden_region(str(tmp_path / "ec_hidden3.bin"))
+    out = str(tmp_path / "ec_bad.bin")
+
+    tab = ECTab()
+    tab.current_dump = dump
+    tab.extract_path.setText(out)
+    tab.override_check.setChecked(True)
+    tab.override_offset.setText("ZZZZ")   # invalid hex
+
+    tab.extract_ec()                       # must not raise
+    assert not os.path.exists(out), "invalid offset must not produce a file"
