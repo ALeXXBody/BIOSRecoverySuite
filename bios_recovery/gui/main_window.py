@@ -924,6 +924,33 @@ class MainWindow(QMainWindow):
         lines.append("Passwords are encoded for US QWERTY keyboard layout.")
         self.gen_text.setPlainText("\n".join(lines))
 
+
+    def run_mea_analysis(self):
+        if not self.current_file:
+            QMessageBox.warning(self, "No File", "Open a BIOS file first.")
+            return
+        self.statusBar().showMessage("Running ME Analyzer...")
+        try:
+            res = mea_bridge.run_mea_analyzer(self.current_file)
+        except Exception as e:
+            QMessageBox.critical(self, "ME Analyzer Error", str(e))
+            self.statusBar().showMessage("ME Analyzer failed")
+            return
+        lines = ["ME Analyzer Result:"]
+        if res.success:
+            lines.append("Success")
+        else:
+            lines.append(f"Failed: {res.error}")
+        if res.messages:
+            lines.append("")
+            lines.extend(res.messages)
+        if res.stdout:
+            lines.append("")
+            lines.append(res.stdout[-1000:])
+        self.info_text.setPlainText("\n".join(lines))
+        self.statusBar().showMessage("ME Analyzer completed")
+
+
     def show_about(self):
         QMessageBox.about(
             self,
