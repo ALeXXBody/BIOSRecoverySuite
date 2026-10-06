@@ -123,16 +123,7 @@ class IntelMECleaner:
         )
 
         fpt_offset = self._find_fpt(data, me_start, me_end)
-        if fpt_offset < 0:
-            report.status = MeCleanResult.ERROR
-            report.messages.append("Cannot find FPT (Firmware Partition Table)")
-            return report
-
-        entries = self._parse_fpt_entries(data, fpt_offset, me_start, me_end)
-        if not entries:
-            report.status = MeCleanResult.ERROR
-            report.messages.append("No valid FPT entries found")
-            return report
+        entries = self._parse_fpt_entries(data, fpt_offset, me_start, me_end) if fpt_offset >= 0 else []
 
         ftpr_entry = None
         for name, offset, size in entries:
@@ -141,17 +132,42 @@ class IntelMECleaner:
                 break
 
         if ftpr_entry is None:
-            report.status = MeCleanResult.ERROR
-            report.messages.append("No FTPR partition found - cannot safely clean ME")
-            return report
+            # CSME 11+ "CSE LT" layouts (Comet Lake / Tiger Lake+) use a $CPD
+            # manifest structure instead of an FPT-listed FTPR. Partition-level
+            # cleaning is not meaningful there; HAP soft-disable still applies.
+            exp_end = min(me_end, len(data))
+            if b"$CPD" in data[me_start:exp_end]:
+                if soft_disable:
+                    self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major)
+                    report.hap_bit_set = True
+                    report.soft_disable = True
+                    report.messages.append(
+                        "CSME 11+ 'CSE LT' layout detected (engine manifest in $CPD, "
+                        "not listed in FPT): partition cleaning is not applicable. "
+                        "HAP/AltMeDisable bit set instead."
+                    )
+                else:
+                    report.status = MeCleanResult.ERROR
+                    report.messages.append(
+                        "CSE LT layout cannot be partition-cleaned; no action taken"
+                    )
+            else:
+                report.status = MeCleanResult.ERROR
+                if not entries:
+                    report.messages.append("No valid FPT entries found")
+                else:
+                    report.messages.append("No FTPR partition found - cannot safely clean ME")
+                return report
+        else:
+            partitions_removed = 0
+            if remove_modules and me_gen in (MeGeneration.GEN2, MeGeneration.GEN3):
+                partitions_removed = self._remove_non_essential_partitions(
+                    data, fpt_offset, entries, ftpr_entry
+                )
+            report.partitions_removed = partitions_removed
+            report.messages.append(f"Removed {partitions_removed} non-essential partitions")
 
-        partitions_removed = 0
-        if remove_modules and me_gen in (MeGeneration.GEN2, MeGeneration.GEN3):
-            partitions_removed = self._remove_non_essential_partitions(
-                data, fpt_offset, entries, ftpr_entry
-            )
-
-        if soft_disable:
+        if soft_disable and ftpr_entry is not None:
             self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major)
             report.hap_bit_set = True
             report.soft_disable = True
@@ -166,8 +182,7 @@ class IntelMECleaner:
             report.cleaned_size = len(data) - me_start
             report.messages.append(f"ME region truncated from {original_size:#x} to {report.cleaned_size:#x}")
 
-        report.partitions_removed = partitions_removed
-        report.messages.append(f"Removed {partitions_removed} non-essential partitions")
+        report.partitions_removed = report.partitions_removed or 0
         report.messages.append(f"ME version: {me_version} ({me_type})")
 
         if output_path is None:
@@ -424,7 +439,7 @@ class IntelMECleaner:
         flmap1 = self._read_flmap1(data, fd_offset)
         if flmap1 is None:
             return
-        fpsba = ((flmap1 >> 16) & 0xFF) * 0x10
+        fpsba = (flmap1 >> 12) & 0xFF0
         fpsba_abs = fd_offset + fpsba
 
         if me_version >= 11:
