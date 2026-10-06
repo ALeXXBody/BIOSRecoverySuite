@@ -4,6 +4,47 @@
 import sys
 import os
 
+
+def _run_mea_child():
+    """Run ME Analyzer in child mode without initializing Qt."""
+    try:
+        from bios_recovery.third_party.mea import MEA_PATH
+    except Exception as e:
+        print(f"ME Analyzer integration not found: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    new_argv = [MEA_PATH]
+    for a in sys.argv[1:]:
+        if a == "--mea-child":
+            continue
+        new_argv.append(a)
+    sys.argv = new_argv
+
+    try:
+        with open(MEA_PATH, encoding="utf-8", errors="replace") as f:
+            code = compile(f.read(), MEA_PATH, "exec")
+        exec(code, {"__name__": "__main__", "__file__": MEA_PATH})
+    except SystemExit:
+        raise
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
+
+
+def _is_mea_child():
+    return any(a == "--mea-child" for a in sys.argv[1:])
+
+
+if _is_mea_child():
+    _run_mea_child()
+    sys.exit(0)
+
+
+import sys
+import os
+
 def _app_dir():
     """Directory the running exe lives in (the folder Qt loads DLLs from)."""
     if getattr(sys, "frozen", False):

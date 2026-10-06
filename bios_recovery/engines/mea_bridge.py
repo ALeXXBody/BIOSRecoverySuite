@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import platform
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 
@@ -62,16 +63,19 @@ def run_mea_analyzer(input_file: str, output_dir: Optional[str] = None,
         ])
 
     try:
-        proc = subprocess.run(
-            args,
-            cwd=MEA_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            timeout=300,
-            text=True,
-            encoding="utf-8", errors="replace"
-        )
+        kwargs = {
+            "cwd": MEA_ROOT,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "env": env,
+            "timeout": 300,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+        }
+        if platform.system() == "Windows":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        proc = subprocess.run(args, **kwargs)
     except subprocess.TimeoutExpired:
         return MEAResult(success=False, error="ME Analyzer timed out (300s)")
     except Exception as e:
