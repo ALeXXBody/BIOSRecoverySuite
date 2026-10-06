@@ -20,6 +20,11 @@ a = Analysis(
         "PySide6.QtCore",
         "PySide6.QtGui",
         "PySide6.QtWidgets",
+        # MEA.py is exec'd from a data file at runtime (child mode), so its
+        # imports are invisible to PyInstaller's static analysis:
+        "colorama",
+        "crccheck",
+        "pltable",
     ] + collect_submodules("bios_recovery"),
     hookspath=[],
     hooksconfig={},

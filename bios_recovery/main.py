@@ -13,6 +13,21 @@ def _run_mea_child():
         print(f"ME Analyzer integration not found: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # In frozen (windowed) apps stdout is None; MEA prints unconditionally.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
+    # MEA's get_script_dir() checks sys.frozen and uses the exe dir, but the
+    # .dat files are bundled in the package data dir. Clear the flag so MEA
+    # resolves its script dir from __file__ (MEA_PATH) instead.
+    if getattr(sys, "frozen", False):
+        try:
+            del sys.frozen
+        except Exception:
+            pass
+
     new_argv = [MEA_PATH]
     for a in sys.argv[1:]:
         if a == "--mea-child":

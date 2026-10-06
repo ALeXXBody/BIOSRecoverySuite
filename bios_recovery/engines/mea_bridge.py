@@ -45,7 +45,13 @@ def run_mea_analyzer(input_file: str, output_dir: Optional[str] = None,
     os.makedirs(work_dir, exist_ok=True)
 
     python_exe = _find_python()
-    args = [python_exe, MEA_PATH, input_file, "-skip", "-exit", "-json", "-duc", "-out", work_dir]
+    if getattr(sys, "frozen", False):
+        # The exe's own dispatch (--mea-child in main._run_mea_child) loads MEA.py
+        args = [python_exe, "--mea-child", input_file,
+                "-skip", "-exit", "-json", "-duc", "-out", work_dir]
+    else:
+        args = [python_exe, MEA_PATH, input_file,
+                "-skip", "-exit", "-json", "-duc", "-out", work_dir]
     if include_html:
         args.append("-html")
 
