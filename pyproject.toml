@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "BIOSRecoverySuite"
-version = "0.1.9"
+version = "0.2.0"
 description = "Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password removal tool"
 readme = "README.md"
 license = {text = "MIT"}
@@ -28,6 +28,9 @@ classifiers = [
 dependencies = [
     "PySide6>=6.5.0",
     "pyinstaller>=6.0",
+    "colorama>=0.4.6",
+    "crccheck>=1.3.0",
+    "pltable>=1.0.0",
 ]
 
 [project.optional-dependencies]

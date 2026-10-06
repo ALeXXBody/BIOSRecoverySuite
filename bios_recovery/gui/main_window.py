@@ -49,6 +49,7 @@ from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
 from bios_recovery.gui.update_dialog import UpdateDialog, CheckWorker
 from bios_recovery import __version__
+from bios_recovery.engines import mea_bridge
 
 
 class WorkerThread(QThread):
@@ -179,6 +180,7 @@ class MainWindow(QMainWindow):
         tool_menu.addAction("SPI &Flasher", lambda: self.tabs.setCurrentWidget(self.spi_tab))
         tool_menu.addAction("&EC Patching", lambda: self.tabs.setCurrentWidget(self.ec_tab))
         tool_menu.addAction("&Lenovo Unlock", lambda: self.tabs.setCurrentWidget(self.lenovo_tab))
+        tool_menu.addAction("&ME Analyzer", self.run_mea_analysis)
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction("&Check for Updates...", self.check_for_updates)
