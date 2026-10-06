@@ -504,3 +504,120 @@ def test_extract_without_override_explains_how_to_proceed():
         os.unlink(path)
         if os.path.exists(out):
             os.unlink(out)
+
+
+# ---------------------------------------------------------------------------
+# Regression: reported start was thousands of bytes BEFORE the real EC start.
+#
+# Structural cause: the start was never read from the measured boundary; it
+# was recomputed as ``blob_end - snapped_capacity``. Whenever the walk's blob
+# was even one block longer than a chip capacity (a stray programmed byte
+# directly above the region, a marker cluster whose blob overshot), the
+# capacity snapped UP to the next chip size and the recomputed start was
+# pushed BACKWARDS into the BIOS.
+#
+# The fix is structural and layout-independent: a measured boundary is never
+# moved, and a capacity is only reported when start + capacity lands on
+# another OBSERVED boundary. No offset in any of these tests is taken from a
+# particular dump -- they model the *shape* of the layouts.
+# ---------------------------------------------------------------------------
+
+
+def _two_sided_dump(ec_size, total=0x400000, seed=99, tail=0):
+    """Content, then an erased gap, the EC image, an optional stray non-FF
+    `tail` directly above the region, then erased flash to EOF."""
+    import random
+    random.seed(seed)
+    ec_off = 0x180000
+    data = bytearray(random.getrandbits(8) for _ in range(total))
+    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
+    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x0100:0x0109] = b"IT8218VG "
+    ec[0x0200:0x0206] = b"ITE8\x02\x00"
+    ec[0x0900:0x0904] = b"8218"
+    data[ec_off:ec_off + ec_size] = ec
+    after = ec_off + ec_size
+    if tail:
+        data[after:after + tail] = bytes(
+            (i * 13 + 3) & 0xFF for i in range(tail))
+        after += tail
+    data[after:] = b"\xFF" * (total - after)
+    return bytes(data), ec_off
+
+
+@pytest.mark.parametrize("ec_size", [0x20000, 0x40000, 0x80000])
+def test_padding_on_both_sides_pins_region_exactly(ec_size):
+    """With padding below AND above the region, both boundaries are observed:
+    the answer must be the exact start and the exact chip capacity."""
+    data, ec_off = _two_sided_dump(ec_size)
+    offset, size = ECPatcher().find_ec_region(data)
+    assert offset == ec_off, f"start 0x{offset:X} != measured boundary 0x{ec_off:X}"
+    assert size == ec_size, f"size 0x{size:X} != capacity 0x{ec_size:X}"
+
+
+def test_measured_start_is_never_recomputed_from_the_end():
+    """A stray programmed byte directly above the region makes the walk's blob
+    one block longer than the capacity. Recomputing start from blob_end then
+    snapped the capacity up and shifted the start BACKWARDS into the BIOS --
+    the reported failure. Now the measured start is either confirmed by a
+    boundary at start + capacity, or the analyzer refuses; it may never be
+    moved."""
+    data, ec_off = _two_sided_dump(0x40000, tail=0x1000)
+    p = ECPatcher()
+    offset, size = p.find_ec_region(data)
+    # may refuse (no capacity is justified), but must never answer a start
+    # other than the measured boundary, nor a size other than the capacity
+    assert offset in (-1, ec_off), f"start 0x{offset:X} moved off 0x{ec_off:X}"
+    assert size in (-1, 0x40000), f"size 0x{size:X} is not the capacity"
+
+    analysis = p.analyze_ec(data)
+    assert not analysis.found, "an unjustified region must not be reported"
+
+    # and nothing may be written on refusal
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(data)
+        path = f.name
+    out = "/tmp/ec_moved_start.bin"
+    try:
+        result = p.extract_ec(path, out)
+        assert result.status == ECStatus.NOT_FOUND
+        assert not os.path.exists(out)
+    finally:
+        os.unlink(path)
+        if os.path.exists(out):
+            os.unlink(out)
+
+
+def test_region_whose_end_is_unobservable_refuses():
+    """Padding below the region but content running on after it (no boundary
+    within reach): the capacity cannot be justified by content, so auto-detect
+    must refuse rather than guess -- and the end-anchored path must refuse too
+    instead of reporting the search ceiling as an end."""
+    import random
+    random.seed(31337)
+    total = 0x400000
+    # deterministic pattern whose bytes always differ by 7, so it can never
+    # contain any signature by accident (no phantom marker clusters)
+    data = bytearray(((i * 7 + 0x5B) & 0xFF) for i in range(total))
+    ec_size = 0x40000
+    ec_off = 0x180000
+    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    ec = bytearray(((i * 7 + 0x5B) & 0xFF) for i in range(ec_size))
+    ec[0x0100:0x0109] = b"IT8218VG "
+    ec[0x0200:0x0206] = b"ITE8\x02\x00"
+    ec[0x0900:0x0904] = b"8218"
+    data[ec_off:ec_off + ec_size] = ec
+    # NOTE: no padding after the region -- content continues to EOF.
+
+    p = ECPatcher()
+    assert p.find_ec_region(bytes(data)) == (-1, -1)
+    assert not p.analyze_ec(bytes(data)).found
+    # the region end is equally underivable: no observed boundary follows the
+    # cluster, so end-anchored mode must fail with an explanation, not return
+    # whatever offset the search happened to stop at
+    end = p.find_ec_region_end(bytes(data))
+    assert end == -1, f"ceiling offset 0x{end:X} reported as a region end"
+    offset, _size, err = p.resolve_region(bytes(data), None, 0x40000)
+    assert offset == -1 and "end of the EC region" in err

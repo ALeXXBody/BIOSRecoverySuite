@@ -153,8 +153,10 @@ class ECPatcher:
 
         Strategy: score candidate offsets by how many controller-family AND
         behavioral markers cluster around them; prefer the highest-offset
-        cluster; size is derived from content (EOF / FF runs) with a hard
-        512KB cap - EC images never exceed that.
+        cluster; then require the region to be bounded on BOTH sides by
+        observed content facts (0xFF padding / EOF) at a real chip capacity.
+        A boundary that is computed rather than observed is a guess, and a
+        guessed EC region must never be flashed.
         """
         if not data:
             return -1, -1
@@ -199,54 +201,81 @@ class ECPatcher:
         scored.sort(reverse=True)
 
         MAX_EC = 0x80000   # 512KB covers every known EC image
-        MIN_EC = 0x10000   # 64KB floor: nothing smaller is a real EC image
         # Real EC chips are 128/256/512KB, and a manufacturer embeds the EC
-        # firmware as exactly one chip-sized block whose END is unambiguous
-        # (end-of-dump, or the padding that follows it).
+        # firmware as exactly one chip-sized block delimited by erased flash.
         STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
 
         # Search a little beyond MAX_EC so a genuine 512KB blob is
         # distinguishable from one where the walk simply hit the search limit.
         SEARCH = MAX_EC + 0x10000
 
-        best = None          # (distinct, start, size)
-        for distinct, anchor in scored[:32]:
+        # Probe every strong cluster once for the two facts content can give
+        # us: a measured START (backward walk stopped on real padding) and a
+        # measured END (forward walk stopped on padding or EOF).
+        probes = []
+        for _distinct, anchor in scored[:32]:
             blob_start, blob_end = self._blob_bounds(data, anchor, SEARCH)
             if blob_end <= anchor:
                 blob_end = anchor + 1
-            blob_len = blob_end - blob_start
+            probes.append((
+                anchor,
+                blob_start,
+                blob_end,
+                blob_start > 0 and self._bounded_below(data, blob_start),
+                self._bounded_above(data, blob_end),
+            ))
 
-            # Trustworthy only when the backward walk terminated on REAL
-            # padding, which bounds the region start exactly. A blob that
-            # reaches the search limit instead merely ran out of room, so its
-            # start is unknown and must not be reported as an image boundary.
-            delimits_start = blob_start > 0 and blob_len < SEARCH
-            if delimits_start and MIN_EC <= blob_len <= MAX_EC:
-                # Snap DOWN: the blob is an upper bound on the image, since
-                # firmware is routinely FF-padded inside the image itself.
-                span = next(
-                    (p for p in STD_EC_SIZES if p >= blob_len),
-                    None,
-                )
-                if span is None:
-                    span = STD_EC_SIZES[-1]
-                if blob_end - span >= 0 and (
-                    best is None or distinct > best[0]
-                ):
-                    best = (distinct, blob_end - span, span)
-                    break
+        # Pass 1: clusters whose region is bounded on BOTH sides by observed
+        # facts. A measured boundary is NEVER moved: the answer's start is the
+        # observed boundary, and the capacity is accepted only when it lands
+        # on the observed end without crossing it. The previous code instead
+        # recomputed start = blob_end - snapped_size, and an over-long blob
+        # snapped up to the next chip capacity, shifting the reported start
+        # backwards into the BIOS -- a start thousands of bytes early.
+        for anchor, blob_start, blob_end, start_known, end_known in probes:
+            if not (start_known and end_known):
+                continue   # an unobserved side means no size is justified
+            fits = [
+                p for p in STD_EC_SIZES
+                if blob_start + p <= blob_end
+                and self._bounded_above(data, blob_start + p)
+            ]
+            if fits:
+                fits.sort(key=lambda p: abs(blob_start + p - blob_end))
+                return blob_start, fits[0]
+            # Start observed but no capacity lands on the observed end. Do NOT
+            # fall through to the end-anchored rule: that would replace the
+            # measured start with a computed one.
 
-        if best is None:
-            # No padding boundary anywhere near the cluster, so the region START
-            # cannot be derived from content. Marker positions are useless for
-            # the size: a real EC image carries its identifying strings wherever
-            # the vendor put them, and deriving the size from a marker hit
-            # reports a 256KB chip as 128KB whenever the markers land in the
-            # second half. Flashing the wrong bytes to the EC bricks the
-            # machine, so refuse and let the user state the chip capacity.
-            return -1, -1
+        # Pass 2: no measured start anywhere, but an observed end. The capacity
+        # must place the start on observed padding, cover the marker cluster
+        # that put us here, and keep the whole interior inside the content the
+        # backward walk proved pad-free (otherwise the region would stretch
+        # across padding it never examined). Runs strictly after pass 1 so a
+        # computed start can never shadow a measured one.
+        for anchor, blob_start, blob_end, start_known, end_known in probes:
+            if start_known or not end_known:
+                continue
+            fits = [
+                p for p in STD_EC_SIZES
+                # strictly greater than 0: the start must sit on OBSERVED
+                # padding -- the start of the file is not a padding run and
+                # must not silently anchor a computed region
+                if 0 < blob_end - p <= anchor
+                and blob_end - p >= blob_start
+                and self._bounded_below(data, blob_end - p)
+            ]
+            if fits:
+                # Smallest first: a larger capacity would stretch the region
+                # across the padding that bounds the smaller one.
+                return blob_end - min(fits), min(fits)
 
-        return best[1], best[2]
+        # No candidate cluster produced a pair of observed boundaries, so the
+        # region cannot be delimited from content alone. Marker positions are
+        # useless for the size (they report a 256KB chip as 128KB whenever the
+        # markers land in the second half), and a wrong region flashed to the
+        # EC bricks the machine. Refuse and let the user state the capacity.
+        return -1, -1
 
     def find_ec_region_end(self, data: bytes) -> int:
         """Return the END offset of the EC region, or -1 if unknown.
@@ -275,18 +304,26 @@ class ECPatcher:
             return -1
 
         radius = 0x20000
-        best = None
+        scored = []
         for off in candidates:
             lo, hi = max(0, off - radius), min(len(data), off + radius)
             distinct = sum(1 for m in all_markers if m in data[lo:hi])
-            score = (distinct, off)
-            if best is None or score > best:
-                best = score
-        anchor = best[1]
-        _blob_start, blob_end = self._blob_bounds(data, anchor, 0x80000)
-        if blob_end <= anchor:
-            blob_end = anchor + 1
-        return blob_end
+            scored.append((distinct, off))
+        scored.sort(reverse=True)
+
+        # Try the strongest clusters first and accept the first end that is an
+        # OBSERVED boundary (padding or EOF). An end that merely coincides with
+        # the search ceiling is not derivable from content, and end-anchored
+        # extraction would slice the wrong bytes from a known-wrong position.
+        for _distinct, anchor in scored[:32]:
+            # Headroom beyond MAX_EC: a genuine 512KB region whose anchor sits
+            # near its start must not look like "the search limit was reached".
+            _blob_start, blob_end = self._blob_bounds(data, anchor, 0x90000)
+            if blob_end <= anchor:
+                blob_end = anchor + 1
+            if self._bounded_above(data, blob_end):
+                return blob_end
+        return -1
 
     @staticmethod
     def _is_pad_block(block: bytes) -> bool:
@@ -301,6 +338,42 @@ class ECPatcher:
         if not block:
             return True
         return block.count(0xFF) == len(block)
+
+    @classmethod
+    def _bounded_below(cls, data: bytes, off: int) -> bool:
+        """True when ``off`` sits directly on observed padding (or file start).
+
+        Two full 4KB 0xFF blocks must lie immediately below ``off`` -- the same
+        PAD_RUN rule the blob walk uses -- so a lone interior FF run cannot be
+        mistaken for a region boundary.
+        """
+        if off == 0:
+            return True          # the start of the file bounds the region itself
+        if off < 0x2000:
+            return False         # cannot observe the required 8KB of padding
+        return (cls._is_pad_block(data[off - 0x2000:off - 0x1000])
+                and cls._is_pad_block(data[off - 0x1000:off]))
+
+    @classmethod
+    def _bounded_above(cls, data: bytes, off: int) -> bool:
+        """True when ``off`` is EOF or is followed by real padding (PAD_RUN).
+
+        This is what makes a candidate chip capacity *justified*: the region's
+        proposed end must be an observed boundary, never a computed one.
+        """
+        total = len(data)
+        if off >= total:
+            return off == total   # only exact EOF counts; past EOF is nonsense
+        if off < 0:
+            return False
+        run, p = 0, off
+        while run < 2 and p < total:
+            if not cls._is_pad_block(data[p:p + 0x1000]):
+                return False
+            run += 1
+            p += 0x1000
+        # padding may run out at EOF: one block then end-of-file still delimits
+        return run >= 2 or p >= total
 
     @classmethod
     def _blob_bounds(cls, data: bytes, anchor: int, max_span: int) -> tuple[int, int]:
