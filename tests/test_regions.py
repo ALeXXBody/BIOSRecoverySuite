@@ -44,7 +44,7 @@ def test_me_version_detected(intel_ifd):
     analyzer = BiosAnalyzer()
     result = analyzer.analyze(intel_ifd)
 
-    assert result.me_version == "12.8"
+    assert result.me_version.startswith("12.8")
     assert result.me_type.startswith("CSME")
 
 

@@ -164,10 +164,17 @@ def build_intel_ifd_image(size: int = 0x1000000) -> bytes:
     chk = (0x100 - sum(data[fpt:fpt + 0x20]) & 0xFF) & 0xFF
     data[fpt + 0x1B] = chk
 
-    # ME version marker "$MN2" major=12 minor=8
-    marker = me + 0x5000
-    data[marker:marker + 4] = b"$MN2"
-    data[marker + 4:marker + 8] = b"\x0c\x00\x08\x00"
+    # FTPR partition manifest (real layout): $CPD at FTPR start, CPD entry
+    # "FTPR.man" at +0x10 (name[12] + u32 offset at +0x0C) pointing at $MN2.
+    cpd = me + 0x4000
+    data[cpd:cpd + 4] = b"$CPD"
+    struct.pack_into("<I", data, cpd + 0x04, 1)
+    data[cpd + 0x10:cpd + 0x1C] = b"FTPR.man\x00\x00\x00\x00"
+    struct.pack_into("<I", data, cpd + 0x1C, 0x30)  # MN2 offset relative to $CPD
+    mn2 = cpd + 0x30
+    data[mn2:mn2 + 4] = b"$MN2"
+    # Manifest base = tag - 0x1C; version u16 x4 at base+0x24
+    struct.pack_into("<HHHH", data, mn2 - 0x1C + 0x24, 12, 8, 0, 1852)
 
     # GbE region
     struct.pack_into("<I", data, gbe + 0x01, 0x10FBAA55)

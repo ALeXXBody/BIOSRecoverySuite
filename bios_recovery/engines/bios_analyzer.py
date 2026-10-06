@@ -278,17 +278,11 @@ class BiosAnalyzer:
         return ""
 
     def _decode_me_version(self, data: bytes, me_region: RegionInfo) -> str:
-        search_end = min(me_region.offset + me_region.size, len(data), me_region.offset + 0x10000)
-        for pattern in [b"$MN2", b"$FPT"]:
-            idx = data.find(pattern, me_region.offset, search_end)
-            if idx >= 0 and idx + 0x14 <= len(data):
-                try:
-                    major, minor = struct.unpack_from("<HH", data, idx + 0x04)
-                    if 0 < major < 100 and 0 <= minor < 100:
-                        return f"{major}.{minor}"
-                except struct.error:
-                    pass
-        return ""
+        from bios_recovery.utils.me_manifest import detect_me_version_best
+
+        search_end = min(me_region.offset + me_region.size, len(data))
+        region = data[me_region.offset:search_end]
+        return detect_me_version_best(region)
 
     def _get_me_type(self, data: bytes, regions: list[RegionInfo]) -> str:
         version = self._get_me_version(data, regions)

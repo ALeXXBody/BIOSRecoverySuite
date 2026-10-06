@@ -698,7 +698,11 @@ class MainWindow(QMainWindow):
             return
         info = self.me_cleaner.get_me_info(self.current_file)
         if not info.get("found"):
-            self.me_text.setPlainText("No Intel ME region found in this image.")
+            reason = info.get("reason")
+            if reason:
+                self.me_text.setPlainText(reason)
+            else:
+                self.me_text.setPlainText("No Intel ME region found in this image.")
             return
         lines = [
             f"ME Version: {info.get('version', 'Unknown')}",

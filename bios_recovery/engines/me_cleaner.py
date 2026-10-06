@@ -180,62 +180,183 @@ class IntelMECleaner:
         return report
 
     def _find_me_region(self, data: bytes) -> tuple[int, int, MeGeneration]:
-        if data[:4] == b"$FPT" or data[0x10:0x14] == b"$FPT":
-            me_start = 0x10 if data[0x10:0x14] == b"$FPT" else 0
-            return me_start, len(data), MeGeneration.UNKNOWN
+        N = len(data)
+        # (a) Standalone ME/TXE region image: $FPT at 0x00 or 0x10
+        if data[0x10:0x14] == b"$FPT":
+            me_start = 0x10
+            gen = self._detect_generation(data, me_start, N)  # whole file is the region
+            return me_start, N, gen
+        if data[:4] == b"$FPT":
+            gen = self._detect_generation(data, 0, N)
+            return 0, N, gen
 
-        if data[:4] != b"\x5a\xa5\xf0\x0f" and data[0x10:0x14] != b"\x5a\xa5\xf0\x0f":
-            return -1, -1, MeGeneration.UNKNOWN
+        # (b) Standalone ME/TXE update image ($MN2/$MAN near the start)
+        update_tags = (b"$MN2", b"$MAN")
+        head = data[:0x40]
+        if any(t in head for t in update_tags):
+            return 0, N, MeGeneration.UNKNOWN
 
-        fd_offset = 0 if data[:4] == b"\x5a\xa5\xf0\x0f" else 0x10
-        flmap0 = struct.unpack_from("<I", data, fd_offset + 0x10)[0]
-        frba = ((flmap0 >> 16) & 0xFF) << 4
-        frba_abs = fd_offset + frba
+        # (c) Full flash image with descriptor: read ME FLREG properly
+        fd = self._find_fd_in_data(data)
+        if fd >= 0:
+            result = self._me_region_from_flreg(data, fd)
+            if result is not None:
+                return result
+            result = self._me_region_from_legacy_flmap(data, fd)
+            if result is not None:
+                return result
 
-        if frba_abs + 0x30 > len(data):
-            return -1, -1, MeGeneration.UNKNOWN
+        # (d) Descriptor present but FLREG unusable: fall back to the FPT scan
+        fpt = self._scan_fpt_first(data)
+        if fpt >= 0:
+            me_start = max(0, fpt - 0x10)
+            me_end = self._fpt_region_end(data, fpt)
+            if me_end > me_start:
+                gen = self._detect_generation(data, me_start, me_end)
+                return me_start, me_end, gen
 
+        # (e) No descriptor at all, but a valid FPT somewhere (raw ME region dump)
+        return -1, -1, MeGeneration.UNKNOWN
+
+    def _me_region_from_flreg(self, data: bytes, fd: int) -> Optional[tuple[int, int, MeGeneration]]:
+        """Modern 0x5AA5F00F descriptor: FLREG table at fd+0x30, ME FLREG at fd+0x38.
+
+        Layout per Intel PCH spec / MEAnalyzer: FLREG base = region start in 4KB pages
+        relative to the descriptor magic; limit = (region_end_page - 1) in the same units.
+        """
+        N = len(data)
+        if fd + 0x3C > N:
+            return None
+        me_flreg = struct.unpack_from("<I", data, fd + 0x38)[0]
+        base = me_flreg & 0x7FFF
+        limit = (me_flreg >> 16) & 0x7FFF
+        if limit == 0 or base > limit:
+            return None
+        me_start = fd + base * 0x1000
+        me_end = min(fd + (limit + 1) * 0x1000, N)
+        if me_start >= me_end:
+            return None
+        if not self._has_region_content(data, me_start, me_end):
+            return None
+        gen = self._detect_generation(data, me_start, me_end)
+        return me_start, me_end, gen
+
+    def _me_region_from_legacy_flmap(
+        self, data: bytes, fd: int
+    ) -> Optional[tuple[int, int, MeGeneration]]:
+        """Legacy/alternate descriptor layout (FLMAP0 at fd+0x10, ME FLREG at frba+0x10)."""
+        N = len(data)
+        if fd + 0x14 > N:
+            return None
+        flmap0 = struct.unpack_from("<I", data, fd + 0x10)[0]
+        if flmap0 in (0, 0xFFFFFFFF):
+            return None
+        frba_abs = fd + ((flmap0 >> 16) & 0xFF) * 0x10
+        if frba_abs + 0x14 > N:
+            return None
         me_flreg = struct.unpack_from("<I", data, frba_abs + 0x10)[0]
-        me_base = (me_flreg & 0x7FFF) << 12
-        me_limit = ((me_flreg >> 16) & 0x7FFF) << 12 | 0xFFF
+        base = me_flreg & 0x7FFF
+        limit = (me_flreg >> 16) & 0x7FFF
+        if limit == 0 or base > limit:
+            return None
+        me_start = fd + base * 0x1000
+        me_end = min(fd + (limit + 1) * 0x1000, N)
+        if me_start >= me_end:
+            return None
+        if not self._has_region_content(data, me_start, me_end):
+            return None
+        gen = self._detect_generation(data, me_start, me_end)
+        return me_start, me_end, gen
 
-        if me_base >= me_limit or me_limit > len(data):
-            return -1, -1, MeGeneration.UNKNOWN
-
-        gen = self._detect_generation(data, me_base, me_limit)
-        return me_base, me_limit + 1, gen
-
-    def _detect_generation(self, data: bytes, me_start: int, me_end: int) -> MeGeneration:
-        fpt_off = self._find_fpt(data, me_start, me_end)
-        if fpt_off < 0:
-            return MeGeneration.UNKNOWN
-
-        try:
-            entries = struct.unpack_from("<I", data, fpt_off + 0x04)[0]
-        except struct.error:
-            return MeGeneration.UNKNOWN
-
-        if entries <= 0 or entries > 16:
-            return MeGeneration.UNKNOWN
-
-        for i in range(min(entries, 16)):
-            entry_off = fpt_off + 0x20 + i * 0x20
-            if entry_off + 0x20 > len(data):
-                break
-            entry_name = data[entry_off:entry_off + 4]
-            if entry_name == b"FTPR":
-                return MeGeneration.GEN3
-            if entry_name == b"CODE":
-                return MeGeneration.GEN2
-            if entry_name == b"BRIN":
-                return MeGeneration.GEN1
-        return MeGeneration.GEN2
+    @staticmethod
+    def _has_region_content(data: bytes, start: int, end: int) -> bool:
+        """Reject decoded regions that are entirely padding (0xFF)."""
+        probe_end = min(end, start + 0x1000)
+        return any(b != 0xFF for b in data[start:probe_end])
 
     def _find_fpt(self, data: bytes, start: int, end: int) -> int:
-        for offset in range(start, min(end, start + 0x100), 0x10):
-            if data[offset:offset + 4] == self.FPT_SIGNATURE:
-                return offset
+        """Scan the [start, end) region for the first structurally valid $FPT."""
+        N = min(end, len(data))
+        pos = max(start, 0)
+        if pos + 0x24 > N:
+            return -1
+        while pos + 0x24 <= N:
+            if data[pos:pos + 4] == self.FPT_SIGNATURE:
+                count = struct.unpack_from("<I", data, pos + 0x04)[0]
+                if 1 <= count <= 64 and pos + 0x20 + count * 0x20 <= N:
+                    return pos
+                pos += 4
+            else:
+                nxt = data.find(self.FPT_SIGNATURE, pos + 4, N)
+                pos = nxt if nxt >= 0 else N
         return -1
+
+    def _scan_fpt_first(self, data: bytes) -> int:
+        """Locate the first structurally valid $FPT header anywhere in the image."""
+        N = len(data)
+        pos = 0
+        while pos + 0x24 <= N:
+            if data[pos:pos + 4] == self.FPT_SIGNATURE:
+                count = struct.unpack_from("<I", data, pos + 0x04)[0]
+                if 1 <= count <= 64 and pos + 0x20 + count * 0x20 <= N:
+                    return pos
+                pos += 4
+            else:
+                nxt = data.find(self.FPT_SIGNATURE, pos + 4)
+                pos = nxt if nxt >= 0 else N
+        return -1
+
+    def _fpt_region_end(self, data: bytes, fpt_off: int) -> int:
+        """Best-effort end of the region that owns the FPT at fpt_off."""
+        entries = struct.unpack_from("<I", data, fpt_off + 0x04)[0]
+        end = fpt_off + 0x20 + entries * 0x20
+        for i in range(min(entries, 64)):
+            off = fpt_off + 0x20 + i * 0x20
+            name, offset, size = data[off:off + 4], *struct.unpack_from("<II", data, off + 0x08)
+            if name == b"FTPR" and size != 0xFFFFFFFF:
+                rel_end = fpt_off - 0x10 + offset + size
+                end = max(end, min(rel_end, len(data)))
+        return end
+
+    def _detect_generation(self, data: bytes, me_start: int, me_end: int) -> MeGeneration:
+        exp_end = min(me_end, me_start + 0x100000)
+        region = data[me_start:exp_end]
+        # Modern CSME 11+ (CSE LT) puts a $CPD code-partition directory in the region:
+        # gen1 uses $MAN manifests / BRIN partitions, gen2 (ME 6..9.x) uses $MN2 only.
+        if b"$CPD" in region:
+            return MeGeneration.GEN3
+        fpt_off = self._find_fpt(data, me_start, me_end)
+        if fpt_off >= 0:
+            try:
+                entries = struct.unpack_from("<I", data, fpt_off + 0x04)[0]
+            except struct.error:
+                return MeGeneration.UNKNOWN
+
+            if entries <= 0 or entries > 64:
+                return MeGeneration.UNKNOWN
+
+            count = min(entries, 32)
+            for i in range(count):
+                entry_off = fpt_off + 0x20 + i * 0x20
+                if entry_off + 0x20 > len(data):
+                    break
+                entry_name = data[entry_off:entry_off + 4]
+                entry_off_v, _ = struct.unpack_from("<II", data, entry_off + 0x08)
+                if entry_name in (b"CODE", b"NFTP", b"BRIN"):
+                    return MeGeneration.GEN2 if entry_name != b"BRIN" else MeGeneration.GEN1
+                if entry_name == b"FTPR":
+                    abs_off = me_start + entry_off_v
+                    if abs_off + 4 <= len(data):
+                        tag = data[abs_off:abs_off + 4]
+                        if tag == b"$CPD":
+                            return MeGeneration.GEN3
+                        if tag == b"$MN2":
+                            return MeGeneration.GEN2
+                        if tag == b"$MAN":
+                            return MeGeneration.GEN1
+        if b"$MN2" in region or b"$MAN" in region:
+            return MeGeneration.GEN2
+        return MeGeneration.UNKNOWN
 
     def _parse_fpt_entries(
         self, data: bytes, fpt_offset: int, me_start: int, me_end: int
@@ -288,12 +409,23 @@ class IntelMECleaner:
         if fd_offset < 0:
             return
 
-        try:
-            flmap1 = struct.unpack_from("<I", data, fd_offset + 0x14)[0]
-            fpsba = ((flmap1 >> 16) & 0xFF) << 4
-            fpsba_abs = fd_offset + fpsba
-        except struct.error:
+    def _set_hap_bit(
+        self,
+        data: bytearray,
+        me_start: int,
+        me_end: int,
+        gen: MeGeneration,
+        me_version: int,
+    ) -> None:
+        fd_offset = self._find_fd_in_data(data)
+        if fd_offset < 0:
             return
+
+        flmap1 = self._read_flmap1(data, fd_offset)
+        if flmap1 is None:
+            return
+        fpsba = ((flmap1 >> 16) & 0xFF) * 0x10
+        fpsba_abs = fd_offset + fpsba
 
         if me_version >= 11:
             if fpsba_abs + 0x100 <= len(data):
@@ -312,6 +444,19 @@ class IntelMECleaner:
                 except struct.error:
                     pass
 
+    def _read_flmap1(self, data: bytes, fd_offset: int) -> Optional[int]:
+        """FLMAP1 is at fd+0x08 on real images (magic at 0x00 or 0x10).
+
+        Older synthetic layouts stored it at fd+0x14; accept that as fallback.
+        """
+        n = len(data)
+        for off in (0x08, 0x14):
+            if fd_offset + off + 4 <= n:
+                v = struct.unpack_from("<I", data, fd_offset + off)[0]
+                if v not in (0, 0xFFFFFFFF):
+                    return v
+        return None
+
     def _find_fd_in_data(self, data: bytes) -> int:
         if data[:4] == b"\x5a\xa5\xf0\x0f":
             return 0
@@ -324,12 +469,11 @@ class IntelMECleaner:
         if fd_offset < 0:
             return
 
-        try:
-            flmap1 = struct.unpack_from("<I", data, fd_offset + 0x14)[0]
-            fmba = (flmap1 & 0xFF) << 4
-            fmba_abs = fd_offset + fmba
-        except struct.error:
+        flmap1 = self._read_flmap1(data, fd_offset)
+        if flmap1 is None:
             return
+        fmba = (flmap1 & 0xFF) * 0x10
+        fmba_abs = fd_offset + fmba
 
         if fmba_abs + 0x0C <= len(data):
             if gen == MeGeneration.GEN3:
@@ -364,16 +508,27 @@ class IntelMECleaner:
         return non_ff_count < 0x100
 
     def _get_me_version(self, data: bytes, me_start: int, me_end: int) -> str:
-        search_end = min(me_end, me_start + 0x10000)
-        for pattern in [b"$MN2", b"$FPT"]:
-            idx = data.find(pattern, me_start, search_end)
-            if idx >= 0 and idx + 0x14 <= len(data):
-                try:
-                    major, minor = struct.unpack_from("<HH", data, idx + 0x04)
-                    if 0 < major < 100 and 0 <= minor < 100:
-                        return f"{major}.{minor}"
-                except struct.error:
-                    pass
+        """Read the ME version from a `$MN2`/`$MAN` partition manifest.
+
+        Manifest layout (gen1-3): tag at manifest+0x1C, version fields (u16 major,
+        minor, hotfix, build) at manifest+0x24 — i.e. tag+0x08.
+        """
+        n = len(data)
+        exp_end = min(me_end, me_start + 0x1000000)
+        for tag in (b"$MN2", b"$MAN"):
+            pos = me_start
+            while pos < exp_end:
+                idx = data.find(tag, pos, exp_end)
+                if idx < 0:
+                    break
+                base = idx - 0x1C
+                if base >= 0 and base + 0x2C <= n:
+                    major, minor, hotfix, build = struct.unpack_from(
+                        "<HHHH", data, base + 0x24
+                    )
+                    if 0 < major < 100 and minor < 200 and build < 100000:
+                        return f"{major}.{minor}.{hotfix}.{build}"
+                pos = idx + 4
         return ""
 
     def _get_me_type(self, version: str) -> str:
@@ -398,7 +553,15 @@ class IntelMECleaner:
 
         me_start, me_end, gen = self._find_me_region(data)
         if me_start < 0:
-            return {"found": False}
+            info = {"found": False}
+            if self._looks_encrypted(data):
+                info["reason"] = (
+                    "This image appears to be fully encrypted (high-entropy data, "
+                    "no firmware structure at all). This is typical of encrypted "
+                    "vendor payloads such as Dell/HP update packages. ME analysis "
+                    "is not possible on it; use a raw SPI flash dump instead."
+                )
+            return info
 
         version = self._get_me_version(data, me_start, me_end)
         fpt_off = self._find_fpt(data, me_start, me_end)
@@ -416,3 +579,31 @@ class IntelMECleaner:
                 for n, o, s in entries
             ],
         }
+
+    @staticmethod
+    def _looks_encrypted(data: bytes, min_size: int = 0x40000) -> bool:
+        """Heuristic: detect images that are almost entirely high-entropy cipher text.
+
+        Real SPI dumps always contain plaintext structure somewhere (descriptor
+        magic, FV headers, plaintext strings). Encrypted vendor payloads (e.g.
+        Dell/HP BIOS update payloads) are uniformly random-looking.
+        """
+        if len(data) < min_size:
+            return False
+        import math
+        from collections import Counter
+
+        def entropy(block: bytes) -> float:
+            c = Counter(block)
+            n = len(block)
+            return -sum((v / n) * math.log2(v / n) for v in c.values())
+
+        samples = [
+            data[o:o + 0x10000]
+            for o in range(0, min(len(data), 0x2000000), max(1, len(data) // 8))
+        ][:8]
+        samples = [s for s in samples if s]
+        if not samples:
+            return False
+        high = sum(1 for s in samples if entropy(s) > 7.9)
+        return high == len(samples)

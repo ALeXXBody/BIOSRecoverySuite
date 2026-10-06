@@ -9,7 +9,7 @@ from bios_recovery.engines.bios_repair import BiosRepairEngine
 def test_me_info(intel_ifd):
     info = IntelMECleaner().get_me_info(intel_ifd)
     assert info["found"] is True
-    assert info["version"] == "12.8"
+    assert info["version"].startswith("12.8")
     assert info["generation"] == "GEN3"
     assert info["offset"] == "0x1000"
     assert info["partitions"], "FPT partitions should be listed"

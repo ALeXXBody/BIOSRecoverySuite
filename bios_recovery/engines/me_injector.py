@@ -15,26 +15,7 @@ This engine:
 import struct
 
 from bios_recovery.engines.bios_analyzer import BiosAnalyzer
-
-
-def detect_me_version_in_blob(blob: bytes) -> str:
-    """Best-effort CSME/TXE version detection inside a raw region image."""
-    idx = 0
-    best = ""
-    while True:
-        idx = blob.find(b"$MN2", idx)
-        if idx < 0:
-            break
-        if idx + 8 <= len(blob):
-            major = struct.unpack_from("<H", blob, idx + 4)[0]
-            minor = struct.unpack_from("<H", blob, idx + 6)[0]
-            if 0 < major < 100:
-                cand = f"{major}.{minor}"
-                if not best or tuple(int(x) for x in cand.split(".")) > \
-                        tuple(int(x) for x in best.split(".")):
-                    best = cand
-        idx += 4
-    return best
+from bios_recovery.utils.me_manifest import detect_me_version_best as detect_me_version_in_blob
 
 
 class MEInjector:

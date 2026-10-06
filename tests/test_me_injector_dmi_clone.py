@@ -18,14 +18,16 @@ def _make_clean_me(size: int = 0x3FF000, version=(9, 5)) -> bytes:
     fpt = 0x10
     blob[fpt:fpt + 4] = b"$FPT"
     struct.pack_into("<I", blob, fpt + 4, 2)
-    marker = 0x5000
+    # Real manifest layout: tag at base+0x1C, version u16x4 at base+0x24
+    marker = 0x501C
     blob[marker:marker + 4] = b"$MN2"
-    struct.pack_into("<HH", blob, marker + 4, *version)
+    ver = version + (0,) * (4 - len(version))
+    struct.pack_into("<HHHH", blob, marker + 8, *ver)  # base+0x24 = tag+8
     return bytes(blob)
 
 
 def test_detect_version_in_blob():
-    assert detect_me_version_in_blob(_make_clean_me(version=(9, 1))) == "9.1"
+    assert detect_me_version_in_blob(_make_clean_me(version=(9, 1))).startswith("9.1")
     assert detect_me_version_in_blob(b"\x00" * 0x1000) == ""
 
 
@@ -37,7 +39,7 @@ def test_me_inject_roundtrip(tmp_path):
     analysis = inj.analyze(str(src))
     assert analysis["found"]
     assert analysis["offset"] == 0x1000
-    assert analysis["version"] == "12.8"   # from the fixture's CSME 12.8
+    assert analysis["version"].startswith("12.8")   # from the fixture's CSME 12.8
 
     clean = tmp_path / "clean_me.bin"
     clean.write_bytes(_make_clean_me(version=(9, 5)))
@@ -45,7 +47,7 @@ def test_me_inject_roundtrip(tmp_path):
     out = str(tmp_path / "mefixed.bin")
     report = inj.inject(str(src), str(clean), out)
     assert report["success"], report["message"]
-    assert report["new_version"] == "9.5"
+    assert report["new_version"].startswith("9.5")
     assert "9.5" in report["message"] and "12.8" in report["message"]
 
     fixed = _read(out)
@@ -54,7 +56,7 @@ def test_me_inject_roundtrip(tmp_path):
     # region now carries the new firmware, FF-padded to the region size
     from bios_recovery.engines.me_injector import detect_me_version_in_blob as dv
     region = fixed[0x1000:0x1000 + 0x3FF000]
-    assert dv(region) == "9.5"
+    assert dv(region).startswith("9.5")
     assert region[-1] == _read(str(clean))[-1]  # equal-size blob, no padding
     # BIOS region untouched
     assert fixed[0x401000:0x401010] == build_intel_ifd_image()[0x401000:0x401010]
