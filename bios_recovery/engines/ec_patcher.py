@@ -142,6 +142,38 @@ class ECPatcher:
         here = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(os.path.dirname(here), "patches", "ec_patches.json")
 
+    def _scored_anchors(self, data: bytes) -> list[tuple[int, int]]:
+        """Score every controller/KBC signature hit by marker density nearby.
+
+        Returns (distinct_markers, offset) pairs, densest first; on a tie the
+        HIGHEST offset wins because 2-chip designs put the EC in the top of
+        the dump. A real EC image shows several distinct family/behavioral
+        markers inside a 128KB window; noise shows one lonely short hit.
+        """
+        candidates = []
+        for sig_group in self.CONTROLLER_SIGNATURES.values():
+            for sig in sig_group:
+                idx = 0
+                while True:
+                    idx = data.find(sig, idx)
+                    if idx < 0:
+                        break
+                    candidates.append(idx)
+                    idx += 1
+        if not candidates:
+            return []
+
+        families = list(self.CONTROLLER_SIGNATURES.values())
+        all_markers = [s for fam in families for s in fam] + self.KBC_MARKERS
+        radius = 0x20000
+        scored = []
+        for off in candidates:
+            lo, hi = max(0, off - radius), min(len(data), off + radius)
+            distinct = sum(1 for m in all_markers if m in data[lo:hi])
+            scored.append((distinct, off))
+        scored.sort(reverse=True)
+        return scored
+
     def find_ec_region(self, data: bytes) -> tuple[int, int]:
         """Return (offset, size) of the EC firmware within a dump.
 
@@ -152,11 +184,11 @@ class ECPatcher:
             noise and are rejected.
 
         Strategy: score candidate offsets by how many controller-family AND
-        behavioral markers cluster around them; prefer the highest-offset
-        cluster; then require the region to be bounded on BOTH sides by
-        observed content facts (0xFF padding / EOF) at a real chip capacity.
-        A boundary that is computed rather than observed is a guess, and a
-        guessed EC region must never be flashed.
+        behavioral markers cluster around them; then require the region to be
+        bounded by observed content facts (0xFF padding / EOF) at a real chip
+        capacity, with every check derived from structure alone. A boundary
+        that is computed rather than observed is a guess, and a guessed EC
+        region must never be flashed.
         """
         if not data:
             return -1, -1
@@ -174,31 +206,9 @@ class ECPatcher:
             return 0, len(data)
 
         # ---- find candidate signature offsets ----------------------------
-        candidates = []
-        for sig_group in self.CONTROLLER_SIGNATURES.values():
-            for sig in sig_group:
-                idx = 0
-                while True:
-                    idx = data.find(sig, idx)
-                    if idx < 0:
-                        break
-                    candidates.append((idx, sig_group))
-                    idx += 1
-        if not candidates:
+        scored = self._scored_anchors(data)
+        if not scored:
             return -1, -1
-
-        # ---- score each candidate by marker density in its neighbourhood --
-        # a real EC image shows multiple distinct family/behavioral markers
-        # within a 128KB window; noise shows one lonely short hit
-        SCORE_RADIUS = 0x20000
-        scored = []
-        for off, _fam in candidates:
-            lo, hi = max(0, off - SCORE_RADIUS), min(len(data), off + SCORE_RADIUS)
-            distinct = sum(1 for m in all_markers if m in data[lo:hi])
-            # density first; on a tie prefer the HIGHEST offset because 2-chip
-            # designs put the EC in the top of the dump.
-            scored.append((distinct, off))
-        scored.sort(reverse=True)
 
         MAX_EC = 0x80000   # 512KB covers every known EC image
         # Real EC chips are 128/256/512KB, and a manufacturer embeds the EC
@@ -209,107 +219,76 @@ class ECPatcher:
         # distinguishable from one where the walk simply hit the search limit.
         SEARCH = MAX_EC + 0x10000
 
-        # Probe every strong cluster once for the two facts content can give
-        # us: a measured START (backward walk stopped on real padding) and a
-        # measured END (forward walk stopped on padding or EOF).
-        probes = []
+        # Probe every strong cluster and accept a region only when the
+        # content facts single out exactly ONE (start, size) pair:
+        #   (W) the backward walk measured a real boundary below the cluster
+        #       (two full 0xFF blocks -- the cluster sits on padding) and the
+        #       forward walk observed the end (padding or EOF, not the
+        #       search ceiling);
+        #   (E) the end is one of the region's real ends: the last
+        #       programmed byte, the block-aligned padding boundary, or the
+        #       end of that padding -- an image 0xFF-padded out to its chip
+        #       capacity ends where the next region's content resumes;
+        #   (I) start = end - capacity never falls below the measured start,
+        #       so the answer can never stretch across padding the backward
+        #       walk already proved is outside the region;
+        #   (B) the marker cluster sits inside [start, end);
+        #   (C) a real 0xFF run terminates within the same flash block below
+        #       start, so the computed start lands on an observed boundary
+        #       (a few programmed bytes may sit between padding and the
+        #       region -- flash layouts are not always block-aligned).
+        # Capacity arithmetic alone is never a justification: if the facts
+        # do not single out one pair, refuse rather than guess.
         for _distinct, anchor in scored[:32]:
             blob_start, blob_end = self._blob_bounds(data, anchor, SEARCH)
             if blob_end <= anchor:
                 blob_end = anchor + 1
-            probes.append((
-                anchor,
-                blob_start,
-                blob_end,
-                blob_start > 0 and self._bounded_below(data, blob_start),
-                self._bounded_above(data, blob_end),
-            ))
+            ends = self._observed_ends(data, blob_end)
+            if not ends:
+                continue   # walk hit the search ceiling: end not observable
+            if not (blob_start > 0 and self._bounded_below(data, blob_start)):
+                continue   # cluster not bounded below by observed padding
+            hits = set()
+            for end in ends:
+                for p in STD_EC_SIZES:
+                    start = end - p
+                    if start < 0 or start < blob_start:
+                        continue   # would cross the measured boundary
+                    if not (start <= anchor < end):
+                        continue   # marker cluster must sit inside the region
+                    if not self._sits_on_padding(data, start):
+                        continue   # computed start with no boundary under it
+                    hits.add((start, p))
+            if len(hits) == 1:
+                return next(iter(hits))
+            # 0 hits: this cluster justifies nothing; >1: the content does
+            # not decide between them. Both move on to the next cluster and
+            # never pick a favourite.
 
-        # Pass 1: clusters whose region is bounded on BOTH sides by observed
-        # facts. A measured boundary is NEVER moved: the answer's start is the
-        # observed boundary, and the capacity is accepted only when it lands
-        # on the observed end without crossing it. The previous code instead
-        # recomputed start = blob_end - snapped_size, and an over-long blob
-        # snapped up to the next chip capacity, shifting the reported start
-        # backwards into the BIOS -- a start thousands of bytes early.
-        for anchor, blob_start, blob_end, start_known, end_known in probes:
-            if not (start_known and end_known):
-                continue   # an unobserved side means no size is justified
-            fits = [
-                p for p in STD_EC_SIZES
-                if blob_start + p <= blob_end
-                and self._bounded_above(data, blob_start + p)
-            ]
-            if fits:
-                fits.sort(key=lambda p: abs(blob_start + p - blob_end))
-                return blob_start, fits[0]
-            # Start observed but no capacity lands on the observed end. Do NOT
-            # fall through to the end-anchored rule: that would replace the
-            # measured start with a computed one.
-
-        # Pass 2: no measured start anywhere, but an observed end. The capacity
-        # must place the start on observed padding, cover the marker cluster
-        # that put us here, and keep the whole interior inside the content the
-        # backward walk proved pad-free (otherwise the region would stretch
-        # across padding it never examined). Runs strictly after pass 1 so a
-        # computed start can never shadow a measured one.
-        for anchor, blob_start, blob_end, start_known, end_known in probes:
-            if start_known or not end_known:
-                continue
-            fits = [
-                p for p in STD_EC_SIZES
-                # strictly greater than 0: the start must sit on OBSERVED
-                # padding -- the start of the file is not a padding run and
-                # must not silently anchor a computed region
-                if 0 < blob_end - p <= anchor
-                and blob_end - p >= blob_start
-                and self._bounded_below(data, blob_end - p)
-            ]
-            if fits:
-                # Smallest first: a larger capacity would stretch the region
-                # across the padding that bounds the smaller one.
-                return blob_end - min(fits), min(fits)
-
-        # No candidate cluster produced a pair of observed boundaries, so the
-        # region cannot be delimited from content alone. Marker positions are
-        # useless for the size (they report a 256KB chip as 128KB whenever the
-        # markers land in the second half), and a wrong region flashed to the
-        # EC bricks the machine. Refuse and let the user state the capacity.
+        # No candidate cluster produced a unique pair of observed
+        # boundaries, so the region cannot be delimited from content alone.
+        # Marker positions are useless for the size (they report a 256KB
+        # chip as 128KB whenever the markers land in the second half), and
+        # a wrong region flashed to the EC bricks the machine. Refuse and
+        # let the user state the region explicitly.
         return -1, -1
 
     def find_ec_region_end(self, data: bytes) -> int:
-        """Return the END offset of the EC region, or -1 if unknown.
+        """Return the block-observed end of the EC blob, or -1 if unknown.
 
-        The end of the region is the most reliable fact available: it is either
-        the end of the dump or the erased (0xFF) flash that follows the region.
-        Combined with the known chip capacity this pins the start exactly, which
-        is why the manual override can be end-anchored.
+        The end is the most reliable fact available: it is either the end of
+        the dump or the erased (0xFF) flash that follows the region. An end
+        that merely coincides with the walk's search ceiling is not derivable
+        from content and reports -1. (End-anchored resolution uses
+        ``_end_anchored_start``, which considers every real end of the
+        region, including where an internal FF tail runs out.)
         """
         if not data:
             return -1
 
-        families = list(self.CONTROLLER_SIGNATURES.values())
-        all_markers = [s for fam in families for s in fam] + self.KBC_MARKERS
-        candidates = []
-        for sig_group in self.CONTROLLER_SIGNATURES.values():
-            for sig in sig_group:
-                idx = 0
-                while True:
-                    idx = data.find(sig, idx)
-                    if idx < 0:
-                        break
-                    candidates.append(idx)
-                    idx += 1
-        if not candidates:
+        scored = self._scored_anchors(data)
+        if not scored:
             return -1
-
-        radius = 0x20000
-        scored = []
-        for off in candidates:
-            lo, hi = max(0, off - radius), min(len(data), off + radius)
-            distinct = sum(1 for m in all_markers if m in data[lo:hi])
-            scored.append((distinct, off))
-        scored.sort(reverse=True)
 
         # Try the strongest clusters first and accept the first end that is an
         # OBSERVED boundary (padding or EOF). An end that merely coincides with
@@ -437,6 +416,97 @@ class ECPatcher:
 
         return start, min(end, total)
 
+    @classmethod
+    def _observed_ends(cls, data: bytes, blob_end: int) -> tuple[int, ...]:
+        """The real end candidates for a blob whose forward walk stopped at ``blob_end``.
+
+        A region ends at its last programmed byte, or at the block-aligned
+        padding boundary the walk measured -- and when the image carries an
+        internal 0xFF tail padded out to its chip capacity, at the point
+        where the NEXT region's content resumes after that tail. A
+        ``blob_end`` that is merely the search ceiling is not derivable from
+        content and yields no candidates at all.
+        """
+        total = len(data)
+        if blob_end < 0 or blob_end > total:
+            return ()
+        if blob_end < total and not cls._is_pad_block(data[blob_end:blob_end + 0x1000]):
+            return ()   # search ceiling, not a boundary content shows
+        content_end = cls._content_end_before(data, blob_end)
+        ends = [blob_end, content_end, cls._pad_end_after(data, content_end)]
+        # Block-level resume point: where the run of all-FF 4KB blocks stops.
+        # Byte-level resume drifts past a region that BEGINS with 0xFF bytes,
+        # but a tail padded out to capacity always ends on a block boundary,
+        # so this candidate recovers the exact capacity end in that case.
+        # (If both survive every check the content did not decide between
+        # them, so the caller refuses instead of picking one.)
+        BLOCK = 0x1000
+        b = (min(content_end, total) + BLOCK - 1) // BLOCK * BLOCK
+        if b < total and cls._is_pad_block(data[b:b + BLOCK]):
+            while b < total and cls._is_pad_block(data[b:b + BLOCK]):
+                b += BLOCK
+            ends.append(b)
+        return tuple(dict.fromkeys(ends))
+
+    @classmethod
+    def _content_end_before(cls, data: bytes, pos: int) -> int:
+        """One past the last programmed byte below ``pos`` (0 if all padding)."""
+        total = len(data)
+        pos = min(pos, total)
+        BLOCK = 0x1000
+        i = pos
+        while i > 0:
+            lo = max(0, i - BLOCK)
+            chunk = data[lo:i]
+            if not cls._is_pad_block(chunk):
+                for j in range(len(chunk) - 1, -1, -1):
+                    if chunk[j] != 0xFF:
+                        return lo + j + 1
+            i = lo
+        return 0
+
+    @classmethod
+    def _pad_end_after(cls, data: bytes, pos: int) -> int:
+        """First programmed byte at or after ``pos``, or EOF when padding runs out."""
+        total = len(data)
+        BLOCK = 0x1000
+        i = max(0, min(pos, total))
+        while i < total:
+            chunk = data[i:i + BLOCK]
+            if cls._is_pad_block(chunk):
+                i += len(chunk)
+                continue
+            for j in range(len(chunk)):
+                if chunk[j] != 0xFF:
+                    return i + j
+            i += len(chunk)
+        return total
+
+    @classmethod
+    def _sits_on_padding(cls, data: bytes, start: int) -> bool:
+        """True when a real 0xFF run ENDS within the same flash block below ``start``.
+
+        Capacity-derived starts (``end - size``) are arithmetic; this is the
+        content fact that makes one trustworthy. Padding must terminate no
+        further than one 4KB block above the proposed start: that tolerates a
+        few programmed bytes sitting between the padding and the region (real
+        flash layouts are not always block-aligned), but nothing more. A run
+        that ends further below means ``start`` lies inside content, not on a
+        boundary. The run itself must be at least PAD_RUN (2 blocks) of 0xFF
+        so a lone interior FF fragment cannot qualify.
+        """
+        if start <= 0 or start > len(data):
+            return False
+        total = len(data)
+        lo = max(1, start - 0x1000)
+        window = data[lo:start + 1]
+        for i in range(1, len(window)):
+            if window[i - 1] == 0xFF and window[i] != 0xFF:
+                e = lo + i   # first non-FF byte after the run ends
+                if e >= 0x2000 and data[e - 0x2000:e].count(0xFF) == 0x2000:
+                    return True
+        return False
+
     @staticmethod
     def _strip_ff_tail(data: bytes, start: int, end: int) -> int:
         """Trim trailing 0xFF padding down to the last non-FF byte."""
@@ -447,6 +517,44 @@ class ECPatcher:
     def _strip_ff_run(self, data, start, end):
         # placeholder kept for API compatibility
         return self._strip_ff_tail(data, start, end)
+
+    def _end_anchored_start(self, data: bytes, size: int) -> int:
+        """Locate the start of a ``size``-byte region via its observed end(s).
+
+        The chip capacity is hardware truth the user supplies; everything
+        else must still come from content: an observed end (padding or EOF),
+        a start at ``end - size`` that never falls below the start the
+        backward walk measured, and the marker cluster inside the region.
+        When the content facts single out exactly one start it is returned;
+        otherwise -1 -- a computed start content does not corroborate must
+        refuse, not approximate.
+        """
+        if not data or size <= 0:
+            return -1
+        scored = self._scored_anchors(data)
+        if not scored:
+            return -1
+        # Headroom beyond MAX_EC: a genuine 512KB region whose anchor sits
+        # near its start must not look like "the search limit was reached".
+        SEARCH = 0x90000
+        for _distinct, anchor in scored[:32]:
+            blob_start, blob_end = self._blob_bounds(data, anchor, SEARCH)
+            if blob_end <= anchor:
+                blob_end = anchor + 1
+            ends = self._observed_ends(data, blob_end)
+            if not ends:
+                continue   # walk hit the search ceiling: end not observable
+            hits = set()
+            for end in ends:
+                start = end - size
+                if start < 0 or start < blob_start:
+                    continue   # would cross the measured boundary
+                if not (start <= anchor < end):
+                    continue   # marker cluster must sit inside the region
+                hits.add(start)
+            if len(hits) == 1:
+                return next(iter(hits))
+        return -1
 
     def resolve_region(
         self,
@@ -459,9 +567,10 @@ class ECPatcher:
         Three modes:
           * offset AND size given  -> used verbatim.
           * size only              -> END-ANCHORED. The chip capacity is known
-            hardware truth, and the region's end is reliably detectable, so the
-            region is placed as the last ``size`` bytes before that end. This is
-            the mode that fixes a chip whose capacity the heuristics misjudge.
+            hardware truth; the region is placed where an observed end (the
+            last programmed byte, the padding boundary, or the end of an FF
+            tail padded to capacity) minus that capacity lands on content
+            that corroborates it (measured start, contained marker cluster).
           * neither                 -> auto-detection.
         """
         size = int(size) if size else None
@@ -476,17 +585,11 @@ class ECPatcher:
             return offset, size, ""
 
         if size:
-            end = self.find_ec_region_end(data)
-            if end < 0:
+            offset = self._end_anchored_start(data, size)
+            if offset < 0:
                 return -1, -1, (
                     "Could not locate the end of the EC region. Enter an offset "
                     "manually, or check that this file is a full SPI dump."
-                )
-            offset = end - size
-            if offset < 0:
-                return -1, -1, (
-                    f"A 0x{size:X}-byte region ending at 0x{end:X} would start "
-                    f"before the beginning of the file."
                 )
             return offset, size, ""
 

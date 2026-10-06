@@ -621,3 +621,99 @@ def test_region_whose_end_is_unobservable_refuses():
     assert end == -1, f"ceiling offset 0x{end:X} reported as a region end"
     offset, _size, err = p.resolve_region(bytes(data), None, 0x40000)
     assert offset == -1 and "end of the EC region" in err
+
+
+# ---------------------------------------------------------------------------
+# Structural quirks seen in real 2-chip dumps. These fixtures model the SHAPE
+# of such images -- padding that stops just short of the region start, and an
+# image 0xFF-padded out to its full chip capacity with the next region
+# resuming right after it -- using only synthetic content. No offset or size
+# here is taken from any particular dump.
+# ---------------------------------------------------------------------------
+
+_PATTERN_CYCLE = bytes(((i * 7 + 0x5B) & 0xFF) for i in range(256))
+
+
+def _padded_tail_dump(total=0x800000, capacity=0x40000, usable=0x30000,
+                      stray=2, pad=0x10000, next_lead_ff=0):
+    """Mid-dump SPI image with a capacity-padded EC image and strays below it.
+
+    * The padding below the region stops ``stray`` programmed bytes BEFORE
+      the region's first byte, so no full 4KB 0xFF block sits directly under
+      the start -- flash layouts are not always block-aligned.
+    * The region's own tail is 0xFF-padded out to the full chip capacity and
+      the next region's content resumes exactly at capacity end, so the
+      region's real end is where that padding STOPS, while the block walk
+      only ever sees the padding's start.
+    """
+    # The pattern's bytes always differ by 7, so it can never contain any
+    # controller/KBC signature: the planted markers below are the only hits.
+    data = bytearray(_PATTERN_CYCLE * (total // 256))
+    ec_off = 0x300000
+    # gap below the region, stopping `stray` bytes short of its start
+    data[ec_off - stray - pad:ec_off - stray] = b"\xFF" * pad
+    for i in range(stray):
+        data[ec_off - stray + i] = 0x11 + i
+    # the EC image: marker cluster near its start, tail padded to capacity
+    ec = bytearray(_PATTERN_CYCLE * (capacity // 256))
+    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x0100:0x0109] = b"IT8218VG "
+    ec[0x0200:0x0206] = b"ITE8\x02\x00"
+    ec[0x0900:0x0904] = b"8218"
+    ec[usable:capacity] = b"\xFF" * (capacity - usable)
+    data[ec_off:ec_off + capacity] = ec
+    # the next region's content resumes at capacity end
+    if next_lead_ff:
+        data[ec_off + capacity:ec_off + capacity + next_lead_ff] = (
+            b"\xFF" * next_lead_ff)
+        data[ec_off + capacity + next_lead_ff] = 0x77
+    else:
+        data[ec_off + capacity] = 0x77
+    return bytes(data), ec_off, capacity
+
+
+def test_auto_detects_capacity_padded_region_mid_dump():
+    """An image 0xFF-padded out to its capacity ends where the next region
+    resumes, even though the forward walk stops at the padding's start."""
+    for capacity, usable in ((0x20000, 0x18000), (0x40000, 0x30000),
+                             (0x80000, 0x60000)):
+        data, ec_off, cap = _padded_tail_dump(capacity=capacity, usable=usable)
+        p = ECPatcher()
+        off, size = p.find_ec_region(data)
+        assert (off, size) == (ec_off, cap), f"capacity 0x{cap:X}"
+
+        analysis = p.analyze_ec(data)
+        assert analysis.found, f"capacity 0x{cap:X}"
+        assert (analysis.offset, analysis.size) == (ec_off, cap)
+        assert analysis.raw == data[ec_off:ec_off + cap]
+        assert b"IT8218VG" in analysis.raw
+
+        # end-anchored mode (capacity only) must land on the same start
+        r_off, r_size, err = p.resolve_region(data, None, cap)
+        assert err == "" and (r_off, r_size) == (ec_off, cap)
+
+
+def test_strays_below_the_region_start_never_shift_the_answer():
+    """Programmed bytes sitting between the padding and the region start must
+    not drag the reported offset away from the region's first byte."""
+    for stray in (0, 1, 2, 5):
+        data, ec_off, capacity = _padded_tail_dump(stray=stray)
+        off, size = ECPatcher().find_ec_region(data)
+        assert (off, size) == (ec_off, capacity), f"stray={stray}"
+        r_off, r_size, err = ECPatcher().resolve_region(data, None, capacity)
+        assert err == "" and (r_off, r_size) == (ec_off, capacity), \
+            f"stray={stray}"
+
+
+def test_ff_led_next_region_is_refused_not_shifted():
+    """Content that resumes with 0xFF bytes right after the capacity boundary
+    makes the byte-level and block-level resume points disagree, straddling
+    the true start by a few bytes. Refusing is the only correct answer: an
+    extract shifted by even one byte would brick the EC."""
+    data, ec_off, capacity = _padded_tail_dump(next_lead_ff=0x10)
+    p = ECPatcher()
+    off, size = p.find_ec_region(data)
+    assert (off, size) == (-1, -1), f"shifted answer 0x{off:X}"
+    assert not p.analyze_ec(data).found
+    r_off, _r_size, err = p.resolve_region(data, None, capacity)
+    assert r_off == -1 and err and "end of the EC region" in err
