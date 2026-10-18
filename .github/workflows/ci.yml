@@ -39,6 +39,8 @@ jobs:
   build-windows:
     runs-on: windows-latest
     needs: test
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
