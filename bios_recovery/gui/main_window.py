@@ -212,6 +212,24 @@ class MainWindow(QMainWindow):
         info_layout.addWidget(self.info_text)
         layout.addWidget(info_group)
 
+        caps_layout = QHBoxLayout()
+        self.capsule_btn = QPushButton("Capsule → Flashable Image")
+        self.capsule_btn.setToolTip(
+            "Strip the Aptio capsule header (.CAP/.308/.217) and write the bare "
+            "flash image, ready to burn to the SPI chip with an external programmer."
+        )
+        self.capsule_btn.clicked.connect(self.build_flashable_image)
+        caps_layout.addWidget(self.capsule_btn)
+        self.capsule_merge_btn = QPushButton("Merge Dump onto Capsule")
+        self.capsule_merge_btn.setToolTip(
+            "Build a flashable image from the capsule and restore machine NVRAM "
+            "records (serials etc.) from a saved dump."
+        )
+        self.capsule_merge_btn.clicked.connect(self.build_flashable_merged)
+        caps_layout.addWidget(self.capsule_merge_btn)
+        caps_layout.addStretch(1)
+        layout.addLayout(caps_layout)
+
         regions_group = QGroupBox("Detected Regions")
         regions_layout = QVBoxLayout(regions_group)
         self.regions_table = QTableWidget(0, 4)
@@ -692,6 +710,78 @@ class MainWindow(QMainWindow):
         for issue in report.issues_found:
             lines.append(f"  # [{issue.severity}] {issue.description}")
         self.repair_text.setPlainText("\n".join(lines))
+
+    def build_flashable_image(self):
+        from bios_recovery.engines.bios_capsule import extract_flashable_image
+
+        if not self.current_file:
+            QMessageBox.warning(self, "No File", "Open a capsule update (.CAP/.308/.217) first.")
+            return
+        self.capsule_btn.setEnabled(False)
+        self._run_in_thread(
+            extract_flashable_image,
+            self._flashable_done,
+            self.current_file,
+        )
+
+    def _flashable_done(self, info):
+        self.capsule_btn.setEnabled(True)
+        if not info.success:
+            QMessageBox.warning(self, "Capsule Error", " ".join(info.messages) or "Unknown error")
+            self.statusBar().showMessage("Capsule extraction failed")
+            return
+        lines = [
+            "Capsule → flashable image",
+            f"Header size: {info.header_size:#x}",
+            f"Image size: {info.image_size:#x}",
+            f"Image SHA-256: {info.image_sha256}",
+            f"Output: {info.output_path}",
+        ]
+        lines.extend(info.messages)
+        self.info_text.setPlainText("\n".join(lines))
+        self.statusBar().showMessage(f"Flashable image written: {info.output_path}")
+
+    def build_flashable_merged(self):
+        from bios_recovery.engines.bios_capsule import extract_flashable_image, restore_nvar_from_dump
+
+        if not self.current_file:
+            QMessageBox.warning(self, "No File", "Open a capsule update (.CAP/.308/.217) first.")
+            return
+        dump_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Your Dump (for machine NVRAM)",
+            "",
+            "BIOS Dumps (*.bin);;All Files (*)",
+        )
+        if not dump_path:
+            return
+        self.capsule_merge_btn.setEnabled(False)
+
+        def task():
+            base = extract_flashable_image(self.current_file,
+                                           output_path=self.current_file.rsplit(".", 1)[0] + "_flashable_merged_base.bin")
+            if not base.success:
+                return base
+            merged = base.output_path
+            out = self.current_file.rsplit(".", 1)[0] + "_flashable_merged.bin"
+            return restore_nvar_from_dump(merged, dump_path, out)
+
+        self._run_in_thread(task, self._flashable_merge_done)
+
+    def _flashable_merge_done(self, info):
+        self.capsule_merge_btn.setEnabled(True)
+        if not info.success:
+            QMessageBox.warning(self, "Merge Error", " ".join(info.messages) or "Unknown error")
+            self.statusBar().showMessage("Capsule merge failed")
+            return
+        lines = [
+            "Capsule merged with dump NVRAM",
+            f"Image size: {info.image_size:#x}",
+            f"Output: {info.output_path}",
+        ]
+        lines.extend(info.messages)
+        self.info_text.setPlainText("\n".join(lines))
+        self.statusBar().showMessage(f"Merged image written: {info.output_path}")
 
     def show_me_info(self):
         if not self.current_file:

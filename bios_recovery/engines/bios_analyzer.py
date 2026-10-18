@@ -18,6 +18,7 @@ class BiosType(Enum):
     DELL_PFS = auto()
     APPLE_EFI = auto()
     COREBOOT = auto()
+    AMI_CAPSULE = auto()
 
 
 class RegionType(Enum):
@@ -125,6 +126,13 @@ class BiosAnalyzer:
             return BiosType.DELL_PFS
         if self.AMI_APTIO_SIGNATURE in data[:0x200]:
             return BiosType.AMI_APTIO
+
+        # AMI Aptio capsule (vendor BIOS update): GUID at offset 0
+        from bios_recovery.engines.bios_capsule import APTIO_CAPSULE_GUID_LE
+        if data[:16] == APTIO_CAPSULE_GUID_LE:
+            from bios_recovery.engines.bios_capsule import detect_capsule
+            if detect_capsule(data).success:
+                return BiosType.AMI_CAPSULE
 
         if self.FPT_SIGNATURE in data[:0x20]:
             return BiosType.INTEL_IFD
