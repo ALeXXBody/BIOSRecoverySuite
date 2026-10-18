@@ -63,10 +63,31 @@ jobs:
           }
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
-      - name: Upload artifact
+      - name: Release assets on tag push
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          Compress-Archive -Path "dist/BIOSRecoverySuite/*" -DestinationPath "dist/BIOSRecoverySuite-portable-$version.zip" -Force
+          gh release view $env:GITHUB_REF_NAME --repo ${{ github.repository }} 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME --repo ${{ github.repository }} `
+              --title "$env:GITHUB_REF_NAME" --notes "" --latest
+            if ($LASTEXITCODE -ne 0) { $LASTEXITCODE = 0 }
+          }
+          gh release upload $env:GITHUB_REF_NAME `
+            "dist/BIOSRecoverySuite-Setup-$version.exe" `
+            "dist/BIOSRecoverySuite-portable-$version.zip" `
+            --repo ${{ github.repository }} --clobber
+
+      - name: Upload artifact (dev runs only)
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: BIOSRecoverySuite-windows
+          retention-days: 1
           path: |
             dist/BIOSRecoverySuite/
             dist/BIOSRecoverySuite-Setup-*.exe
