@@ -172,7 +172,6 @@ class MainWindow(QMainWindow):
         self.password_tab = self._build_password_tab()
         self.extract_tab = self._build_extract_tab()
         self.hex_tab = self._build_hex_tab()
-        self.passgen_tab = self._build_passgen_tab()
         self.spi_tab = SPITab(self)
         self.ec_tab = ECTab(self)
         self.lenovo_tab = LenovoTab(self)
@@ -183,7 +182,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.me_tab, "ME Cleaner", "ME (Intel)")
         self.tabs.addTab(self.dmi_tab, "DMI", "DMI & Identity")
         self.tabs.addTab(self.password_tab, "Security", "Security & Passwords")
-        self.tabs.addTab(self.passgen_tab, "Passwords", "Security & Passwords")
         self.tabs.addTab(self.extract_tab, "Extract", "Firmware")
         self.tabs.addTab(self.spi_tab, "SPI Flasher", "Firmware")
         self.tabs.addTab(self.hex_tab, "Hex Viewer", "Firmware")
@@ -373,15 +371,15 @@ class MainWindow(QMainWindow):
 
         options_group = QGroupBox("Repair Options")
         options_layout = QVBoxLayout(options_group)
-        self.repair_me_ck = QCheckBox("Clean ME Region")
-        self.repair_me_ck.setChecked(True)
+        me_hint = QLabel("ME region cleaning is done on the ME Cleaner page, with its own options.")
+        me_hint.setStyleSheet("color: #7F849C;")
+        options_layout.addWidget(me_hint)
         self.repair_checksum_ck = QCheckBox("Fix FPT Checksum")
         self.repair_checksum_ck.setChecked(True)
         self.repair_size_ck = QCheckBox("Verify Size Alignment")
         self.repair_size_ck.setChecked(True)
         self.repair_security_ck = QCheckBox("Remove Security Structures")
         self.repair_security_ck.setChecked(True)
-        options_layout.addWidget(self.repair_me_ck)
         options_layout.addWidget(self.repair_checksum_ck)
         options_layout.addWidget(self.repair_size_ck)
         options_layout.addWidget(self.repair_security_ck)
@@ -644,6 +642,8 @@ class MainWindow(QMainWindow):
         hp_layout.addWidget(self.hp_unlock_btn)
         layout.addWidget(hp_group)
 
+        layout.addWidget(self._build_passgen_tab())
+
         self.password_text = QPlainTextEdit()
         self.password_text.setReadOnly(True)
         layout.addWidget(self.password_text, 1)
@@ -755,7 +755,8 @@ class MainWindow(QMainWindow):
 
         self.gen_text = QPlainTextEdit()
         self.gen_text.setReadOnly(True)
-        layout.addWidget(self.gen_text, 1)
+        self.gen_text.setMaximumHeight(110)
+        layout.addWidget(self.gen_text)
 
         return widget
 
@@ -932,7 +933,7 @@ class MainWindow(QMainWindow):
             self._repair_done,
             self.current_file,
             output,
-            self.repair_me_ck.isChecked(),
+            False,
             self.repair_checksum_ck.isChecked(),
             self.repair_size_ck.isChecked(),
             self.repair_security_ck.isChecked(),

@@ -27,9 +27,12 @@ def test_main_window_constructs(qapp):
     w = MainWindow()
     titles = [w.tabs.tabText(i) for i in range(w.tabs.count())]
     for expected in ["Overview", "Repair", "ME Cleaner", "DMI", "Security",
-                     "Extract", "Hex Viewer", "Passwords", "SPI Flasher",
+                     "Extract", "Hex Viewer", "SPI Flasher",
                      "EC Patching", "Lenovo Unlock"]:
         assert expected in titles, f"missing tab: {expected}"
+    assert "Passwords" not in titles, "password generator must live on the Security page"
+    assert hasattr(w, "gen_input") and hasattr(w, "password_text")
+    assert not hasattr(w, "repair_me_ck"), "ME cleaning must not be duplicated in Repair"
 
 
 def test_lenovo_tab_scan_and_apply(qapp, uefi_patch_image, tmp_path, monkeypatch):
