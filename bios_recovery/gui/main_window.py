@@ -139,6 +139,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs)
 
         self.main_tab = self._build_main_tab()
+        self.platform_tab = self._build_platform_tab()
         self.repair_tab = self._build_repair_tab()
         self.me_tab = self._build_me_tab()
         self.dmi_tab = self._build_dmi_tab()
@@ -151,6 +152,7 @@ class MainWindow(QMainWindow):
         self.lenovo_tab = LenovoTab(self)
 
         self.tabs.addTab(self.main_tab, "Overview")
+        self.tabs.addTab(self.platform_tab, "Platform")
         self.tabs.addTab(self.repair_tab, "Repair")
         self.tabs.addTab(self.me_tab, "ME Cleaner")
         self.tabs.addTab(self.dmi_tab, "DMI")
@@ -240,6 +242,36 @@ class MainWindow(QMainWindow):
 
         self.main_status = QLabel("")
         layout.addWidget(self.main_status)
+
+        return widget
+
+    def _build_platform_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        header = QLabel("Platform Classification (Traits Matrix)")
+        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "The app classifies the loaded image once on load, then both the GUI "
+            "and the CLI consult the same tool matrix. Tools that don't apply are "
+            "greyed out with an explicit reason — no more offering Intel ME tools "
+            "on an AMD machine."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #AAA;")
+        layout.addWidget(desc)
+
+        self.platform_info = QPlainTextEdit()
+        self.platform_info.setReadOnly(True)
+        self.platform_info.setMaximumHeight(120)
+        layout.addWidget(self.platform_info)
+
+        self.traits_table = QTableWidget(0, 3)
+        self.traits_table.setHorizontalHeaderLabels(["Tool", "Applies?", "Reason"])
+        self.traits_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.traits_table, 1)
 
         return widget
 
@@ -711,6 +743,7 @@ class MainWindow(QMainWindow):
     def _apply_traits(self, traits):
         """Grey-out platform/vendor-bound tabs with an explicit reason in the tooltip."""
         from bios_recovery.core.traits import ARCH_AMD, ARCH_INTEL, ARCH_APPLE_INTEL
+        from bios_recovery.core.traits_matrix import tool_matrix
 
         rules = {
             "ME Cleaner": (
@@ -734,20 +767,41 @@ class MainWindow(QMainWindow):
             self.tabs.setTabEnabled(idx, applies)
             self.tabs.setTabToolTip(idx, "" if applies else reason)
 
+        # Populate the Platform tab table + info panel
+        matrix = tool_matrix(traits)
+        if hasattr(self, "traits_table"):
+            self.traits_table.setRowCount(0)
+            for i, (tool, row) in enumerate(matrix.items()):
+                self.traits_table.insertRow(i)
+                self.traits_table.setItem(i, 0, QTableWidgetItem(tool))
+                self.traits_table.setItem(i, 1, QTableWidgetItem("Yes" if row.applies else "No"))
+                self.traits_table.setItem(i, 2, QTableWidgetItem(row.reason))
+            self.traits_table.resizeColumnsToContents()
+
+        if hasattr(self, "platform_info"):
+            lines = [
+                f"Architecture: {traits.architecture}",
+                f"Vendor: {traits.vendor}",
+            ]
+            if traits.me_family:
+                lines.append(f"ME family: {traits.me_family} (version {traits.me_version or '?'})")
+            if traits.evidence:
+                for vendor, evs in traits.evidence.items():
+                    lines.append(f"  evidence[{vendor}]: {', '.join(evs[:3])}")
+            self.platform_info.setPlainText("\n".join(lines))
+
         # Overview panel: show the classification (the traits matrix)
         lines = ["", "=== Platform Classification ===",
                  f"  Architecture: {traits.architecture}",
                  f"  Vendor: {traits.vendor}",
                  ]
         if traits.me_family:
-            lines.append(f"  ME family: {traits.me_family} (version {traits.me_version or '?'} )")
-        for vendor, evs in traits.evidence.items():
-            lines.append(f"  evidence[{vendor}]: {', '.join(evs[:3])}")
+            lines.append(f"  ME family: {traits.me_family} (version {traits.me_version or '?'})")
         for init_idx, title in (("ME Cleaner", "ME Cleaner"), ("Lenovo Unlock", "Lenovo Unlock")):
             applies, reason = rules.get(title, (True, ""))
             lines.append(f"  tool[{title}]: {'available' if applies else 'disabled — ' + reason}")
         cur = self.info_text.toPlainText()
-        self.info_text.setPlainText(cur + "\n".join(lines))
+        self.info_text.setPlainText(cur + "\n" + "\n".join(lines))
 
     def _format_bios_info(self, result) -> str:
         lines = [
