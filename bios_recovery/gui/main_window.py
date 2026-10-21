@@ -135,9 +135,32 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        self.open_btn = QPushButton("Open BIOS File")
+        self.open_btn.clicked.connect(self.open_file)
+        header.addWidget(self.open_btn)
+
+        self.file_label = QLabel("No file loaded")
+        self.file_label.setStyleSheet("color: #AAA;")
+        header.addWidget(self.file_label, 1)
+
+        self.platform_badge = QLabel("")
+        self.platform_badge.setStyleSheet(
+            "background: #313244; color: #CDD6F4; padding: 3px 10px; "
+            "border-radius: 4px; font-weight: bold;"
+        )
+        self.platform_badge.setVisible(False)
+        header.addWidget(self.platform_badge)
+
+        self.analyze_btn = QPushButton("Analyze")
+        self.analyze_btn.clicked.connect(self.run_analysis)
+        header.addWidget(self.analyze_btn)
+        layout.addLayout(header)
 
         self.tabs = SidebarTabs()
-        layout.addWidget(self.tabs)
+        layout.addWidget(self.tabs, 1)
 
         self.main_tab = self._build_main_tab()
         self.platform_tab = self._build_platform_tab()
@@ -192,20 +215,6 @@ class MainWindow(QMainWindow):
     def _build_main_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-
-        header = QHBoxLayout()
-        self.open_btn = QPushButton("Open BIOS File")
-        self.open_btn.clicked.connect(self.open_file)
-        header.addWidget(self.open_btn)
-
-        self.file_label = QLabel("No file loaded")
-        self.file_label.setStyleSheet("color: #AAA;")
-        header.addWidget(self.file_label, 1)
-
-        self.analyze_btn = QPushButton("Analyze")
-        self.analyze_btn.clicked.connect(self.run_analysis)
-        header.addWidget(self.analyze_btn)
-        layout.addLayout(header)
 
         info_group = QGroupBox("BIOS Information")
         info_layout = QVBoxLayout(info_group)
@@ -758,6 +767,8 @@ class MainWindow(QMainWindow):
             ),
             "EC Patching": (True, ""),
         }
+        self.platform_badge.setText(f"{traits.architecture.upper()} · {traits.vendor}")
+        self.platform_badge.setVisible(True)
         for idx in range(self.tabs.count()):
             title = self.tabs.tabText(idx)
             rule = rules.get(title)
