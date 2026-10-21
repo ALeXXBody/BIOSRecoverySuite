@@ -147,16 +147,14 @@ def _library_cli(argv) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
         print(f"config: {lib.config_path()}")
-        for f in current.folders:
+        for f in sorted(set(current.tools_folders) | set(current.firmware_folders)):
             print(f"  folder: {f}")
         return 0
     if cmd == "list":
         current = lib.load_library()
         print(f"config: {lib.config_path()}")
-        if not current.folders:
-            print("  (no folders added)")
-        for f in current.folders:
-            print(f"  folder: {f}")
+        print(f"  tools folders:    {current.tools_folders or '(none)'}")
+        print(f"  firmware folders: {current.firmware_folders or '(none)'}")
         return 0
     if cmd == "scan":
         result = lib.scan()
@@ -165,7 +163,7 @@ def _library_cli(argv) -> int:
             return 0
         print(f"tools found: {len(result.tools)}")
         for t in result.tools:
-            print(f"  {t.family} {t.version:<18} {t.path}")
+            print(f"  {t.family} {t.version:<18} {t.platform:<8} {t.release:<18} {t.path}")
         print(f"firmware found: {len(result.firmware)}")
         for fw in result.firmware:
             print(f"  ME {fw.me_version:<16} {fw.size:>10,} bytes  {fw.path}")

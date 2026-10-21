@@ -48,6 +48,7 @@ from bios_recovery.core.dmi_clone import DMIClone
 from bios_recovery.utils import master_passwords
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
 from bios_recovery.gui.sidebar_tabs import SidebarTabs
+from bios_recovery.gui.settings_page import SettingsPage
 from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
@@ -186,6 +187,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.spi_tab, "SPI Flasher")
         self.tabs.addTab(self.hex_tab, "Hex Viewer")
         self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock")
+        self.settings_page = SettingsPage(
+            self, run_task=lambda task, done: self._run_in_thread(task, done))
+        self.tabs.addTab(self.settings_page, "Settings")
 
         self._build_menubar()
 
