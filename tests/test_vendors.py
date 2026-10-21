@@ -23,3 +23,14 @@ def test_msi_and_razer_are_recognised():
 
 def test_unbranded_image_stays_generic():
     assert classify(b"\xFF" * 0x4000).vendor == "generic"
+
+
+def test_msi_notebook_identity_string():
+    data = b"\xFF" * 0x800 + b"MSI_NBMEGABOOKWINDOWS" + b"\xFF" * 0x800
+    assert classify(data).vendor == "msi"
+
+
+def test_secure_boot_certificate_names_are_not_a_vendor():
+    # Microsoft's UEFI CA names appear in almost every modern image.
+    data = b"\xFF" * 0x800 + b"Microsoft Corporation UEFI CA 2011" + b"\xFF" * 0x800
+    assert classify(data).vendor == "generic"
