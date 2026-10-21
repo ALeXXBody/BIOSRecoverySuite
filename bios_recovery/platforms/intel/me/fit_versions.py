@@ -20,7 +20,7 @@ SOURCES = (
     "indiafix.in FIT/CSME tool list (per-release CSME version text)",
     "community.intel.com 'Flash Image Tool' thread (CSME 12 and 16 pairings)",
     "github.com/CE1CECL/IntelCSTools (release names only)",
-    "winraid.level1techs.com CSME 16+ thread (MFIT and LINUX64 builds)",
+    "winraid.level1techs.com CSME 16+ thread (MFIT and LINUX64 builds, 16.50 listing)",
 )
 
 
@@ -53,7 +53,9 @@ RULES: tuple = (
     ToolRule((15,), (15, 40), "v15.0 r15", "listed"),
     ToolRule((15, 40), (16,), "v15.40 r3", "listed"),
     ToolRule((16,), (16, 1), "v16.0 r8", "listed", "v16.0 r2 also exists"),
-    ToolRule((16, 1), (17,), "v16.1 r0", "inferred", "MFIT 16.1 Linux64 build reported"),
+    ToolRule((16, 1), (16, 50), "v16.1 r0", "inferred", "MFIT 16.1 Linux64 build reported"),
+    ToolRule((16, 50), (17,), "v16.50", "listed",
+             "MFIT 16.50.0.1120 Linux64 with FWUpdate and MEInfo 16.50.20 (WinRaid listing)"),
 )
 
 

@@ -130,3 +130,17 @@ def test_fit_from_other_release_line_is_refused(tmp_path):
     probe = probe_tool(str(tool))
     ok, why = compatible_with_me(probe, "15.0.3.1402")
     assert ok is False and "v15.40 r3" in why
+
+
+@pytest.mark.parametrize("me, release", [
+    ("16.50.0.1120", "v16.50"),
+    ("16.1.25.2053", "v16.1 r0"),
+])
+def test_csme_16_50_is_its_own_line(me, release):
+    assert tool_for_me_version(me).release == release
+
+
+def test_mfit_16_50_is_refused_for_16_1_image():
+    probe = ToolProbe(path="x", identified=True, family="MFIT", version="16.50.0.1120")
+    ok, why = compatible_with_me(probe, "16.1.25.1865")
+    assert ok is False and "v16.50" in why
