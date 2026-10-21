@@ -95,10 +95,9 @@ class BiosRepairEngine:
         self,
         input_path: str,
         output_path: Optional[str] = None,
-        clear_me: bool = True,
         fix_checksums: bool = True,
         normalize_size: bool = True,
-        remove_security: bool = True,
+        clear_passwords: bool = True,
     ) -> RepairReport:
         if not os.path.exists(input_path):
             return RepairReport(success=False, issues_found=[])
@@ -117,11 +116,8 @@ class BiosRepairEngine:
             self._fix_fpt_checksum(data, report)
             self._verify_alignment(data, report)
 
-        if clear_me:
-            self._clear_me_region(data, report)
-
-        if remove_security:
-            self._clear_security(data, report)
+        if clear_passwords:
+            self._clear_passwords(data, report)
 
         if normalize_size:
             self._normalize_size(data, report)
@@ -150,30 +146,7 @@ class BiosRepairEngine:
             data[checksum_offset] = correction
             report.operations.append(f"Fixed FPT checksum at {fpt_offset:#x}")
 
-    def _clear_me_region(self, data: bytearray, report: RepairReport) -> None:
-        fd_in, temp_input = tempfile.mkstemp(prefix="brs_me_in_", suffix=".bin")
-        os.close(fd_in)
-        fd_out, temp_output = tempfile.mkstemp(prefix="brs_me_out_", suffix=".bin")
-        os.close(fd_out)
-
-        try:
-            with open(temp_input, "wb") as f:
-                f.write(data)
-            clean_result = self.me_cleaner.clean(temp_input, temp_output, soft_disable=True)
-            if clean_result.status.name in ("SUCCESS", "ALREADY_CLEAN") and os.path.exists(temp_output):
-                with open(temp_output, "rb") as f:
-                    new_data = f.read()
-                if len(new_data) >= len(data):
-                    data[:] = bytearray(new_data)
-                    report.operations.append(f"ME cleaned (version {clean_result.me_version})")
-            elif clean_result.status.name == "NO_ME_REGION":
-                report.warnings.append("No ME region found to clean")
-            else:
-                report.warnings.append(f"ME cleaning skipped: {clean_result.status.name}")
-        finally:
-            self._safe_remove((temp_input, temp_output))
-
-    def _clear_security(self, data: bytearray, report: RepairReport) -> None:
+    def _clear_passwords(self, data: bytearray, report: RepairReport) -> None:
         from bios_recovery.core.password_remover import PasswordRemover
         remover = PasswordRemover()
 

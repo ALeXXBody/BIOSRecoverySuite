@@ -51,7 +51,7 @@ _VENDOR_MARKERS = {
     ),
     "apple": (b"Apple Computer, Inc.", b"Apple Inc.", b"AppleRomInfo",
               b"Fsys\x01"),
-    "hp": (b"Hewlett-Packard", b"HPE", b"HP Inc.", b"Insyde", b"H2OFFT"),
+    "hp": (b"Hewlett-Packard", b"HP Inc.", b"Hewlett Packard Enterprise"),
     "lenovo": (b"LENOVO", b"Lenovo", b"ThinkPad", b"$MAN$"),
     "acer": (b"Acer Aspire", b"Acer", b"TravMate", b"ZFOREST"),
     "samsung": (b"SAMSUNG", b"Samsung", b"Samsung Electronics"),

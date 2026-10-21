@@ -378,11 +378,11 @@ class MainWindow(QMainWindow):
         self.repair_checksum_ck.setChecked(True)
         self.repair_size_ck = QCheckBox("Verify Size Alignment")
         self.repair_size_ck.setChecked(True)
-        self.repair_security_ck = QCheckBox("Remove Security Structures")
-        self.repair_security_ck.setChecked(True)
+        self.repair_password_ck = QCheckBox("Also clear BIOS password structures")
+        self.repair_password_ck.setChecked(True)
         options_layout.addWidget(self.repair_checksum_ck)
         options_layout.addWidget(self.repair_size_ck)
-        options_layout.addWidget(self.repair_security_ck)
+        options_layout.addWidget(self.repair_password_ck)
         layout.addWidget(options_group)
 
         self.repair_btn = QPushButton("Run Auto Repair")
@@ -611,7 +611,7 @@ class MainWindow(QMainWindow):
         self.scan_btn.clicked.connect(self.scan_passwords)
         layout.addWidget(self.scan_btn)
 
-        self.remove_btn = QPushButton("Remove All Passwords")
+        self.remove_btn = QPushButton("Clear All BIOS Passwords (writes new file)")
         self.remove_btn.clicked.connect(self.remove_passwords)
         layout.addWidget(self.remove_btn)
         self.dvar_btn = QPushButton("Recover Stored Passwords (Dell DVAR)")
@@ -933,10 +933,9 @@ class MainWindow(QMainWindow):
             self._repair_done,
             self.current_file,
             output,
-            False,
             self.repair_checksum_ck.isChecked(),
             self.repair_size_ck.isChecked(),
-            self.repair_security_ck.isChecked(),
+            self.repair_password_ck.isChecked(),
         )
 
     def _repair_done(self, report):

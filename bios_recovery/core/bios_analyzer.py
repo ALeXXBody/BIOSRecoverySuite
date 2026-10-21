@@ -19,6 +19,7 @@ class BiosType(Enum):
     APPLE_EFI = auto()
     COREBOOT = auto()
     AMI_CAPSULE = auto()
+    UEFI_FV = auto()
 
 
 class RegionType(Enum):
@@ -139,7 +140,18 @@ class BiosAnalyzer:
         if self.FV_SIGNATURE in data[:0x100]:
             return BiosType.AMI_APTIO
 
-        return self._heuristic_detect(data)
+        heuristic = self._heuristic_detect(data)
+        if heuristic != BiosType.UNKNOWN:
+            return heuristic
+
+        # Vendor header not found, but the image still carries UEFI firmware
+        # volumes (e.g. a full-SPI dump whose volumes start past the first
+        # 0x100 bytes). Report the format rather than calling it unknown.
+        volumes: list[RegionInfo] = []
+        self._search_firmware_volumes(data, volumes)
+        if volumes:
+            return BiosType.UEFI_FV
+        return BiosType.UNKNOWN
 
     def _heuristic_detect(self, data: bytes) -> BiosType:
         signatures = {
