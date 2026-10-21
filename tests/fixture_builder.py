@@ -35,6 +35,7 @@ def make_fv_header(fv_size: int) -> bytes:
     hdr[0x36] = 0x02
     struct.pack_into("<II", hdr, 0x37, 0x20000, fv_size // 0x20000)
     struct.pack_into("<II", hdr, 0x3F, 0xFFFFFFFF, 0xFFFFFFFF)
+    struct.pack_into("<H", hdr, 0x32, (0x10000 - sum(struct.unpack_from("<36H", hdr))) & 0xFFFF)
     return bytes(hdr)
 
 
@@ -127,15 +128,15 @@ def build_intel_ifd_image(size: int = 0x1000000) -> bytes:
 
     # Intel Flash Descriptor
     struct.pack_into("<I", data, fd + 0x00, 0x0FF0A55A)
-    struct.pack_into("<I", data, fd + 0x10, 0x00100001)          # FLMAP0: FRBA=0x100, MSA=0x1000
-    struct.pack_into("<I", data, fd + 0x14, 0x00200000)          # FLMAP1: FPSBA=0x200, FMBA=0
-    struct.pack_into("<I", data, fd + 0x18, 0x00000000)          # FLMAP2
+    struct.pack_into("<I", data, fd + 0x04, 0x00100001)          # FLMAP0: FRBA=0x100, NC=2
+    struct.pack_into("<I", data, fd + 0x08, 0x00200000)          # FLMAP1: FPSBA=0x200
+    struct.pack_into("<I", data, fd + 0x0C, 0x00000000)          # FLMAP2
 
     frba = fd + 0x100
-    struct.pack_into("<I", data, frba + 0x00, flreg(fd, fd + 0x1000))   # Descriptor
-    struct.pack_into("<I", data, frba + 0x08, flreg(bios, size))        # BIOS
-    struct.pack_into("<I", data, frba + 0x10, flreg(me, gbe))           # ME
-    struct.pack_into("<I", data, frba + 0x18, flreg(gbe, gbe + 0x1000)) # GbE
+    struct.pack_into("<I", data, frba + 0x00, flreg(fd, fd + 0x1000))   # FREG0 Descriptor
+    struct.pack_into("<I", data, frba + 0x04, flreg(bios, size))        # FREG1 BIOS
+    struct.pack_into("<I", data, frba + 0x08, flreg(me, gbe))           # FREG2 ME
+    struct.pack_into("<I", data, frba + 0x0C, flreg(gbe, gbe + 0x1000)) # FREG3 GbE
 
     # PCH straps so HAP testing works (PCHSTRP0 at fpsba)
     fpsba = fd + 0x200
@@ -272,7 +273,7 @@ def _ffs2_fv_header(fv_len: int) -> bytes:
     hdr[0x37] = 0x02                                  # revision
     struct.pack_into("<II", hdr, 0x38, fv_len // 0x1000, 0x1000)
     struct.pack_into("<II", hdr, 0x40, 0, 0)
-    struct.pack_into("<H", hdr, 0x32, (0x10000 - sum(hdr)) & 0xFFFF)
+    struct.pack_into("<H", hdr, 0x32, (0x10000 - sum(struct.unpack_from("<36H", hdr))) & 0xFFFF)
     return bytes(hdr)
 
 

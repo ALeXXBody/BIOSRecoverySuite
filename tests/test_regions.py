@@ -73,3 +73,51 @@ def test_firmware_volume_header_parsed(intel_ifd):
 def test_hex_view(intel_ifd):
     data = BiosAnalyzer().get_hex_view(intel_ifd, 0, 16)
     assert data[:4] == b"\x5a\xa5\xf0\x0f"
+
+def _write_image(tmp_path, blobs):
+    """Build a 64 KB 0xFF image with the given (offset, bytes) blobs written in."""
+    data = bytearray(b"\xFF" * 0x10000)
+    for offset, blob in blobs:
+        data[offset:offset + len(blob)] = blob
+    path = tmp_path / "fv.bin"
+    path.write_bytes(bytes(data))
+    return str(path)
+
+
+def test_firmware_volumes_typed_and_bios_span_derived(tmp_path):
+    from bios_recovery.core.bios_analyzer import RegionType
+    from tests.fixture_builder import make_fv_header
+
+    path = _write_image(tmp_path, [(0x1000, make_fv_header(0x4000))])
+    result = BiosAnalyzer().analyze(path)
+
+    fvs = [r for r in result.regions if r.region_type == RegionType.FIRMWARE_VOLUME]
+    assert [(r.offset, r.size) for r in fvs] == [(0x1000, 0x4000)]
+    bios = [r for r in result.regions if r.region_type == RegionType.BIOS]
+    assert [(r.offset, r.size) for r in bios] == [(0x1000, 0x4000)]
+
+
+def test_corrupt_firmware_volume_header_rejected(tmp_path):
+    from bios_recovery.core.bios_analyzer import RegionType
+    from tests.fixture_builder import make_fv_header
+
+    hdr = bytearray(make_fv_header(0x4000))
+    hdr[0x10] ^= 0x01  # alter a GUID byte; header word-sum no longer verifies
+    path = _write_image(tmp_path, [(0x1000, bytes(hdr))])
+    result = BiosAnalyzer().analyze(path)
+
+    assert not [r for r in result.regions if r.region_type == RegionType.FIRMWARE_VOLUME]
+    assert not [r for r in result.regions if r.region_type == RegionType.BIOS]
+
+
+def test_nested_volume_match_not_reported(tmp_path):
+    from bios_recovery.core.bios_analyzer import RegionType
+    from tests.fixture_builder import make_fv_header
+
+    outer = make_fv_header(0x8000)
+    inner = make_fv_header(0x800)
+    path = _write_image(tmp_path, [(0x2000, outer), (0x2100, inner)])
+    result = BiosAnalyzer().analyze(path)
+
+    fvs = [r for r in result.regions if r.region_type == RegionType.FIRMWARE_VOLUME]
+    assert [r.offset for r in fvs] == [0x2000]

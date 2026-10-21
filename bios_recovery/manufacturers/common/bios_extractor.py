@@ -399,57 +399,19 @@ class BiosExtractor:
         return result
 
     def _find_bios_regions(self, data: bytes) -> list[tuple[int, int]]:
-        regions = []
-        fd_offset = self._find_intel_fd(data)
-        if fd_offset >= 0:
-            try:
-                flmap0 = struct.unpack_from("<I", data, fd_offset + 0x10)[0]
-                frba = ((flmap0 >> 16) & 0xFF) << 4
-                frba_abs = fd_offset + frba
-                if frba_abs + 0x20 <= len(data):
-                    bios_flreg = struct.unpack_from("<I", data, frba_abs + 0x08)[0]
-                    base = (bios_flreg & 0x7FFF) << 12
-                    limit = ((bios_flreg >> 16) & 0x7FFF) << 12 | 0xFFF
-                    if base < limit and limit < len(data):
-                        regions.append((base, limit - base + 1))
-            except struct.error:
-                pass
-
-        if not regions:
-            idx = 0
-            while True:
-                idx = data.find(self.FV_SIGNATURE, idx)
-                if idx < 0:
-                    break
-                fv_start = max(0, idx - 0x28)
-                if fv_start + 0x30 <= len(data):
-                    try:
-                        fv_size = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
-                        if 0 < fv_size < len(data):
-                            regions.append((fv_start, min(fv_size, len(data) - fv_start)))
-                    except struct.error:
-                        pass
-                idx += 4
-
-        return regions
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionType
+        analyzer = BiosAnalyzer()
+        regions = analyzer._parse_intel_ifd(data) if self._find_intel_fd(data) >= 0 else []
+        analyzer._search_firmware_volumes(data, regions)
+        analyzer._add_derived_bios(regions)
+        return [(r.offset, r.size) for r in regions if r.region_type == RegionType.BIOS]
 
     def _find_me_regions(self, data: bytes) -> list[tuple[int, int]]:
-        regions = []
-        fd_offset = self._find_intel_fd(data)
-        if fd_offset >= 0:
-            try:
-                flmap0 = struct.unpack_from("<I", data, fd_offset + 0x10)[0]
-                frba = ((flmap0 >> 16) & 0xFF) << 4
-                frba_abs = fd_offset + frba
-                if frba_abs + 0x18 <= len(data):
-                    me_flreg = struct.unpack_from("<I", data, frba_abs + 0x10)[0]
-                    base = (me_flreg & 0x7FFF) << 12
-                    limit = ((me_flreg >> 16) & 0x7FFF) << 12 | 0xFFF
-                    if base < limit and limit < len(data):
-                        regions.append((base, limit - base + 1))
-            except struct.error:
-                pass
-        return regions
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionType
+        if self._find_intel_fd(data) < 0:
+            return []
+        regions = BiosAnalyzer()._parse_intel_ifd(data)
+        return [(r.offset, r.size) for r in regions if r.region_type == RegionType.INTEL_ME]
 
     def _find_firmware_volumes(self, data: bytes) -> list[tuple[int, int]]:
         regions = []

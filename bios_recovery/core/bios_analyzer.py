@@ -32,6 +32,7 @@ class RegionType(Enum):
     PLATFORM_DATA = auto()
     EC = auto()
     NVRAM = auto()
+    FIRMWARE_VOLUME = auto()
 
 
 @dataclass
@@ -176,9 +177,12 @@ class BiosAnalyzer:
         if bios_type == BiosType.INTEL_IFD:
             regions = self._parse_intel_ifd(data)
             self._search_firmware_volumes(data, regions)
+            self._add_derived_bios(regions)
+            self._search_me_region(data, regions)
             return regions
         regions = []
         self._search_firmware_volumes(data, regions)
+        self._add_derived_bios(regions)
         self._search_me_region(data, regions)
         return regions
 
@@ -198,11 +202,13 @@ class BiosAnalyzer:
         if fd_offset + 0x20 > len(data):
             return regions
 
-        flmap0 = struct.unpack_from("<I", data, fd_offset + 0x10)[0]
+        # FLMAP0 is the second dword of the descriptor (FLVALSIG is the first);
+        # FRBA is bits 23:16 in 16-byte units, relative to the descriptor start.
+        flmap0 = struct.unpack_from("<I", data, fd_offset + 0x04)[0]
         frba = ((flmap0 >> 16) & 0xFF) << 4
         frba_abs = fd_offset + frba
 
-        if frba_abs + 0x30 > len(data):
+        if frba_abs + 0x14 > len(data):
             return regions
 
         region_defs = [
@@ -213,8 +219,8 @@ class BiosAnalyzer:
         ]
 
         for idx, rtype, name in region_defs:
-            off = frba_abs + idx * 8
-            if off + 8 > len(data):
+            off = frba_abs + idx * 4
+            if off + 4 > len(data):
                 break
             flreg = struct.unpack_from("<I", data, off)[0]
             base = (flreg & 0x7FFF) << 12
@@ -241,25 +247,65 @@ class BiosAnalyzer:
         return -1
 
     def _search_firmware_volumes(self, data: bytes, regions: list[RegionInfo]) -> None:
-        fv_offset = 0
+        """Add one FIRMWARE_VOLUME region per validated top-level volume.
+
+        A match counts only if the header checksum verifies and the volume lies
+        inside the image. Matches nested in an already accepted volume are
+        skipped, so stray "_FVH" bytes inside a volume are not reported.
+        """
+        accepted: list[tuple[int, int]] = []
+        pos = 0
         while True:
-            idx = data.find(self.FV_SIGNATURE, fv_offset)
+            idx = data.find(self.FV_SIGNATURE, pos)
             if idx < 0:
                 break
-            fv_start = max(0, idx - 0x28)
-            if fv_start + 0x30 <= len(data):
-                try:
-                    fv_size = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
-                    if fv_size > 0 and fv_size < len(data):
-                        regions.append(RegionInfo(
-                            region_type=RegionType.BIOS,
-                            offset=fv_start,
-                            size=min(fv_size, len(data) - fv_start),
-                            name=f"Firmware Volume @0x{fv_start:X}",
-                        ))
-                except struct.error:
-                    pass
-            fv_offset = idx + 4
+            pos = idx + len(self.FV_SIGNATURE)
+            fv_start = idx - 0x28
+            if fv_start < 0 or any(lo <= fv_start < hi for lo, hi in accepted):
+                continue
+            fv_len = self._valid_fv_length(data, fv_start)
+            if not fv_len:
+                continue
+            accepted.append((fv_start, fv_start + fv_len))
+            regions.append(RegionInfo(
+                region_type=RegionType.FIRMWARE_VOLUME,
+                offset=fv_start,
+                size=fv_len,
+                name=f"Firmware Volume @0x{fv_start:X}",
+            ))
+
+    @staticmethod
+    def _valid_fv_length(data: bytes, fv_start: int) -> int:
+        """Return the FvLength of a well-formed EFI_FIRMWARE_VOLUME_HEADER, else 0."""
+        if fv_start + 0x48 > len(data):
+            return 0
+        fv_len = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
+        hdr_len = struct.unpack_from("<H", data, fv_start + 0x30)[0]
+        if fv_len == 0 or hdr_len < 0x48 or hdr_len > fv_len:
+            return 0
+        if fv_start + fv_len > len(data) or fv_start + hdr_len > len(data):
+            return 0
+        words = struct.unpack_from(f"<{hdr_len // 2}H", data, fv_start)
+        if sum(words) & 0xFFFF:
+            return 0
+        return fv_len
+
+    @staticmethod
+    def _add_derived_bios(regions: list[RegionInfo]) -> None:
+        """If the descriptor does not advertise a BIOS region, span the volumes instead."""
+        if any(r.region_type == RegionType.BIOS for r in regions):
+            return
+        volumes = [r for r in regions if r.region_type == RegionType.FIRMWARE_VOLUME]
+        if not volumes:
+            return
+        start = min(r.offset for r in volumes)
+        end = max(r.offset + r.size for r in volumes)
+        regions.append(RegionInfo(
+            region_type=RegionType.BIOS,
+            offset=start,
+            size=end - start,
+            name="BIOS (span of firmware volumes)",
+        ))
 
     def _search_me_region(self, data: bytes, regions: list[RegionInfo]) -> None:
         fpt_pos = data.find(self.FPT_SIGNATURE)

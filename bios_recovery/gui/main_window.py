@@ -311,10 +311,15 @@ class MainWindow(QMainWindow):
             f"<span style='color:#7F849C;font-size:11px'>Vendor</span><br>"
             f"<b>{traits.vendor}</b>"
         )
-        me = (f"{result.me_version}" if result.me_version else "not present")
+        if result.me_version:
+            me = result.me_version
+        elif result.has_me_region:
+            me = "present (version unknown)"
+        else:
+            me = "not present"
         self._cards["Firmware"].setText(
             f"<span style='color:#7F849C;font-size:11px'>Regions</span><br>"
-            f"<b>{result.total_regions} firmware volumes</b><br>"
+            f"<b>{sum(1 for r in result.regions if r.region_type.name == 'FIRMWARE_VOLUME')} firmware volumes</b><br>"
             f"<span style='color:#7F849C;font-size:11px'>ME</span><br>"
             f"<b>{me}</b>"
         )
