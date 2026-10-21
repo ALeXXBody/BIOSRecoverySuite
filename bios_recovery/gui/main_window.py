@@ -11,6 +11,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QTabWidget,
+    QFrame,
+    QGridLayout,
+    QToolButton,
     QPushButton,
     QLabel,
     QFileDialog,
@@ -163,7 +166,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs, 1)
 
         self.main_tab = self._build_main_tab()
-        self.platform_tab = self._build_platform_tab()
         self.repair_tab = self._build_repair_tab()
         self.me_tab = self._build_me_tab()
         self.dmi_tab = self._build_dmi_tab()
@@ -175,18 +177,17 @@ class MainWindow(QMainWindow):
         self.ec_tab = ECTab(self)
         self.lenovo_tab = LenovoTab(self)
 
-        self.tabs.addTab(self.main_tab, "Overview")
-        self.tabs.addTab(self.platform_tab, "Platform")
-        self.tabs.addTab(self.repair_tab, "Repair")
-        self.tabs.addTab(self.me_tab, "ME Cleaner")
-        self.tabs.addTab(self.dmi_tab, "DMI")
-        self.tabs.addTab(self.password_tab, "Security")
-        self.tabs.addTab(self.extract_tab, "Extract")
-        self.tabs.addTab(self.hex_tab, "Hex Viewer")
-        self.tabs.addTab(self.passgen_tab, "Passwords")
-        self.tabs.addTab(self.spi_tab, "SPI Flasher")
-        self.tabs.addTab(self.ec_tab, "EC Patching")
-        self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock")
+        self.tabs.addTab(self.main_tab, "Overview", "Overview")
+        self.tabs.addTab(self.repair_tab, "Repair", "Repair")
+        self.tabs.addTab(self.ec_tab, "EC Patching", "Repair")
+        self.tabs.addTab(self.me_tab, "ME Cleaner", "ME (Intel)")
+        self.tabs.addTab(self.dmi_tab, "DMI", "DMI & Identity")
+        self.tabs.addTab(self.password_tab, "Security", "Security & Passwords")
+        self.tabs.addTab(self.passgen_tab, "Passwords", "Security & Passwords")
+        self.tabs.addTab(self.extract_tab, "Extract", "Firmware")
+        self.tabs.addTab(self.spi_tab, "SPI Flasher", "Firmware")
+        self.tabs.addTab(self.hex_tab, "Hex Viewer", "Firmware")
+        self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock", "Vendor Tools")
 
         self._build_menubar()
 
@@ -216,13 +217,34 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        info_group = QGroupBox("BIOS Information")
-        info_layout = QVBoxLayout(info_group)
         self.info_text = QPlainTextEdit()
         self.info_text.setReadOnly(True)
         self.info_text.setMaximumHeight(200)
-        info_layout.addWidget(self.info_text)
-        layout.addWidget(info_group)
+
+        cards = QGridLayout()
+        cards.setSpacing(8)
+        self._cards = {}
+        for col, title in enumerate(("File", "Platform", "Firmware", "Issues")):
+            frame = QFrame()
+            frame.setObjectName("overviewCard")
+            frame.setStyleSheet(
+                "QFrame#overviewCard { background: #252537; border: 1px solid #313244; border-radius: 8px; }"
+                " QFrame#overviewCard QLabel { background: transparent; }"
+            )
+            card_layout = QVBoxLayout(frame)
+            card_layout.setContentsMargins(12, 8, 12, 8)
+            heading = QLabel(title.upper())
+            heading.setStyleSheet("color: #7F849C; font-size: 11px; font-weight: bold;")
+            body = QLabel("—")
+            body.setTextFormat(Qt.RichText)
+            body.setWordWrap(True)
+            body.setStyleSheet("font-size: 14px;")
+            card_layout.addWidget(heading)
+            card_layout.addWidget(body)
+            card_layout.addStretch(1)
+            cards.addWidget(frame, 0, col)
+            self._cards[title] = body
+        layout.addLayout(cards)
 
         caps_layout = QHBoxLayout()
         self.capsule_btn = QPushButton("Capsule → Flashable Image")
@@ -253,7 +275,57 @@ class MainWindow(QMainWindow):
         self.main_status = QLabel("")
         layout.addWidget(self.main_status)
 
+        layout.addWidget(self._collapsible("Full report", self.info_text))
+        layout.addWidget(self._collapsible("Platform classification", self._build_platform_tab()))
+
         return widget
+
+    def _collapsible(self, title, content):
+        box = QWidget()
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(0, 0, 0, 0)
+        toggle = QToolButton()
+        toggle.setText(f"▸ {title}")
+        toggle.setCheckable(True)
+        toggle.setStyleSheet("QToolButton { color: #7F849C; font-weight: bold; padding: 4px 0; border: none; }")
+        content.setVisible(False)
+
+        def on_toggled(checked):
+            toggle.setText(f"{'▾' if checked else '▸'} {title}")
+            content.setVisible(checked)
+
+        toggle.toggled.connect(on_toggled)
+        box_layout.addWidget(toggle)
+        box_layout.addWidget(content)
+        return box
+
+    def _update_overview_cards(self, result, traits):
+        size_mb = result.file_size / 0x100000
+        self._cards["File"].setText(
+            f"<span style='color:#7F849C;font-size:11px'>Size</span><br>"
+            f"<b>{size_mb:.2f} MB</b><br>"
+            f"<span style='color:#7F849C;font-size:11px'>SHA256</span><br>"
+            f"<b>{(result.sha256 or '')[:16]}…</b>"
+        )
+        self._cards["Platform"].setText(
+            f"<span style='color:#7F849C;font-size:11px'>Architecture</span><br>"
+            f"<b>{traits.architecture.upper()}</b><br>"
+            f"<span style='color:#7F849C;font-size:11px'>Vendor</span><br>"
+            f"<b>{traits.vendor}</b>"
+        )
+        me = (f"{result.me_version}" if result.me_version else "not present")
+        self._cards["Firmware"].setText(
+            f"<span style='color:#7F849C;font-size:11px'>Regions</span><br>"
+            f"<b>{result.total_regions} firmware volumes</b><br>"
+            f"<span style='color:#7F849C;font-size:11px'>ME</span><br>"
+            f"<b>{me}</b>"
+        )
+        issues = result.issues or []
+        first = issues[0] if issues else "none"
+        self._cards["Issues"].setText(
+            f"<span style='color:#7F849C;font-size:11px'>Open</span><br>"
+            f"<b>{len(issues)}</b> — {first}"
+        )
 
     def _build_platform_tab(self):
         widget = QWidget()
@@ -739,7 +811,9 @@ class MainWindow(QMainWindow):
         )
         # Platform-traits gating (architecture/vendor → which tools apply)
         from bios_recovery.core.traits import classify
-        self._apply_traits(classify(self._read_current_file_bytes()))
+        traits = classify(self._read_current_file_bytes())
+        self._apply_traits(traits)
+        self._update_overview_cards(result, traits)
         if hasattr(self, "analyze_btn"):
             self.analyze_btn.setEnabled(True)
         self.tabs.setCurrentWidget(self.main_tab)
