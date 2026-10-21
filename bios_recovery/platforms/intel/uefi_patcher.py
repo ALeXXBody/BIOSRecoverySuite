@@ -101,7 +101,7 @@ class UEFIPatcher:
 
     def _default_patches_path(self) -> str:
         here = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(os.path.dirname(here), "patches", "lenovo_patches.txt")
+        return os.path.join(os.path.dirname(os.path.dirname(here)), "patches", "lenovo_patches.txt")
 
     # ------------------------------------------------------------------ #
     #  patch registry                                                    #
@@ -589,7 +589,7 @@ class UEFIPatcher:
 
     def _default_dxe_registry_path(self) -> str:
         here = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(os.path.dirname(here), "patches", "dxe_replacements.json")
+        return os.path.join(os.path.dirname(os.path.dirname(here)), "patches", "dxe_replacements.json")
 
     def load_dxe_replacements(self, registry_path: Optional[str] = None) -> list[dict]:
         path = registry_path or self._default_dxe_registry_path()

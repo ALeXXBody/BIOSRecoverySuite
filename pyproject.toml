@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "BIOSRecoverySuite"
-version = "0.3.4"
+version = "0.3.5"
 description = "Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password removal tool"
 readme = "README.md"
 license = {text = "MIT"}
