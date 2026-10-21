@@ -3,7 +3,7 @@
 import struct
 
 from tests.fixture_builder import build_intel_ifd_image
-from bios_recovery.engines.me_injector import MEInjector, detect_me_version_in_blob
+from bios_recovery.platforms.intel.me.me_injector import MEInjector, detect_me_version_in_blob
 from bios_recovery.engines.dmi_clone import DMIClone
 from bios_recovery.engines.dmi_extractor import DMIExtractor
 
@@ -54,7 +54,7 @@ def test_me_inject_roundtrip(tmp_path):
     # descriptor untouched
     assert fixed[:0x1000] == build_intel_ifd_image()[:0x1000]
     # region now carries the new firmware, FF-padded to the region size
-    from bios_recovery.engines.me_injector import detect_me_version_in_blob as dv
+    from bios_recovery.platforms.intel.me.me_injector import detect_me_version_in_blob as dv
     region = fixed[0x1000:0x1000 + 0x3FF000]
     assert dv(region).startswith("9.5")
     assert region[-1] == _read(str(clean))[-1]  # equal-size blob, no padding

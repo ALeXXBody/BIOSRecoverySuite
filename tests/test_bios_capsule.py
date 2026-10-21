@@ -2,7 +2,7 @@
 
 import struct
 
-from bios_recovery.engines.bios_capsule import (
+from bios_recovery.manufacturers.common.bios_capsule import (
     APTIO_CAPSULE_GUID_LE,
     detect_capsule,
     extract_flashable_image,

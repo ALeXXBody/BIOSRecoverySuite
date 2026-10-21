@@ -2,7 +2,7 @@
 
 import struct
 
-from bios_recovery.engines.dmi_editor import DMIEditor
+from bios_recovery.core.dmi_editor import DMIEditor
 
 UUID = "2c4a6b8d0011223344556677889aaabb"
 SERIAL = "AS3FYGD3jB"

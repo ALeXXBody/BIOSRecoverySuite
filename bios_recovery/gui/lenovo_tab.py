@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bios_recovery.engines.uefi_patcher import UEFIPatcher, UEFIPatchError
+from bios_recovery.platforms.intel.uefi_patcher import UEFIPatcher, UEFIPatchError
 
 
 class LenovoTab(QWidget):

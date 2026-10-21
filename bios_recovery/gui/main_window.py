@@ -33,15 +33,15 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
 from PySide6.QtGui import QIcon
 
-from bios_recovery.engines.bios_analyzer import BiosAnalyzer, BiosType
-from bios_recovery.engines.me_cleaner import IntelMECleaner
-from bios_recovery.engines.dmi_extractor import DMIExtractor
-from bios_recovery.engines.password_remover import PasswordRemover
-from bios_recovery.engines.bios_repair import BiosRepairEngine
-from bios_recovery.engines.bios_extractor import BiosExtractor
-from bios_recovery.engines.hp_unlocker import HPUnlocker
-from bios_recovery.engines.me_injector import MEInjector
-from bios_recovery.engines.dmi_clone import DMIClone
+from bios_recovery.core.bios_analyzer import BiosAnalyzer, BiosType
+from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
+from bios_recovery.core.dmi_extractor import DMIExtractor
+from bios_recovery.core.password_remover import PasswordRemover
+from bios_recovery.core.bios_repair import BiosRepairEngine
+from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
+from bios_recovery.manufacturers.hp.hp_unlocker import HPUnlocker
+from bios_recovery.platforms.intel.me.me_injector import MEInjector
+from bios_recovery.core.dmi_clone import DMIClone
 from bios_recovery.utils import master_passwords
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
 from bios_recovery.gui.spi_tab import SPITab
@@ -49,7 +49,7 @@ from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
 from bios_recovery.gui.update_dialog import UpdateDialog, CheckWorker
 from bios_recovery import __version__
-from bios_recovery.engines import mea_bridge
+from bios_recovery.platforms.intel.me import mea_bridge
 
 
 class WorkerThread(QThread):
@@ -812,7 +812,7 @@ class MainWindow(QMainWindow):
         self.repair_text.setPlainText("\n".join(lines))
 
     def run_graft(self):
-        from bios_recovery.engines.bios_repair import BiosRepairEngine
+        from bios_recovery.core.bios_repair import BiosRepairEngine
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open the damaged dump first.")
@@ -844,7 +844,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Graft complete: {report.output_path}")
 
     def build_flashable_image(self):
-        from bios_recovery.engines.bios_capsule import extract_flashable_image
+        from bios_recovery.manufacturers.common.bios_capsule import extract_flashable_image
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a capsule update (.CAP/.308/.217) first.")
@@ -874,7 +874,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Flashable image written: {info.output_path}")
 
     def build_flashable_merged(self):
-        from bios_recovery.engines.bios_capsule import extract_flashable_image, restore_nvar_from_dump
+        from bios_recovery.manufacturers.common.bios_capsule import extract_flashable_image, restore_nvar_from_dump
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a capsule update (.CAP/.308/.217) first.")
@@ -1040,7 +1040,7 @@ class MainWindow(QMainWindow):
     def _dmi_editor_summary(self):
         if not self.current_file:
             return []
-        from bios_recovery.engines.dmi_editor import DMIEditor
+        from bios_recovery.core.dmi_editor import DMIEditor
 
         try:
             info = DMIEditor().info(self.current_file)
@@ -1060,7 +1060,7 @@ class MainWindow(QMainWindow):
         ]
 
     def apply_dmi_edits(self):
-        from bios_recovery.engines.dmi_editor import DMIEditor
+        from bios_recovery.core.dmi_editor import DMIEditor
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
@@ -1091,7 +1091,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Identity edit written: {rep.output_path}")
 
     def run_apple_fsys(self):
-        from bios_recovery.engines.apple_efi import fix_fsys_checksum, rom_info
+        from bios_recovery.manufacturers.apple.apple_efi import fix_fsys_checksum, rom_info
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
@@ -1110,7 +1110,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Apple Fsys handling complete")
 
     def recover_dvar_passwords(self):
-        from bios_recovery.engines.dvar_passwords import recover_passwords
+        from bios_recovery.manufacturers.dell.dvar_passwords import recover_passwords
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
@@ -1188,7 +1188,7 @@ class MainWindow(QMainWindow):
         }
         method_name = method_map.get(self.extract_method.currentIndex(), "AUTO")
 
-        from bios_recovery.engines.bios_extractor import ExtractionMethod
+        from bios_recovery.manufacturers.common.bios_extractor import ExtractionMethod
         method = ExtractionMethod[method_name]
 
         self._run_in_thread(self.bios_extractor.extract, self._extract_done, self.current_file, None, method)
@@ -1283,7 +1283,7 @@ class MainWindow(QMainWindow):
         )
 
 def _apple_fsys_task(file_path):
-    from bios_recovery.engines.apple_efi import fix_fsys_checksum, rom_info
+    from bios_recovery.manufacturers.apple.apple_efi import fix_fsys_checksum, rom_info
     info = rom_info(file_path)
     rep = fix_fsys_checksum(file_path)
     rep.notes = [f"rom_info: {info}"]

@@ -7,7 +7,7 @@ from tests.fixture_builder import (
     UEFI_PATCH_TARGET_GUID, UEFI_PATCH_OTHER_GUID,
     ADV_PATTERN, ADV_REPLACEMENT, WW_PATTERN, TAMPER_MARKER,
 )
-from bios_recovery.engines.uefi_patcher import UEFIPatcher, bytes_to_guid
+from bios_recovery.platforms.intel.uefi_patcher import UEFIPatcher, bytes_to_guid
 
 
 def _read(path):

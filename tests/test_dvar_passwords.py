@@ -2,7 +2,7 @@
 
 import struct
 
-from bios_recovery.engines.dvar_passwords import (
+from bios_recovery.manufacturers.dell.dvar_passwords import (
     RECORD_LEN,
     _key_slot_for_pos,
     recover_passwords,

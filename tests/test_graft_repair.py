@@ -2,7 +2,7 @@
 
 import struct
 
-from bios_recovery.engines.bios_repair import BiosRepairEngine
+from bios_recovery.core.bios_repair import BiosRepairEngine
 from bios_recovery.engines.bios_capsule import APTIO_CAPSULE_GUID_LE
 
 NV_BASE = 0x1000000

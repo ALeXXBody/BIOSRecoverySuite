@@ -120,14 +120,14 @@ def classify(data: bytes) -> Traits:
     # ME family details for Intel
     if t.architecture in (ARCH_INTEL, ARCH_APPLE_INTEL):
         try:
-            from bios_recovery.engines.me_cleaner import IntelMECleaner
+            from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
             info = IntelMECleaner()._get_me_version(data, 0, len(data)) if False else None
         except Exception:
             info = ""
         # light-weight manifest probe (no heavy per-region detection here)
         fam = ""
         try:
-            from bios_recovery.utils.me_manifest import iter_manifest_versions
+            from bios_recovery.core.me_manifest import iter_manifest_versions
             mvs = iter_manifest_versions(data)
             if mvs:
                 maj = mvs[0][0].split(".")[0]

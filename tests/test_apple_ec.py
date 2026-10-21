@@ -3,7 +3,7 @@
 import binascii
 import struct
 
-from bios_recovery.engines.apple_efi import (
+from bios_recovery.manufacturers.apple.apple_efi import (
     CRC32_SIZE,
     FSYS_MARKER,
     fix_fsys_checksum,
@@ -12,7 +12,7 @@ from bios_recovery.engines.apple_efi import (
     rom_info,
     set_serial_number,
 )
-from bios_recovery.engines.ec_patcher import ECPatcher
+from bios_recovery.platforms.ec.ec_patcher import ECPatcher
 
 SERIAL = "C02X1234JKLM"
 

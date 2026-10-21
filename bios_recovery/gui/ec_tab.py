@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bios_recovery.engines.ec_patcher import ECPatcher, ECStatus
+from bios_recovery.platforms.ec.ec_patcher import ECPatcher, ECStatus
 
 
 class ECTab(QWidget):

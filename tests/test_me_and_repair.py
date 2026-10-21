@@ -2,7 +2,7 @@
 
 import os
 
-from bios_recovery.engines.me_cleaner import IntelMECleaner, MeCleanResult
+from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner, MeCleanResult
 from bios_recovery.engines.bios_repair import BiosRepairEngine
 
 

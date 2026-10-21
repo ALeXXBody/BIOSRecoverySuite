@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from bios_recovery.engines.spi_flasher import SPIFlasher, ChipInfo, SPIStatus
+from bios_recovery.apps.spi_flasher import SPIFlasher, ChipInfo, SPIStatus
 
 
 FAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_flashrom.py")

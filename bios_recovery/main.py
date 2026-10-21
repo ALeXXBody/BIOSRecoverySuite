@@ -172,7 +172,7 @@ def _cli_main(argv) -> int:
         return 2
 
     if args.command == "analyze":
-        from bios_recovery.engines.bios_analyzer import BiosAnalyzer
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer
         r = BiosAnalyzer().analyze(f)
         print(f"type:       {r.bios_type.name}")
         print(f"size:       {r.file_size:,}")
@@ -187,7 +187,7 @@ def _cli_main(argv) -> int:
         return 0
 
     if args.command == "extract":
-        from bios_recovery.engines.bios_extractor import BiosExtractor
+        from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
         r = BiosExtractor().extract(f, output_dir=args.out)
         print(f"method: {r.method_used} success={r.success}")
         print(f"dir:    {r.output_dir}")
@@ -198,7 +198,7 @@ def _cli_main(argv) -> int:
         return 0 if r.success else 1
 
     if args.command == "graft":
-        from bios_recovery.engines.bios_repair import BiosRepairEngine
+        from bios_recovery.core.bios_repair import BiosRepairEngine
         rep = BiosRepairEngine().auto_graft_from_donor(f, args.donor, args.out)
         for op in rep.operations:
             print(f"  + {op}")
@@ -208,7 +208,7 @@ def _cli_main(argv) -> int:
         return 0
 
     if args.command == "capsule":
-        from bios_recovery.engines.bios_capsule import extract_flashable_image
+        from bios_recovery.manufacturers.common.bios_capsule import extract_flashable_image
         info_ = extract_flashable_image(f, output_path=args.out)
         if not info_.success:
             print("\n".join(info_.messages), file=sys.stderr)
@@ -220,7 +220,7 @@ def _cli_main(argv) -> int:
         return 0
 
     if args.command == "me-clean":
-        from bios_recovery.engines.me_cleaner import IntelMECleaner
+        from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
         rep_ = IntelMECleaner().clean(f, output_path=args.out,
                                       soft_disable=not args.no_hap)
         for m in rep_.messages:
@@ -229,7 +229,7 @@ def _cli_main(argv) -> int:
         return 0 if rep_.status.name in ("SUCCESS", "ALREADY_CLEAN") else 1
 
     if args.command == "remove-passwords":
-        from bios_recovery.engines.password_remover import PasswordRemover
+        from bios_recovery.core.password_remover import PasswordRemover
         out_f = args.out or f.rsplit(".", 1)[0] + "_nopass.bin"
         rep_ = PasswordRemover().remove_passwords(f, out_f)
         print(f"status: {rep_.status.name}")
@@ -239,7 +239,7 @@ def _cli_main(argv) -> int:
         return 0
 
     if args.command == "recover-passwords":
-        from bios_recovery.engines.dvar_passwords import recover_passwords
+        from bios_recovery.manufacturers.dell.dvar_passwords import recover_passwords
         rep_ = recover_passwords(f)
         print(f"success: {rep_.success}")
         print(f"message: {rep_.message}")
@@ -250,7 +250,7 @@ def _cli_main(argv) -> int:
         return 0 if rep_.success else 1
 
     if args.command == "dmi":
-        from bios_recovery.engines.dmi_editor import DMIEditor
+        from bios_recovery.core.dmi_editor import DMIEditor
         info_ = DMIEditor().info(f)
         if not info_.get("found"):
             print(info_.get("message", "not found"), file=sys.stderr)
@@ -263,7 +263,7 @@ def _cli_main(argv) -> int:
         return 0
 
     if args.command == "set-dmi":
-        from bios_recovery.engines.dmi_editor import DMIEditor
+        from bios_recovery.core.dmi_editor import DMIEditor
         rep_ = DMIEditor().set_identity(f, output_path=args.out,
                                         serial=args.serial, uuid=args.uuid, mac=args.mac)
         for op in rep_.operations:
@@ -276,7 +276,7 @@ def _cli_main(argv) -> int:
         return 0 if rep_.success else 1
 
     if args.command == "ec-extract":
-        from bios_recovery.engines.ec_patcher import ECPatcher
+        from bios_recovery.platforms.ec.ec_patcher import ECPatcher
         p_ = ECPatcher()
         with open(f, "rb") as fh:
             data = fh.read()
@@ -292,7 +292,7 @@ def _cli_main(argv) -> int:
         return 0
 
     if args.command == "ec-scan":
-        from bios_recovery.engines.ec_patcher import ECPatcher
+        from bios_recovery.platforms.ec.ec_patcher import ECPatcher
         p_ = ECPatcher()
         hits = p_.scan_patch_sites(f)
         found = [h for h in hits if h.get("found")]

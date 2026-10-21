@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bios_recovery.engines.spi_flasher import SPIFlasher, SPIStatus
+from bios_recovery.apps.spi_flasher import SPIFlasher, SPIStatus
 
 
 class SPITab(QWidget):

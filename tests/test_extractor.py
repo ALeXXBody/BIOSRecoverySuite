@@ -1,7 +1,7 @@
 """Regression tests for the vendor BIOS package extractor."""
 
-from bios_recovery.engines.bios_extractor import BiosExtractor
-from bios_recovery.engines.bios_extractor import ExtractionMethod
+from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
+from bios_recovery.manufacturers.common.bios_extractor import ExtractionMethod
 
 
 def test_dell_pfs_extraction(dell_pfs, tmp_path):
