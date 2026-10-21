@@ -687,9 +687,59 @@ class MainWindow(QMainWindow):
             f"Type: {result.bios_type.name} | Regions: {result.total_regions} | "
             f"ME: {result.me_version} {result.me_type} | Issues: {len(result.issues)}"
         )
+        # Platform-traits gating (architecture/vendor → which tools apply)
+        from bios_recovery.core.traits import classify
+        self._apply_traits(classify(self._read_current_file_bytes()))
         if hasattr(self, "analyze_btn"):
             self.analyze_btn.setEnabled(True)
         self.tabs.setCurrentWidget(self.main_tab)
+
+    def _read_current_file_bytes(self):
+        if self.current_file and os.path.exists(self.current_file):
+            with open(self.current_file, "rb") as f:
+                return f.read()
+        return b""
+
+    def _apply_traits(self, traits):
+        """Grey-out platform/vendor-bound tabs with an explicit reason in the tooltip."""
+        from bios_recovery.core.traits import ARCH_AMD, ARCH_INTEL, ARCH_APPLE_INTEL
+
+        rules = {
+            "ME Cleaner": (
+                traits.architecture in (ARCH_INTEL, ARCH_APPLE_INTEL),
+                "Not applicable: AMD platform (no Intel ME)" if traits.architecture == ARCH_AMD
+                else "Not applicable on this platform type",
+            ),
+            "Lenovo Unlock": (
+                traits.vendor == "lenovo",
+                "Not applicable: manufacturer-specific tool (Lenovo)",
+            ),
+            "EC Patching": (True, ""),
+        }
+        for idx in range(self.tabs.count()):
+            title = self.tabs.tabText(idx)
+            rule = rules.get(title)
+            if rule is None:
+                self.tabs.setTabToolTip(idx, "")
+                continue
+            applies, reason = rule
+            self.tabs.setTabEnabled(idx, applies)
+            self.tabs.setTabToolTip(idx, "" if applies else reason)
+
+        # Overview panel: show the classification (the traits matrix)
+        lines = ["", "=== Platform Classification ===",
+                 f"  Architecture: {traits.architecture}",
+                 f"  Vendor: {traits.vendor}",
+                 ]
+        if traits.me_family:
+            lines.append(f"  ME family: {traits.me_family} (version {traits.me_version or '?'} )")
+        for vendor, evs in traits.evidence.items():
+            lines.append(f"  evidence[{vendor}]: {', '.join(evs[:3])}")
+        for init_idx, title in (("ME Cleaner", "ME Cleaner"), ("Lenovo Unlock", "Lenovo Unlock")):
+            applies, reason = rules.get(title, (True, ""))
+            lines.append(f"  tool[{title}]: {'available' if applies else 'disabled — ' + reason}")
+        cur = self.info_text.toPlainText()
+        self.info_text.setPlainText(cur + "\n".join(lines))
 
     def _format_bios_info(self, result) -> str:
         lines = [
