@@ -1,0 +1,109 @@
+"""Flash Image Tool support: ME-to-release mapping, binary identification, CLI."""
+
+import os
+import stat
+import sys
+
+import pytest
+
+from bios_recovery.platforms.intel.me.fit_versions import tool_for_me_version
+from bios_recovery.platforms.intel.me.fit_bridge import (
+    ToolProbe, compatible_with_me, probe_tool,
+)
+
+POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="uses POSIX shell scripts")
+
+
+@pytest.mark.parametrize("me, release, confidence", [
+    ("15.0.3.1402", "v15.0 r15", "listed"),
+    ("15.40.1.1000", "v15.40 r3", "listed"),
+    ("16.1.25.2091", "v16.1 r0", "inferred"),
+    ("14.0.20.1234", "v14.0.20 r20", "listed"),
+    ("14.5.0.1", "v14.5 r7", "listed"),
+    ("12.0.45.1509", "v12 r38", "listed"),
+    ("11.8.50.3470", "v11 r46", "listed"),
+    ("9.5.14.1724", "v9.5 r6", "inferred"),
+    ("13.0.21.1319", "v13.0 r7", "listed"),
+])
+def test_me_version_maps_to_release(me, release, confidence):
+    m = tool_for_me_version(me)
+    assert m.release == release
+    assert m.confidence == confidence
+
+
+def test_ambiguous_range_is_flagged_not_guessed():
+    m = tool_for_me_version("14.0.11.1002")
+    assert m.confidence == "ambiguous"
+
+
+def test_unknown_or_missing_version():
+    assert tool_for_me_version("").release is None
+    assert tool_for_me_version("garbage").release is None
+
+
+def test_compatibility_requires_same_major():
+    probe = ToolProbe(path="x", identified=True, family="MFIT", version="16.1.25.2053")
+    assert compatible_with_me(probe, "16.1.25.2091")[0] is True
+    ok, why = compatible_with_me(probe, "15.0.3.1402")
+    assert ok is False and "does not match" in why
+
+
+def test_unidentified_tool_is_never_compatible():
+    assert compatible_with_me(ToolProbe(path="x"), "16.1.1.1")[0] is False
+
+
+@POSIX_ONLY
+def test_probe_identifies_linux_mfit(tmp_path):
+    tool = tmp_path / "mfit"
+    tool.write_text("#!/bin/sh\necho 'Modular Flash Image Tool (LINUX64): 16.1.25.2053'\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    probe = probe_tool(str(tool))
+    assert probe.identified and probe.family == "MFIT"
+    assert probe.version == "16.1.25.2053" and probe.platform == "LINUX64"
+
+
+@POSIX_ONLY
+def test_probe_refuses_other_programs(tmp_path):
+    tool = tmp_path / "other"
+    tool.write_text("#!/bin/sh\necho 'hello world'\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    probe = probe_tool(str(tool))
+    assert not probe.identified and "not a Flash Image Tool" in probe.error
+
+
+@POSIX_ONLY
+def test_probe_times_out(tmp_path):
+    tool = tmp_path / "slow"
+    tool.write_text("#!/bin/sh\nsleep 5\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    probe = probe_tool(str(tool), timeout=1)
+    assert not probe.identified and "within" in probe.error
+
+
+def test_probe_refuses_missing_and_non_executable(tmp_path):
+    assert "not a file" in probe_tool(str(tmp_path / "nope")).error
+    plain = tmp_path / "plain"
+    plain.write_text("x")
+    if os.name != "nt":
+        plain.chmod(0o644)
+        assert "not executable" in probe_tool(str(plain)).error
+
+
+def test_cli_fit_info_reports_release(intel_ifd, capsys):
+    from bios_recovery.main import _cli_main
+    rc = _cli_main(["fit-info", intel_ifd])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "tool release: v12 r38" in out
+
+
+@POSIX_ONLY
+def test_cli_fit_info_checks_supplied_tool(intel_ifd, tmp_path, capsys):
+    from bios_recovery.main import _cli_main
+    tool = tmp_path / "mfit"
+    tool.write_text("#!/bin/sh\necho 'Modular Flash Image Tool (LINUX64): 16.1.25.2053'\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    rc = _cli_main(["fit-info", intel_ifd, "--tool", str(tool)])
+    out = capsys.readouterr().out
+    assert rc == 4
+    assert "compatible:   no" in out

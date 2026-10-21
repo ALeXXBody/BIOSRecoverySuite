@@ -166,6 +166,8 @@ def _cli_main(argv) -> int:
     s_sd.add_argument("--mac", default=None)
     s_ec = add("ec-extract", "locate + extract the EC firmware region")
     s_es = add("ec-scan", "advisory scan: which EC patches' signatures are present")
+    s_fi = add("fit-info", "CSME System Tools release for this image's ME; --tool identifies a FIT/MFIT binary you supplied")
+    s_fi.add_argument("--tool", default=None, help="path to a Flash Image Tool binary you obtained")
 
     args = p.parse_args(argv)
     f = args.file
@@ -304,6 +306,28 @@ def _cli_main(argv) -> int:
         print(f"out: {out_f}")
         return 0
 
+    if args.command == "fit-info":
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer
+        from bios_recovery.platforms.intel.me.fit_versions import tool_for_me_version
+        from bios_recovery.platforms.intel.me.fit_bridge import probe_tool, compatible_with_me
+        me = BiosAnalyzer().analyze(f).me_version
+        match = tool_for_me_version(me)
+        print(f"ME version:   {me or 'n/a'}")
+        print(f"tool release: {match.release or 'none'} [{match.confidence}]"
+              + (f" - {match.note}" if match.note else ""))
+        if args.tool:
+            probe = probe_tool(args.tool)
+            if not probe.identified:
+                print(f"tool:         refused - {probe.error}")
+                return 4
+            ok, why = compatible_with_me(probe, me)
+            print(f"tool:         {probe.family} {probe.version} {probe.platform}".rstrip())
+            for w in probe.warnings:
+                print(f"  warning:    {w}")
+            print(f"compatible:   {'yes' if ok else 'no'} - {why}")
+            return 0 if ok else 4
+        return 0
+
     if args.command == "ec-scan":
         from bios_recovery.platforms.ec.ec_patcher import ECPatcher
         p_ = ECPatcher()
@@ -330,7 +354,7 @@ _CLI_TOOL_FOR_COMMAND = {
 _CLI_COMMANDS = {
     "analyze", "extract", "graft", "capsule", "me-clean",
     "remove-passwords", "recover-passwords", "dmi", "set-dmi",
-    "ec-extract", "ec-scan",
+    "ec-extract", "ec-scan", "fit-info",
 }
 
 
