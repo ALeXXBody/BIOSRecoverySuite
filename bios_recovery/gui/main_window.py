@@ -1052,7 +1052,8 @@ class MainWindow(QMainWindow):
         self.password_text.setPlainText("\n".join(lines))
         self.statusBar().showMessage("DVAR password recovery complete")
 
-    def scan_passwords(self):        if not self.current_file:
+    def scan_passwords(self):
+        if not self.current_file:
             return
         self.scan_btn.setEnabled(False)
         self._run_in_thread(self.password_remover.find_password_in_dump, self._password_scan_done, self.current_file)
