@@ -44,6 +44,7 @@ from bios_recovery.platforms.intel.me.me_injector import MEInjector
 from bios_recovery.core.dmi_clone import DMIClone
 from bios_recovery.utils import master_passwords
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
+from bios_recovery.gui.sidebar_tabs import SidebarTabs
 from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
@@ -135,7 +136,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        self.tabs = QTabWidget()
+        self.tabs = SidebarTabs()
         layout.addWidget(self.tabs)
 
         self.main_tab = self._build_main_tab()
