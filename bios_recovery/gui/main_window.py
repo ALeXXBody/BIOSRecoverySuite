@@ -512,6 +512,14 @@ class MainWindow(QMainWindow):
         self.dvar_btn.clicked.connect(self.recover_dvar_passwords)
         layout.addWidget(self.dvar_btn)
 
+        self.apple_btn = QPushButton("Apple Fsys: Fix CRC + Show Info")
+        self.apple_btn.setToolTip(
+            "Detects an Apple EFIROM's Fsys store, reports the serial/HWC/SON, "
+            "and repairs the Fsys CRC32 only when it is invalid (no-op otherwise)."
+        )
+        self.apple_btn.clicked.connect(self.run_apple_fsys)
+        layout.addWidget(self.apple_btn)
+
         hp_group = QGroupBox("HP Unlock (ProBook / EliteBook / ZBook dumps)")
         hp_layout = QVBoxLayout(hp_group)
         hp_layout.addWidget(QLabel(
@@ -1082,6 +1090,25 @@ class MainWindow(QMainWindow):
         self.dmi_text.setPlainText("\n".join(lines))
         self.statusBar().showMessage(f"Identity edit written: {rep.output_path}")
 
+    def run_apple_fsys(self):
+        from bios_recovery.engines.apple_efi import fix_fsys_checksum, rom_info
+
+        if not self.current_file:
+            QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
+            return
+        self.apple_btn.setEnabled(False)
+        self._run_in_thread(_apple_fsys_task, self._apple_fsys_done, self.current_file)
+
+    def _apple_fsys_done(self, rep):
+        self.apple_btn.setEnabled(True)
+        lines = [f"{'Success' if rep.success else 'Failed'}: {rep.message}"]
+        for op in rep.operations:
+            lines.append(f"  + {op}")
+        for warn in rep.warnings:
+            lines.append(f"  ! {warn}")
+        self.password_text.setPlainText("\n".join(lines))
+        self.statusBar().showMessage("Apple Fsys handling complete")
+
     def recover_dvar_passwords(self):
         from bios_recovery.engines.dvar_passwords import recover_passwords
 
@@ -1254,3 +1281,10 @@ class MainWindow(QMainWindow):
             "⚠️ DISCLAIMER: BIOS modification carries risk of bricking.\n"
             "Always create backups before flashing.",
         )
+
+def _apple_fsys_task(file_path):
+    from bios_recovery.engines.apple_efi import fix_fsys_checksum, rom_info
+    info = rom_info(file_path)
+    rep = fix_fsys_checksum(file_path)
+    rep.notes = [f"rom_info: {info}"]
+    return rep

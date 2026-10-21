@@ -163,6 +163,7 @@ def _cli_main(argv) -> int:
     s_sd.add_argument("--uuid", default=None)
     s_sd.add_argument("--mac", default=None)
     s_ec = add("ec-extract", "locate + extract the EC firmware region")
+    s_es = add("ec-scan", "advisory scan: which EC patches' signatures are present")
 
     args = p.parse_args(argv)
     f = args.file
@@ -290,12 +291,25 @@ def _cli_main(argv) -> int:
         print(f"out: {out_f}")
         return 0
 
+    if args.command == "ec-scan":
+        from bios_recovery.engines.ec_patcher import ECPatcher
+        p_ = ECPatcher()
+        hits = p_.scan_patch_sites(f)
+        found = [h for h in hits if h.get("found")]
+        print(f"EC patches in table: {len(hits)}  (signatures present: {len(found)})")
+        for h in hits:
+            if h.get("found"):
+                print(f"  {h['key']:32s} {h['vendor']:12s} gen={h['generation']:24s} "
+                      f"verified={h['verified']} offsets={','.join(h['offsets'])}")
+        return 0
+
     return 1
 
 
 _CLI_COMMANDS = {
     "analyze", "extract", "graft", "capsule", "me-clean",
-    "remove-passwords", "recover-passwords", "dmi", "set-dmi", "ec-extract",
+    "remove-passwords", "recover-passwords", "dmi", "set-dmi",
+    "ec-extract", "ec-scan",
 }
 
 

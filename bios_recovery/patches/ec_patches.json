@@ -23,6 +23,66 @@
       "offset_hint": "EC firmware region",
       "verified": false,
       "source": "community-reported, not hardware-verified"
+    },
+    {
+      "key": "nuvoton_npce_password_status",
+      "vendor": "Nuvoton",
+      "generation": "NPCE/NPCX/NPCY (gen 3+)",
+      "controller": "NPCE",
+      "description": "Zeros the Nuvoton EC 'PasswordStatus' flag used as the BIOS-password state switch.",
+      "signature_hex": "50617373776f7264537461747573",
+      "patch_hex": "0000000000000000000000000000",
+      "offset_hint": "EC firmware region",
+      "verified": false,
+      "source": "community-reported, not hardware-verified"
+    },
+    {
+      "key": "nuvoton_npce_unlock_marker",
+      "vendor": "Nuvoton",
+      "generation": "NPCE/NPCX/NPCY (gen 3+)",
+      "controller": "NPCE",
+      "description": "Zeros the 'UnLock' marker used by some Nuvoton EC images as the password state switch.",
+      "signature_hex": "556e4c6f636b",
+      "patch_hex": "000000000000",
+      "offset_hint": "EC firmware region",
+      "verified": false,
+      "source": "community-reported, not hardware-verified"
+    },
+    {
+      "key": "mec17xx_password_status",
+      "vendor": "Microchip MEC",
+      "generation": "MEC14/15/16/17 (gen 3+)",
+      "controller": "MEC",
+      "description": "Zeros the Microchip MEC password-state flag used on newer Intel/AMD platforms.",
+      "signature_hex": "50617373776f7264537461747573",
+      "patch_hex": "0000000000000000000000000000",
+      "offset_hint": "EC firmware region",
+      "verified": false,
+      "source": "community-reported, not hardware-verified"
+    },
+    {
+      "key": "ene_kb90xx_password_status",
+      "vendor": "ENE",
+      "generation": "KB9012/KB9022 (gen 2+)",
+      "controller": "ENE",
+      "description": "Zeros the ENE KBC password-state flag seen on many older Fujitsu/Toshiba EC images.",
+      "signature_hex": "50617373776f7264537461747573",
+      "patch_hex": "0000000000000000000000000000",
+      "offset_hint": "EC firmware region",
+      "verified": false,
+      "source": "community-reported, not hardware-verified"
+    },
+    {
+      "key": "ite_newgen_it5xxx_password_status",
+      "vendor": "ITE",
+      "generation": "IT55/IT51/IT57 (RISC-V gen, gen 4+)",
+      "controller": "ITE",
+      "description": "Zeros the newer ITE RISC-V EC password-state flag seen on Mendocino-era AMD boards (E1504FA class).",
+      "signature_hex": "50617373776f7264537461747573",
+      "patch_hex": "0000000000000000000000000000",
+      "offset_hint": "EC firmware region",
+      "verified": false,
+      "source": "community-reported, not hardware-verified"
     }
   ]
 }
