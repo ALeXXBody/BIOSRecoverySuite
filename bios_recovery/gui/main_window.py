@@ -49,12 +49,16 @@ from bios_recovery.utils import master_passwords
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
 from bios_recovery.gui.sidebar_tabs import SidebarTabs
 from bios_recovery.gui.settings_page import SettingsPage
+from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
 from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
 from bios_recovery.gui.update_dialog import UpdateDialog, CheckWorker
 from bios_recovery import __version__
 from bios_recovery.platforms.intel.me import mea_bridge
+
+
+from bios_recovery.gui.workers import track, wait_for_workers
 
 
 class WorkerThread(QThread):
@@ -68,6 +72,7 @@ class WorkerThread(QThread):
         self.task = task
         self.args = args
         self.kwargs = kwargs
+        track(self)
 
     def run(self):
         try:
@@ -120,6 +125,8 @@ class MainWindow(QMainWindow):
 
     def _auto_update_check(self):
         """Quiet startup check - only surfaces a dialog when an update exists."""
+        if os.environ.get("BIOS_RECOVERY_NO_UPDATE_CHECK"):
+            return
         self._update_worker = CheckWorker()
         self._update_worker.found.connect(self._show_update_dialog)
         self._update_worker.start()
@@ -187,6 +194,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.spi_tab, "SPI Flasher")
         self.tabs.addTab(self.hex_tab, "Hex Viewer")
         self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock")
+        self.rebuild_page = RebuildCheckPage(
+            self, run_task=lambda task, done: self._run_in_thread(task, done))
+        self.tabs.addTab(self.rebuild_page, "Rebuild Check")
         self.settings_page = SettingsPage(
             self, run_task=lambda task, done: self._run_in_thread(task, done))
         self.tabs.addTab(self.settings_page, "Settings")
@@ -800,6 +810,10 @@ class MainWindow(QMainWindow):
         # prune finished workers so the list does not grow unboundedly
         self._threads = [t for t in self._threads if t.isRunning() or t is thread]
         return thread
+
+    def closeEvent(self, event):
+        wait_for_workers()
+        super().closeEvent(event)
 
     def _show_error(self, error: str):
         QMessageBox.critical(self, "Error", error)

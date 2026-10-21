@@ -92,3 +92,20 @@ def test_cli_verify_rebuild_exit_codes(tmp_path, ifd, capsys):
     bad = _edit(tmp_path, ifd, [(0x402000, 0)], name="bad.bin")
     assert _verify_rebuild_cli([str(ifd), bad]) == 3
     assert "REFUSE" in capsys.readouterr().out
+
+
+def test_bpdt_header_block_is_me_layer(tmp_path):
+    # A BPDT header block (0xAA 0x55 0 0, 13 entries, major 2) in the ME area is ME data.
+    import struct as _s
+    data = bytearray(b"\xFF" * 0x10000)
+    data[0x2000:0x2004] = b"\xaa\x55\x00\x00"
+    _s.pack_into("<HH", data, 0x2004, 13, 0x0201)
+    src = tmp_path / "bpdt.bin"
+    src.write_bytes(bytes(data))
+    cand = bytearray(data)
+    cand[0x2010] ^= 0x5A
+    out = tmp_path / "bpdt_cand.bin"
+    out.write_bytes(bytes(cand))
+    r = verify_rebuild(str(src), str(out))
+    assert r.accepted, r.reasons
+    assert r.spans[0].kind == "me"

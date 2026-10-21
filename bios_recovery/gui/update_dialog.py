@@ -4,6 +4,8 @@ import sys
 import webbrowser
 
 from PySide6.QtCore import QThread, Signal
+
+from bios_recovery.gui.workers import track
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -25,6 +27,10 @@ class CheckWorker(QThread):
     found = Signal(object)          # ReleaseInfo
     not_found = Signal()            # API reachable, no newer version
     failed = Signal(str)            # API unreachable / parse error
+
+    def __init__(self):
+        super().__init__()
+        track(self)
 
     def run(self):
         try:
@@ -48,6 +54,7 @@ class DownloadWorker(QThread):
         super().__init__()
         self.url = url
         self.dest = dest
+        track(self)
 
     def run(self):
         try:

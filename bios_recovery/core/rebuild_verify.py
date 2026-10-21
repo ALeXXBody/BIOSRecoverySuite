@@ -59,7 +59,10 @@ class VerifyResult:
     accepted: bool = False
 
     def summary(self) -> str:
-        verdict = "ACCEPT" if self.accepted else "REFUSE"
+        if self.accepted:
+            verdict = "ACCEPT (region check only; this does not test that the board boots)"
+        else:
+            verdict = "REFUSE"
         return f"{verdict}: {self.changed_bytes} bytes changed in {len(self.spans)} spans"
 
 
@@ -111,6 +114,27 @@ def me_bounds_from_fpt(data: bytes, analyzer: BiosAnalyzer) -> Optional[tuple[in
     return None
 
 
+def bpdt_blocks(data: bytes, bios_spans: list) -> list[tuple[int, int]]:
+    """4 KB boot-partition descriptor table headers that belong to the ME (IFWI) layer.
+
+    A BPDT header is 0x55AA (as 0xAA 0x55 0x00 0x00), a descriptor count of 1 to 32, and
+    a major version of 1 or 2. Blocks overlapping a BIOS or firmware-volume span are
+    excluded; they are firmware, not ME layout.
+    """
+    found = []
+    for off in range(0, len(data) - 8, 0x1000):
+        if data[off:off + 4] != b"\xaa\x55\x00\x00":
+            continue
+        count = struct.unpack_from("<H", data, off + 4)[0]
+        major = data[off + 6]
+        if not (1 <= count <= 32 and major in (1, 2)):
+            continue
+        if any(lo < off + 0x1000 and hi > off for lo, hi in bios_spans):
+            continue
+        found.append((off, 0x1000))
+    return found
+
+
 def _kind_at(offset: int, regions) -> tuple[str, str]:
     for r in regions:
         if r.offset <= offset < r.offset + r.size:
@@ -137,6 +161,10 @@ def verify_rebuild(original_path: str, candidate_path: str,
     if fpt_bounds and not declared:
         regions.append(RegionInfo(RegionType.INTEL_ME, fpt_bounds[0],
                                   fpt_bounds[1] - fpt_bounds[0], "ME (partition table bounds)"))
+    bios_spans = [(r.offset, r.offset + r.size) for r in analysis.regions
+                  if r.region_type in (RegionType.BIOS, RegionType.FIRMWARE_VOLUME)]
+    for off, size in bpdt_blocks(a, bios_spans):
+        regions.append(RegionInfo(RegionType.INTEL_ME, off, size, "ME BPDT header block"))
     analysis.regions = regions
     result = VerifyResult(original_size=len(a), candidate_size=len(b))
     result.boot_guard_tags = [t.decode() for t in BOOT_GUARD_TAGS if t in a]
