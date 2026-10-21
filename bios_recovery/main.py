@@ -128,7 +128,169 @@ def _diagnose_qt_import_failure(exc):
     return "\n".join(lines)
 
 
+def _cli_main(argv) -> int:
+    """Offline CLI mode: `bios-recovery <command> FILE [options]`.
+
+    Mirrors the paid suites' "all CMD line supported" behavior using the app's
+    own engines. Never touches Qt.
+    """
+    import argparse
+
+    p = argparse.ArgumentParser(
+        prog="bios-recovery",
+        description="BIOS Recovery Suite (CLI mode)"
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def add(name, help_):
+        s_ = sub.add_parser(name, help=help_)
+        s_.add_argument("file", help="input file")
+        s_.add_argument("-o", "--out", default=None, help="output path / dir")
+        return s_
+
+    s_an = add("analyze", "analyze a BIOS image")
+    s_ex = add("extract", "extract firmware components (ANY brand EXE/capsule)")
+    s_gr = add("graft", "repair a damaged dump by grafting from a donor")
+    s_gr.add_argument("--donor", required=True, help="known-good capsule/dump")
+    s_ca = add("capsule", "strip an AMI capsule to its bare flash image")
+    s_me = add("me-clean", "clean/soft-disable the Intel ME region")
+    s_me.add_argument("--no-hap", action="store_true", help="skip HAP soft-disable")
+    s_rp = add("remove-passwords", "strip password/security structures")
+    s_dm = add("dmi", "show DMI/SMBIOS identity")
+    s_sd = add("set-dmi", "write identity (serial/uuid/mac, fixed-size edits)")
+    s_sd.add_argument("--serial", default=None)
+    s_sd.add_argument("--uuid", default=None)
+    s_sd.add_argument("--mac", default=None)
+    s_ec = add("ec-extract", "locate + extract the EC firmware region")
+
+    args = p.parse_args(argv)
+    f = args.file
+    if not os.path.exists(f):
+        print(f"Error: file not found: {f}", file=sys.stderr)
+        return 2
+
+    if args.command == "analyze":
+        from bios_recovery.engines.bios_analyzer import BiosAnalyzer
+        r = BiosAnalyzer().analyze(f)
+        print(f"type:       {r.bios_type.name}")
+        print(f"size:       {r.file_size:,}")
+        print(f"me_version: {r.me_version or 'n/a'}")
+        print(f"me_type:    {r.me_type or 'n/a'}")
+        for reg in r.regions:
+            print(f"  region:   {reg.name} @{reg.offset:#x} size {reg.size:#x}")
+        for i in r.issues:
+            print(f"  issue:    {i}")
+        for w in r.warnings:
+            print(f"  warning:  {w}")
+        return 0
+
+    if args.command == "extract":
+        from bios_recovery.engines.bios_extractor import BiosExtractor
+        r = BiosExtractor().extract(f, output_dir=args.out)
+        print(f"method: {r.method_used} success={r.success}")
+        print(f"dir:    {r.output_dir}")
+        for msg in r.messages:
+            print(f"  * {msg}")
+        for x in r.files:
+            print(f"  {x['type']}: {x['name']} ({x['size']:,} bytes @ {x['offset']})")
+        return 0 if r.success else 1
+
+    if args.command == "graft":
+        from bios_recovery.engines.bios_repair import BiosRepairEngine
+        rep = BiosRepairEngine().auto_graft_from_donor(f, args.donor, args.out)
+        for op in rep.operations:
+            print(f"  + {op}")
+        for w in rep.warnings:
+            print(f"  ! {w}")
+        print(f"out: {rep.output_path}")
+        return 0
+
+    if args.command == "capsule":
+        from bios_recovery.engines.bios_capsule import extract_flashable_image
+        info_ = extract_flashable_image(f, output_path=args.out)
+        if not info_.success:
+            print("\n".join(info_.messages), file=sys.stderr)
+            return 1
+        print(f"header: {info_.header_size:#x}")
+        print(f"image:  {info_.image_size:#x}")
+        print(f"sha256: {info_.image_sha256}")
+        print(f"out:    {info_.output_path}")
+        return 0
+
+    if args.command == "me-clean":
+        from bios_recovery.engines.me_cleaner import IntelMECleaner
+        rep_ = IntelMECleaner().clean(f, output_path=args.out,
+                                      soft_disable=not args.no_hap)
+        for m in rep_.messages:
+            print(f"  * {m}")
+        print(f"out: {rep_.output_path}")
+        return 0 if rep_.status.name in ("SUCCESS", "ALREADY_CLEAN") else 1
+
+    if args.command == "remove-passwords":
+        from bios_recovery.engines.password_remover import PasswordRemover
+        out_f = args.out or f.rsplit(".", 1)[0] + "_nopass.bin"
+        rep_ = PasswordRemover().remove_passwords(f, out_f)
+        print(f"status: {rep_.status.name}")
+        for m in rep_.messages:
+            print(f"  * {m}")
+        print(f"out: {rep_.output_path}")
+        return 0
+
+    if args.command == "dmi":
+        from bios_recovery.engines.dmi_editor import DMIEditor
+        info_ = DMIEditor().info(f)
+        if not info_.get("found"):
+            print(info_.get("message", "not found"), file=sys.stderr)
+            return 1
+        s_ = info_.get("serials", {})
+        print(f"system serial   : {s_.get('system')}")
+        print(f"baseboard serial: {s_.get('baseboard')}")
+        print(f"uuid            : {info_.get('uuid')}")
+        print(f"mac             : {info_.get('mac') or 'n/a'}")
+        return 0
+
+    if args.command == "set-dmi":
+        from bios_recovery.engines.dmi_editor import DMIEditor
+        rep_ = DMIEditor().set_identity(f, output_path=args.out,
+                                        serial=args.serial, uuid=args.uuid, mac=args.mac)
+        for op in rep_.operations:
+            print(f"  + {op}")
+        for w in rep_.warnings:
+            print(f"  ! {w}")
+        if rep_.message:
+            print(f"  # {rep_.message}")
+        print(f"out: {rep_.output_path}")
+        return 0 if rep_.success else 1
+
+    if args.command == "ec-extract":
+        from bios_recovery.engines.ec_patcher import ECPatcher
+        p_ = ECPatcher()
+        with open(f, "rb") as fh:
+            data = fh.read()
+        off, end_ = p_.find_ec_region(data), p_.find_ec_region_end(data)
+        if off < 0 or end_ <= off:
+            print("No EC region found", file=sys.stderr)
+            return 1
+        out_f = args.out or f.rsplit(".", 1)[0] + f"_ec_{off:#x}.bin"
+        with open(out_f, "wb") as fo:
+            fo.write(data[off:end_])
+        print(f"ec region: @0x{off:x} size {end_ - off:#x}")
+        print(f"out: {out_f}")
+        return 0
+
+    return 1
+
+
+_CLI_COMMANDS = {
+    "analyze", "extract", "graft", "capsule", "me-clean",
+    "remove-passwords", "dmi", "set-dmi", "ec-extract",
+}
+
+
 def main():
+    # CLI mode: `bios-recovery <command> FILE [...]` (no Qt involved)
+    if len(sys.argv) > 1 and sys.argv[1] in _CLI_COMMANDS:
+        return _cli_main(sys.argv[1:])
     try:
         from PySide6.QtWidgets import QApplication
         from PySide6.QtCore import Qt

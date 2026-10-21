@@ -400,6 +400,27 @@ class MainWindow(QMainWindow):
         self.dmi_extract_btn.clicked.connect(self.extract_dmi)
         layout.addWidget(self.dmi_extract_btn)
 
+        edit_group = QGroupBox("Edit Identity (fixed-size structured edits)")
+        edit_layout = QVBoxLayout(edit_group)
+        edit_row = QHBoxLayout()
+        edit_row.addWidget(QLabel("Serial:"))
+        self.dmi_edit_serial = QLineEdit()
+        self.dmi_edit_serial.setPlaceholderText("new serial — equal-length swap only")
+        edit_row.addWidget(self.dmi_edit_serial, 1)
+        edit_row.addWidget(QLabel("UUID:"))
+        self.dmi_edit_uuid = QLineEdit()
+        self.dmi_edit_uuid.setPlaceholderText("8-4-4-4-12")
+        edit_row.addWidget(self.dmi_edit_uuid, 1)
+        edit_row.addWidget(QLabel("MAC:"))
+        self.dmi_edit_mac = QLineEdit()
+        self.dmi_edit_mac.setPlaceholderText("AA:BB:CC:DD:EE:FF (Intel GbE only)")
+        edit_row.addWidget(self.dmi_edit_mac, 1)
+        edit_layout.addLayout(edit_row)
+        self.dmi_apply_btn = QPushButton("Apply Edits")
+        self.dmi_apply_btn.clicked.connect(self.apply_dmi_edits)
+        edit_layout.addWidget(self.dmi_apply_btn)
+        layout.addWidget(edit_group)
+
         clone_group = QGroupBox("Clone DMI Identity (old dump -> new dump)")
         clone_layout = QVBoxLayout(clone_group)
         clone_layout.addWidget(QLabel(
@@ -946,7 +967,61 @@ class MainWindow(QMainWindow):
             lines.append(f"  {mem.get('device_locator', '')}: {mem.get('manufacturer', '')} {mem.get('part_number', '')} SN:{mem.get('serial_number', '')}")
         lines.append("")
         lines.append(f"Total structures: {len(info.structures)}")
+        lines.extend(self._dmi_editor_summary())
         self.dmi_text.setPlainText("\n".join(lines))
+
+    def _dmi_editor_summary(self):
+        if not self.current_file:
+            return []
+        from bios_recovery.engines.dmi_editor import DMIEditor
+
+        try:
+            info = DMIEditor().info(self.current_file)
+        except Exception:
+            return []
+        if not info.get("found"):
+            return []
+        s = info.get("serials", {})
+        return [
+            "",
+            "=== Editor (current fixed-size values) ===",
+            f"  System serial: {s.get('system')}",
+            f"  Baseboard serial: {s.get('baseboard')}",
+            f"  UUID: {info.get('uuid')}",
+            f"  MAC: {info.get('mac') or 'n/a (no descriptor GbE region)'}",
+            "  Serial edits: equal-length in-place swap only; UUID/GBE-MAC: fixed-size writes.",
+        ]
+
+    def apply_dmi_edits(self):
+        from bios_recovery.engines.dmi_editor import DMIEditor
+
+        if not self.current_file:
+            QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
+            return
+        serial = self.dmi_edit_serial.text().strip() or None
+        uuid = self.dmi_edit_uuid.text().strip() or None
+        mac = self.dmi_edit_mac.text().strip() or None
+        if not (serial or uuid or mac):
+            QMessageBox.information(self, "Nothing to Edit",
+                                    "Fill in a serial, UUID or MAC first.")
+            return
+        self.dmi_apply_btn.setEnabled(False)
+        editor = DMIEditor()
+        self._run_in_thread(editor.set_identity, self._dmi_edit_done,
+                            self.current_file, None, serial, uuid, mac)
+
+    def _dmi_edit_done(self, rep):
+        self.dmi_apply_btn.setEnabled(True)
+        lines = [f"Edit {'Success' if rep.success else 'Failed'}",
+                 f"Output: {rep.output_path}"]
+        for op in rep.operations:
+            lines.append(f"  + {op}")
+        for warn in rep.warnings:
+            lines.append(f"  ! {warn}")
+        if rep.message:
+            lines.append(f"  # {rep.message}")
+        self.dmi_text.setPlainText("\n".join(lines))
+        self.statusBar().showMessage(f"Identity edit written: {rep.output_path}")
 
     def scan_passwords(self):
         if not self.current_file:
