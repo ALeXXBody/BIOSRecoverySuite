@@ -156,6 +156,7 @@ def _cli_main(argv) -> int:
     s_me = add("me-clean", "clean/soft-disable the Intel ME region")
     s_me.add_argument("--no-hap", action="store_true", help="skip HAP soft-disable")
     s_rp = add("remove-passwords", "strip password/security structures")
+    s_dv = add("recover-passwords", "recover DVAR-stored Dell BIOS passwords from a dump")
     s_dm = add("dmi", "show DMI/SMBIOS identity")
     s_sd = add("set-dmi", "write identity (serial/uuid/mac, fixed-size edits)")
     s_sd.add_argument("--serial", default=None)
@@ -236,6 +237,17 @@ def _cli_main(argv) -> int:
         print(f"out: {rep_.output_path}")
         return 0
 
+    if args.command == "recover-passwords":
+        from bios_recovery.engines.dvar_passwords import recover_passwords
+        rep_ = recover_passwords(f)
+        print(f"success: {rep_.success}")
+        print(f"message: {rep_.message}")
+        for pww in rep_.passwords:
+            print(f"  @0x{pww.record_offset:x}: {pww.password!r} (len {pww.length}, {pww.recovered_from})")
+        for n in rep_.notes:
+            print(f"  {n}")
+        return 0 if rep_.success else 1
+
     if args.command == "dmi":
         from bios_recovery.engines.dmi_editor import DMIEditor
         info_ = DMIEditor().info(f)
@@ -283,7 +295,7 @@ def _cli_main(argv) -> int:
 
 _CLI_COMMANDS = {
     "analyze", "extract", "graft", "capsule", "me-clean",
-    "remove-passwords", "dmi", "set-dmi", "ec-extract",
+    "remove-passwords", "recover-passwords", "dmi", "set-dmi", "ec-extract",
 }
 
 

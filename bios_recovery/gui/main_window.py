@@ -502,6 +502,15 @@ class MainWindow(QMainWindow):
         self.remove_btn = QPushButton("Remove All Passwords")
         self.remove_btn.clicked.connect(self.remove_passwords)
         layout.addWidget(self.remove_btn)
+        self.dvar_btn = QPushButton("Recover Stored Passwords (Dell DVAR)")
+        self.dvar_btn.setToolTip(
+            "Reads BIOS passwords from Dell's DVAR XOR store (CVE-2026-40639). "
+            "Passwords of <= 12 chars recover from the null-padding key leak; "
+            "longer ones need a shorter historical record with the same first "
+            "character. Offline; newer SIVB-vault platforms are not recoverable."
+        )
+        self.dvar_btn.clicked.connect(self.recover_dvar_passwords)
+        layout.addWidget(self.dvar_btn)
 
         hp_group = QGroupBox("HP Unlock (ProBook / EliteBook / ZBook dumps)")
         hp_layout = QVBoxLayout(hp_group)
@@ -1023,8 +1032,27 @@ class MainWindow(QMainWindow):
         self.dmi_text.setPlainText("\n".join(lines))
         self.statusBar().showMessage(f"Identity edit written: {rep.output_path}")
 
-    def scan_passwords(self):
+    def recover_dvar_passwords(self):
+        from bios_recovery.engines.dvar_passwords import recover_passwords
+
         if not self.current_file:
+            QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
+            return
+        self.dvar_btn.setEnabled(False)
+        self._run_in_thread(recover_passwords, self._dvar_recovery_done, self.current_file)
+
+    def _dvar_recovery_done(self, rep):
+        self.dvar_btn.setEnabled(True)
+        lines = [f"Recovery {'Success' if rep.success else 'Failed'}", rep.message]
+        for pw in rep.passwords:
+            lines.append(f"  @0x{pw.record_offset:x}: {pw.password!r} "
+                         f"(len {pw.length}, via {pw.recovered_from})")
+        for n in rep.notes:
+            lines.append(f"  {n}")
+        self.password_text.setPlainText("\n".join(lines))
+        self.statusBar().showMessage("DVAR password recovery complete")
+
+    def scan_passwords(self):        if not self.current_file:
             return
         self.scan_btn.setEnabled(False)
         self._run_in_thread(self.password_remover.find_password_in_dump, self._password_scan_done, self.current_file)
