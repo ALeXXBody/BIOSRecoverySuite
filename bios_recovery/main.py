@@ -128,6 +128,22 @@ def _diagnose_qt_import_failure(exc):
     return "\n".join(lines)
 
 
+def _verify_rebuild_cli(argv) -> int:
+    """`verify-rebuild ORIGINAL CANDIDATE`: read-only region gate for a rebuilt image."""
+    from bios_recovery.core.rebuild_verify import describe, verify_rebuild
+    if len(argv) != 2:
+        print("usage: verify-rebuild ORIGINAL CANDIDATE", file=sys.stderr)
+        return 2
+    for path in argv:
+        if not os.path.isfile(path):
+            print(f"Error: file not found: {path}", file=sys.stderr)
+            return 2
+    result = verify_rebuild(argv[0], argv[1])
+    for line in describe(result):
+        print(line)
+    return 0 if result.accepted else 3
+
+
 def _cli_main(argv) -> int:
     """Offline CLI mode: `bios-recovery <command> FILE [options]`.
 
@@ -360,6 +376,8 @@ _CLI_COMMANDS = {
 
 def main():
     # CLI mode: `bios-recovery <command> FILE [...]` (no Qt involved)
+    if len(sys.argv) > 1 and sys.argv[1] == "verify-rebuild":
+        return _verify_rebuild_cli(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] in _CLI_COMMANDS:
         return _cli_main(sys.argv[1:])
     try:
