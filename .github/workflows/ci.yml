@@ -84,13 +84,3 @@ jobs:
             "dist/BIOSRecoverySuite-Setup-*.exe" `
             "dist/BIOSRecoverySuite-portable-*.zip" `
             --repo ${{ github.repository }} --clobber
-
-      - name: Upload artifact (dev runs only)
-        if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
-        with:
-          name: BIOSRecoverySuite-windows
-          retention-days: 1
-          path: |
-            dist/BIOSRecoverySuite/
-            dist/BIOSRecoverySuite-Setup-*.exe
