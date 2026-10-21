@@ -47,16 +47,30 @@ _APPLE_T2_MARKERS = (
 _VENDOR_MARKERS = {
     "asus": (b"ASUSTeK", b"ASUS Notebook", b"90NB", b"ASUS"),
     "dell": (
-        b"Dell Inc.", b"Dell System", b"DELL", b"$UPT", b"$SLA", b"DVAR",
+        b"Dell Inc.", b"Dell System", b"DELL", b"$UPT", b"$SLA", b"DVAR", b"Alienware",
     ),
-    "apple": (b"Apple Computer, Inc.", b"Apple Inc.", b"AppleRomInfo",
-              b"Fsys\x01"),
+    "apple": (b"Apple Computer, Inc.", b"Apple Inc.", b"AppleRomInfo", b"Fsys\x01"),
     "hp": (b"Hewlett-Packard", b"HP Inc.", b"Hewlett Packard Enterprise"),
     "lenovo": (b"LENOVO", b"Lenovo", b"ThinkPad", b"$MAN$"),
     "acer": (b"Acer Aspire", b"Acer", b"TravMate", b"ZFOREST"),
     "samsung": (b"SAMSUNG ELECTRONICS",),
     "toshiba": (b"Toshiba", b"TOSHIBA"),
     "sony": (b"Sony", b"SONY", b"VAIO"),
+    "msi": (b"MICRO-STAR", b"Micro-Star", b"MSI Computer"),
+    "razer": (b"Razer", b"RAZER"),
+    "gigabyte": (b"GIGABYTE", b"Gigabyte Technology"),
+    "clevo": (b"CLEVO", b"Clevo"),
+    "huawei": (b"HUAWEI", b"Huawei"),
+    "xiaomi": (b"Xiaomi", b"XIAOMI", b"Mi Notebook"),
+    "microsoft": (b"Microsoft Corporation",),
+    "fujitsu": (b"FUJITSU", b"Fujitsu"),
+    "panasonic": (b"Panasonic", b"PANASONIC"),
+    "lg": (b"LG Electronics",),
+    "supermicro": (b"Supermicro", b"SUPERMICRO"),
+    "system76": (b"System76",),
+    "framework": (b"Framework Computer",),
+    "google": (b"Google, Inc.",),
+    "nec": (b"NEC Corporation",),
 }
 
 
@@ -119,11 +133,6 @@ def classify(data: bytes) -> Traits:
 
     # ME family details for Intel
     if t.architecture in (ARCH_INTEL, ARCH_APPLE_INTEL):
-        try:
-            from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
-            info = IntelMECleaner()._get_me_version(data, 0, len(data)) if False else None
-        except Exception:
-            info = ""
         # light-weight manifest probe (no heavy per-region detection here)
         fam = ""
         try:

@@ -1,0 +1,25 @@
+"""Vendor recognition from BIOS brand markers (one synthetic image per vendor)."""
+
+import pytest
+
+from bios_recovery.core.traits import _VENDOR_MARKERS, classify
+
+
+@pytest.mark.parametrize(
+    "vendor, marker",
+    [(v, m) for v, markers in _VENDOR_MARKERS.items() for m in markers],
+)
+def test_each_marker_identifies_its_vendor(vendor, marker):
+    data = b"\xFF" * 0x1000 + b"\x00" * 0x40 + marker + b"\x00" * 0x40
+    assert classify(data).vendor == vendor
+
+
+def test_msi_and_razer_are_recognised():
+    msi = b"\xFF" * 0x800 + b"MICRO-STAR INTERNATIONAL CO., LTD" + b"\xFF" * 0x800
+    razer = b"\xFF" * 0x800 + b"Razer Blade" + b"\xFF" * 0x800
+    assert classify(msi).vendor == "msi"
+    assert classify(razer).vendor == "razer"
+
+
+def test_unbranded_image_stays_generic():
+    assert classify(b"\xFF" * 0x4000).vendor == "generic"

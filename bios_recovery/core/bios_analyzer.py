@@ -340,8 +340,18 @@ class BiosAnalyzer:
                 entry_off = fpt_pos + 0x20 + i * 0x20
                 entry_name = data[entry_off:entry_off + 4]
                 if entry_name in (b"FTPR", b"$MN2", b"ME  "):
-                    return self._decode_me_version(data, me_r)
-        return ""
+                    version = self._decode_me_version(data, me_r)
+                    if version:
+                        return version
+        return self._manifest_me_version(data)
+
+    @staticmethod
+    def _manifest_me_version(data: bytes) -> str:
+        """Most common version among the ME/CSME manifests in the image (FPT not decodable)."""
+        from collections import Counter
+        from bios_recovery.core.me_manifest import iter_manifest_versions
+        versions = Counter(v for v, _base in iter_manifest_versions(data))
+        return versions.most_common(1)[0][0] if versions else ""
 
     def _decode_me_version(self, data: bytes, me_region: RegionInfo) -> str:
         from bios_recovery.utils.me_manifest import detect_me_version_best
@@ -364,10 +374,7 @@ class BiosAnalyzer:
             return "ME"
         elif major <= 12:
             return "CSME"
-        elif major <= 16:
-            return "CSME 11+"
-        else:
-            return f"CSME {major}"
+        return f"CSME {major}"
 
     def _find_issues(self, data: bytes, regions: list[RegionInfo], bios_type: BiosType) -> list[str]:
         issues = []
@@ -375,8 +382,8 @@ class BiosAnalyzer:
             issues.append("No recognizable firmware regions found")
 
         fd_region = [r for r in regions if r.region_type == RegionType.FLASH_DESCRIPTOR]
-        if fd_region and fd_region[0].offset != 0:
-            issues.append("Flash Descriptor not at offset 0 (unusual layout)")
+        if fd_region and fd_region[0].offset not in (0, 0x10):
+            issues.append(f"Flash Descriptor at unusual offset 0x{fd_region[0].offset:X}")
 
         me_regions = [r for r in regions if r.region_type == RegionType.INTEL_ME]
         for me_r in me_regions:
@@ -386,19 +393,35 @@ class BiosAnalyzer:
         if len(data) % 0x1000 != 0:
             issues.append(f"File size ({len(data)} bytes) not aligned to 4KB boundary")
 
-        fpt_count = data.count(self.FPT_SIGNATURE)
-        if fpt_count > 1:
-            issues.append(f"Multiple FPT headers found ({fpt_count}) - possible dual-ME or corruption")
+        fpt_headers = self._fpt_headers(data)
+        if len(fpt_headers) > 1:
+            issues.append(
+                f"Conflicting FPT headers found ({len(fpt_headers)} different) - possible dual-ME or corruption")
 
         if bios_type == BiosType.UNKNOWN:
             issues.append("Could not identify BIOS type - file may be corrupt or unsupported format")
 
         return issues
 
+    def _fpt_headers(self, data: bytes) -> set[bytes]:
+        """Distinct FPT header blocks in the image (identical copies count once)."""
+        headers = set()
+        pos = data.find(self.FPT_SIGNATURE)
+        while pos >= 0:
+            headers.add(bytes(data[pos:pos + 0x20]))
+            pos = data.find(self.FPT_SIGNATURE, pos + 1)
+        return headers
+
     def _find_warnings(self, data: bytes, regions: list[RegionInfo], bios_type: BiosType) -> list[str]:
         warnings = []
+        copies = data.count(self.FPT_SIGNATURE)
+        if copies > 1 and len(self._fpt_headers(data)) == 1:
+            warnings.append(f"FPT header appears {copies} times with identical content (duplicate copy)")
         if len(data) < 0x10000:
             warnings.append("File is smaller than 64KB - may be an incomplete dump")
+        fd_region = [r for r in regions if r.region_type == RegionType.FLASH_DESCRIPTOR]
+        if fd_region and fd_region[0].offset == 0x10:
+            warnings.append("Flash Descriptor at 0x10: a 16-byte header precedes the chip image (not an error)")
 
         if len(data) > 0x2000000:
             warnings.append(f"File is {len(data) / 0x100000:.1f} MB - unusually large for a BIOS image")
