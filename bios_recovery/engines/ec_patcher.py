@@ -92,6 +92,11 @@ class ECPatcher:
             b"8518",
             b"IT8218",
             b"8218",
+            # New-generation ITE ECs (IT5xxx family: IT5571E, IT5731E,
+            # IT51363E/IT51368E/IT51378E variants) — same RISC-V lineage.
+            b"IT55",
+            b"IT51",
+            b"IT57",
             b"\x80\x04",   # ITE reporter ID used in many EC images
         ],
         ECController.NUVOTON: [
@@ -676,6 +681,45 @@ class ECPatcher:
             if p.key == key:
                 return p
         return None
+
+    def scan_patch_sites(self, input_path: str) -> list[dict]:
+        """Advisory scan: which EC patches' signatures are present and where.
+
+        Performs NO writes and produces no output file — the safety pass that
+        also shows which patches are verified versus advisory-only before
+        anyone considers applying them.
+        """
+        with open(input_path, "rb") as f:
+            data = f.read()
+        out = []
+        for patch in self._patches:
+            try:
+                signature = bytes.fromhex(patch.signature_hex)
+            except ValueError:
+                out.append({
+                    "key": patch.key, "vendor": patch.vendor,
+                    "found": False, "note": "invalid hex in pattern",
+                    "verified": patch.verified,
+                })
+                continue
+            offsets = []
+            pos = 0
+            while True:
+                i = data.find(signature, pos)
+                if i < 0:
+                    break
+                offsets.append(i)
+                pos = i + 1
+            out.append({
+                "key": patch.key,
+                "vendor": patch.vendor,
+                "controller": patch.controller,
+                "generation": patch.generation,
+                "found": bool(offsets),
+                "offsets": [hex(x) for x in offsets],
+                "verified": patch.verified,
+            })
+        return out
 
     def apply_patch(
         self,
