@@ -81,8 +81,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { $LASTEXITCODE = 0 }
           }
           gh release upload $env:GITHUB_REF_NAME `
-            "dist/BIOSRecoverySuite-Setup-$version.exe" `
-            "dist/BIOSRecoverySuite-portable-$version.zip" `
+            "dist/BIOSRecoverySuite-Setup-*.exe" `
+            "dist/BIOSRecoverySuite-portable-*.zip" `
             --repo ${{ github.repository }} --clobber
 
       - name: Upload artifact (dev runs only)
