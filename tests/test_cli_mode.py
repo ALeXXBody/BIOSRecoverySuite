@@ -68,3 +68,22 @@ def test_cli_analyze_unknown(capsys, tmp_path):
 def test_cli_missing_file(capsys, tmp_path):
     rc = _cli_main(["analyze", str(tmp_path / "nothere.bin")])
     assert rc == 2
+
+
+def test_cli_refuses_intel_tool_on_amd_image(tmp_path, capsys):
+    from bios_recovery.main import _cli_main
+    img = tmp_path / "amd.bin"
+    img.write_bytes(b"\xFF" * 0x800 + b"$PSP" + b"\xFF" * 0x800)
+    rc = _cli_main(["me-clean", str(img), "-o", str(tmp_path / "out.bin")])
+    assert rc == 3
+    assert "does not apply" in capsys.readouterr().err
+    assert not (tmp_path / "out.bin").exists()
+
+
+def test_cli_force_runs_inapplicable_tool(tmp_path, capsys):
+    from bios_recovery.main import _cli_main
+    img = tmp_path / "amd.bin"
+    img.write_bytes(b"\xFF" * 0x800 + b"$PSP" + b"\xFF" * 0x800)
+    rc = _cli_main(["me-clean", str(img), "-o", str(tmp_path / "out.bin"), "--force"])
+    assert rc != 3
+    assert "does not apply" not in capsys.readouterr().err

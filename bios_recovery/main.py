@@ -146,6 +146,8 @@ def _cli_main(argv) -> int:
         s_ = sub.add_parser(name, help=help_)
         s_.add_argument("file", help="input file")
         s_.add_argument("-o", "--out", default=None, help="output path / dir")
+        s_.add_argument("--force", action="store_true",
+                        help="run even when the tool does not apply to this image")
         return s_
 
     s_an = add("analyze", "analyze a BIOS image")
@@ -170,6 +172,17 @@ def _cli_main(argv) -> int:
     if not os.path.exists(f):
         print(f"Error: file not found: {f}", file=sys.stderr)
         return 2
+
+    tool = _CLI_TOOL_FOR_COMMAND.get(args.command)
+    if tool and not args.force:
+        from bios_recovery.core.traits import classify
+        from bios_recovery.core.traits_matrix import tool_matrix
+        with open(f, "rb") as fh:
+            row = tool_matrix(classify(fh.read())).get(tool)
+        if row is not None and not row.applies:
+            print(f"Refused: {tool} does not apply to this image - {row.reason}. "
+                  f"Use --force to run it anyway.", file=sys.stderr)
+            return 3
 
     if args.command == "analyze":
         from bios_recovery.core.bios_analyzer import BiosAnalyzer
@@ -305,6 +318,14 @@ def _cli_main(argv) -> int:
 
     return 1
 
+
+# CLI command -> tool name in core/traits_matrix.py (same gate as the GUI tabs)
+_CLI_TOOL_FOR_COMMAND = {
+    "me-clean": "ME Cleaner",
+    "recover-passwords": "Dell DVAR Recovery",
+    "ec-scan": "EC Patching",
+    "ec-extract": "EC Patching",
+}
 
 _CLI_COMMANDS = {
     "analyze", "extract", "graft", "capsule", "me-clean",
