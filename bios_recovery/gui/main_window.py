@@ -277,6 +277,18 @@ class MainWindow(QMainWindow):
         self.repair_btn.clicked.connect(self.run_repair)
         layout.addWidget(self.repair_btn)
 
+        graft_row = QHBoxLayout()
+        self.graft_btn = QPushButton("Auto Graft from Donor...")
+        self.graft_btn.setToolTip(
+            "Repair a damaged dump by copying structurally-verified regions from a "
+            "known-good donor (a capsule .308/.CAP or another dump). Only validated "
+            "matching-bound regions are written; everything else is refused."
+        )
+        self.graft_btn.clicked.connect(self.run_graft)
+        graft_row.addWidget(self.graft_btn)
+        graft_row.addStretch(1)
+        layout.addLayout(graft_row)
+
         self.repair_text = QPlainTextEdit()
         self.repair_text.setReadOnly(True)
         layout.addWidget(self.repair_text, 1)
@@ -710,6 +722,38 @@ class MainWindow(QMainWindow):
         for issue in report.issues_found:
             lines.append(f"  # [{issue.severity}] {issue.description}")
         self.repair_text.setPlainText("\n".join(lines))
+
+    def run_graft(self):
+        from bios_recovery.engines.bios_repair import BiosRepairEngine
+
+        if not self.current_file:
+            QMessageBox.warning(self, "No File", "Open the damaged dump first.")
+            return
+        donor, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select donor capsule or dump (known-good)",
+            "",
+            "Capsule/Dump (*.308 *.cap *.bin);;All Files (*)",
+        )
+        if not donor:
+            return
+        self.graft_btn.setEnabled(False)
+        engine = BiosRepairEngine()
+        self._run_in_thread(engine.auto_graft_from_donor, self._graft_done,
+                            self.current_file, donor)
+
+    def _graft_done(self, report):
+        self.graft_btn.setEnabled(True)
+        lines = [f"Graft {'Success' if report.success else 'Failed'}",
+                 f"Output: {report.output_path}"]
+        for op in report.operations:
+            lines.append(f"  + {op}")
+        for warn in report.warnings:
+            lines.append(f"  ! {warn}")
+        for issue in report.issues_found:
+            lines.append(f"  # [{issue.severity}] {issue.description}")
+        self.repair_text.setPlainText("\n".join(lines))
+        self.statusBar().showMessage(f"Graft complete: {report.output_path}")
 
     def build_flashable_image(self):
         from bios_recovery.engines.bios_capsule import extract_flashable_image

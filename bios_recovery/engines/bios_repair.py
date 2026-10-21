@@ -40,6 +40,9 @@ class RepairReport:
     operations: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
+    def add(self, text: str) -> None:
+        self.operations.append(text)
+
 
 class BiosRepairEngine:
     """Repairs corrupted, locked, or broken BIOS images."""
@@ -243,6 +246,176 @@ class BiosRepairEngine:
             output_path=output_path,
             operations=[f"Resized from {len(data)} to {target_size} bytes"],
         )
+
+    def auto_graft_from_donor(
+        self,
+        input_path: str,
+        donor_path: str,
+        output_path: Optional[str] = None,
+    ) -> RepairReport:
+        """Repair a damaged dump by grafting regions from a known-good donor.
+
+        This is the app's equivalent of paid suites' "auto repair by firmware
+        detection" — restricted to structurally-justified writes:
+
+          1. Accept a donor that is either a bare flash image of the same size,
+             or an AMI Aptio capsule whose flashable payload has the same size.
+          2. Identify damaged regions in the target:
+             a) FVS chains that fail FFS header checksums,
+             b) all-FF holes sitting inside populated FVs.
+          3. Graft only where the donor's FV bounds match the target's exactly
+             and the donor's copy of the region validates. Refuse everything
+             else (bounds mismatch, unknown format, different chip size) with
+             an explicit report message instead of writing guessed bytes.
+        """
+        report = RepairReport(success=False, issue=RepairType.AUTO)
+
+        with open(input_path, "rb") as f:
+            target = bytearray(f.read())
+
+        # Accept capsule donors transparently
+        donor_file = donor_path
+        from bios_recovery.engines.bios_capsule import (
+            APTIO_CAPSULE_GUID_LE,
+            extract_flashable_image,
+        )
+        with open(donor_path, "rb") as f:
+            donor_head = f.read(16)
+        if donor_head == APTIO_CAPSULE_GUID_LE:
+            extract_dir = donor_path.rsplit(".", 1)[0] + "_grade_extracted"
+            os.makedirs(extract_dir, exist_ok=True)
+            info = extract_flashable_image(donor_path,
+                                           output_path=os.path.join(extract_dir, "flashable.bin"))
+            if not info.success:
+                report.warnings.extend(info.messages)
+                report.warnings.append("Donor capsule could not be extracted")
+                return report
+            donor_file = info.output_path
+
+        with open(donor_file, "rb") as f:
+            donor = f.read()
+
+        if len(donor) != len(target):
+            report.warnings.append(
+                f"Donor size {len(donor):#x} differs from target {len(target):#x} - "
+                "grafting across different chip sizes is refused"
+            )
+            report.issues_found.append(RepairIssue(
+                RepairType.AUTO, "error", "Donor/target size mismatch", 0, 0))
+            if output_path is None:
+                return report
+            with open(output_path, "wb") as f:
+                f.write(bytes(target))
+            report.output_path = output_path
+            return report
+
+        fvs_t = self._fv_bounds(bytes(target))
+        fvs_d = self._fv_bounds(donor)
+        common = [b for b in fvs_t if b in fvs_d]
+        report.operations.append(f"Target FVs: {len(fvs_t)}, donor FVs: {len(fvs_d)}, "
+                                 f"identically bounded: {len(common)}")
+
+        grafts = 0
+        graft_bytes = 0
+        for base, flen in fvs_d:
+            chunk_d = donor[base:base + flen]
+            d_damaged = self._damaged_reason(chunk_d)
+            if d_damaged:
+                report.warnings.append(
+                    f"Donor FV @0x{base:x} fails its own integrity ({d_damaged}) - not grafted"
+                )
+                continue
+            chunk_t = bytes(target[base:base + flen])
+            t_damaged = self._damaged_reason(chunk_t)
+            if (base, flen) in fvs_t:
+                if chunk_t == chunk_d:
+                    continue
+                if not t_damaged:
+                    report.warnings.append(
+                        f"FV @0x{base:x} differs but is not identified as damaged in the "
+                        "target - left untouched (different content is not corruption)"
+                    )
+                    continue
+                target[base:base + flen] = chunk_d
+                grafts += 1
+                graft_bytes += flen
+                report.operations.append(
+                    f"Grafted FV @0x{base:x} (0x{flen:x} bytes): {t_damaged} -> replaced with donor copy"
+                )
+                report.issues_found.append(RepairIssue(
+                    RepairType.AUTO, "warning", f"Grafted region at {base:#x}", base, flen))
+            elif set(chunk_t) == {0xFF}:
+                # Provably erased region: no data exists to destroy, restoring it
+                # from the validated donor is justified recovery.
+                target[base:base + flen] = chunk_d
+                grafts += 1
+                graft_bytes += flen
+                report.operations.append(
+                    f"Restored erased FV @0x{base:x} (0x{flen:x} bytes) from donor copy"
+                )
+                report.issues_found.append(RepairIssue(
+                    RepairType.AUTO, "warning", f"Restored erased region at {base:#x}", base, flen))
+            else:
+                report.warnings.append(
+                    f"Donor FV @0x{base:x} has no matching bounds in the target and the "
+                    "target area is not erased - refused (would overwrite unknown data)"
+                )
+
+        # Regions outside any FV (pre-BIOS half etc.) are never grafted.
+        if grafts == 0:
+            report.warnings.append(
+                "No region was identified as damaged-and-graftable; "
+                "no bytes were modified"
+            )
+
+        report.success = True
+        report.operations.append(f"Total grafts: {grafts} ({graft_bytes:#x} bytes written)")
+
+        if output_path is None:
+            output_path = input_path.rsplit(".", 1)[0] + "_grafted.bin"
+        with open(output_path, "wb") as f:
+            f.write(bytes(target))
+        report.output_path = output_path
+        return report
+
+    @staticmethod
+    def _fv_bounds(blob: bytes) -> list[tuple[int, int]]:
+        """Firmware volumes as (base, length) from _FVH occurrences."""
+        import re
+        out = []
+        for m in re.finditer(rb"_FVH", blob):
+            base = m.start() - 0x28
+            if base < 0:
+                continue
+            try:
+                flen = struct.unpack_from("<Q", blob, base + 0x20)[0]
+            except struct.error:
+                continue
+            if 0x1000 <= flen <= len(blob) and base + flen <= len(blob):
+                out.append((base, flen))
+        return out
+
+    @staticmethod
+    def _damaged_reason(chunk: bytes) -> str:
+        """Classify structural damage in an FV region; '' means not damaged."""
+        # All-FF volume (erased or lost)
+        if chunk and set(chunk) == {0xFF}:
+            return "entirely FF (erased)"
+        # FFS header checksum failures
+        bad = 0
+        pos = 0x48
+        while pos + 0x18 <= len(chunk):
+            isize = chunk[pos + 0x14] | chunk[pos + 0x15] << 8 | chunk[pos + 0x16] << 16
+            if isize < 0x18 or pos + isize > len(chunk):
+                break
+            hd = bytearray(chunk[pos:pos + 0x18])
+            hd[0x10] = hd[0x11] = hd[0x17] = 0
+            if ((-sum(hd)) & 0xFF) != chunk[pos + 0x10]:
+                bad += 1
+            pos = (pos + isize + 7) & ~7
+        if bad:
+            return f"{bad} FFS file(s) with bad header checksums"
+        return ""
 
     def extract_region(self, input_path: str, offset: int, size: int, output_path: str) -> RepairReport:
         with open(input_path, "rb") as f:

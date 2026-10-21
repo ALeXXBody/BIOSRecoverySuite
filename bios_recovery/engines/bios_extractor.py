@@ -20,6 +20,7 @@ class ExtractionMethod(Enum):
     TOSHIBA_COM = auto()
     SAMSUNG_EXE = auto()
     SONY_VAIO = auto()
+    AMI_CAPSULE = auto()
     UNIVERSAL = auto()
 
 
@@ -97,6 +98,7 @@ class BiosExtractor:
             ExtractionMethod.TOSHIBA_EXE: self._extract_toshiba,
             ExtractionMethod.SAMSUNG_EXE: self._extract_samsung,
             ExtractionMethod.SONY_VAIO: self._extract_sony,
+            ExtractionMethod.AMI_CAPSULE: self._extract_ami_capsule,
             ExtractionMethod.UNIVERSAL: self._extract_universal,
         }
 
@@ -110,6 +112,15 @@ class BiosExtractor:
         return result
 
     def _detect_method(self, data: bytes, file_path: str) -> ExtractionMethod:
+        from bios_recovery.engines.bios_capsule import APTIO_CAPSULE_GUID_LE
+
+        # AMI Aptio vendor capsule (e.g. ASUS .308/.CAP updates): detect by GUID,
+        # before any brand-keyword guess (which would miscategorize it).
+        if data[:16] == APTIO_CAPSULE_GUID_LE:
+            from bios_recovery.engines.bios_capsule import detect_capsule
+            if detect_capsule(data).success:
+                return ExtractionMethod.AMI_CAPSULE
+
         if self.DELL_PFS_SIGNATURE in data[:0x1000]:
             return ExtractionMethod.DELL_PFS
 
@@ -309,6 +320,37 @@ class BiosExtractor:
             })
             result.success = True
 
+        return result
+
+    def _extract_ami_capsule(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+        """Extract the flash image from an AMI Aptio vendor capsule (ASUS .308/.CAP)."""
+        from bios_recovery.engines.bios_capsule import detect_capsule
+
+        result = ExtractionResult(success=False)
+        info = detect_capsule(data)
+        if not info.success:
+            result.messages.extend(info.messages)
+            return result
+
+        image = data[info.header_size:]
+        output_file = os.path.join(output_dir, "flashable.bin")
+        with open(output_file, "wb") as f:
+            f.write(image)
+
+        result.files.append({
+            "name": os.path.basename(output_file),
+            "size": len(image),
+            "offset": f"{info.header_size:#x}",
+            "type": "Flash Image (capsule payload)",
+        })
+        result.messages.append(
+            f"AMI Aptio capsule: header {info.header_size:#x}, image {len(image):#x} bytes"
+        )
+        result.messages.append(
+            "Write this image to the SPI chip (whole 32MB) with an external programmer, "
+            "or flash it back via the programmer once verified."
+        )
+        result.success = True
         return result
 
     def _extract_universal(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
