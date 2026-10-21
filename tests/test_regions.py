@@ -121,3 +121,19 @@ def test_nested_volume_match_not_reported(tmp_path):
 
     fvs = [r for r in result.regions if r.region_type == RegionType.FIRMWARE_VOLUME]
     assert [r.offset for r in fvs] == [0x2000]
+
+
+def test_random_fpt_match_is_not_a_conflict(tmp_path):
+    # "$FPT" by chance, followed by an absurd entry count: not a partition table.
+    blob = b"$FPT" + (0x7FFF1234).to_bytes(4, "little") + b"\x00" * 24
+    result = BiosAnalyzer().analyze(_write_image(tmp_path, [(0x3000, blob)]))
+    assert not any("FPT" in issue for issue in result.issues)
+
+
+def test_erased_tail_past_chip_size_is_padding_not_an_issue(tmp_path):
+    data = bytes(0x10000) + b"\xff" * 0x800  # 64 KB chip image plus 2 KB of 0xFF
+    path = tmp_path / "padded.bin"
+    path.write_bytes(data)
+    result = BiosAnalyzer().analyze(str(path))
+    assert not any("aligned" in issue for issue in result.issues)
+    assert any("padding" in w for w in result.warnings)

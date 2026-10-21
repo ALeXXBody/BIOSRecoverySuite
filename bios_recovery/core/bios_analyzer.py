@@ -390,7 +390,7 @@ class BiosAnalyzer:
             if me_r.size < 0x10000:
                 issues.append(f"Intel ME region suspiciously small ({me_r.size:#x} bytes)")
 
-        if len(data) % 0x1000 != 0:
+        if len(data) % 0x1000 != 0 and not self._padding_after_chip(data):
             issues.append(f"File size ({len(data)} bytes) not aligned to 4KB boundary")
 
         fpt_headers = self._fpt_headers(data)
@@ -403,18 +403,47 @@ class BiosAnalyzer:
 
         return issues
 
-    def _fpt_headers(self, data: bytes) -> set[bytes]:
-        """Distinct FPT header blocks in the image (identical copies count once)."""
-        headers = set()
+    @staticmethod
+    def _padding_after_chip(data: bytes) -> int:
+        """Length of 0xFF padding past the largest power-of-two chip size, else 0.
+
+        Dumpers that over-read add a few erased bytes after the real chip image.
+        Anything other than 0xFF beyond that size is not padding.
+        """
+        chip = 1 << (len(data).bit_length() - 1)
+        tail = data[chip:]
+        if tail and not tail.strip(b"\xff"):
+            return len(tail)
+        return 0
+
+    def _fpt_positions(self, data: bytes) -> list[int]:
+        """Offsets of FPT headers with a plausible entry count.
+
+        "$FPT" also occurs by chance in other data; a real partition table has
+        a small entry count (a few to a few dozen), random matches do not.
+        """
+        positions = []
         pos = data.find(self.FPT_SIGNATURE)
         while pos >= 0:
-            headers.add(bytes(data[pos:pos + 0x20]))
+            if pos + 8 <= len(data):
+                entries = struct.unpack_from("<I", data, pos + 4)[0]
+                if 0 < entries <= 0x80:
+                    positions.append(pos)
             pos = data.find(self.FPT_SIGNATURE, pos + 1)
-        return headers
+        return positions
+
+    def _fpt_headers(self, data: bytes) -> set[bytes]:
+        """Distinct FPT header blocks in the image (identical copies count once)."""
+        return {bytes(data[p:p + 0x20]) for p in self._fpt_positions(data)}
 
     def _find_warnings(self, data: bytes, regions: list[RegionInfo], bios_type: BiosType) -> list[str]:
         warnings = []
-        copies = data.count(self.FPT_SIGNATURE)
+        padding = self._padding_after_chip(data)
+        if padding and len(data) % 0x1000:
+            chip = len(data) - padding
+            warnings.append(
+                f"{padding} bytes past the 0x{chip:X} chip image are 0xFF padding (dumper over-read); not an error")
+        copies = len(self._fpt_positions(data))
         if copies > 1 and len(self._fpt_headers(data)) == 1:
             warnings.append(f"FPT header appears {copies} times with identical content (duplicate copy)")
         if len(data) < 0x10000:

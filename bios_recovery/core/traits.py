@@ -50,9 +50,12 @@ _VENDOR_MARKERS = {
         b"Dell Inc.", b"Dell System", b"DELL", b"$UPT", b"$SLA", b"DVAR", b"Alienware",
     ),
     "apple": (b"Apple Computer, Inc.", b"Apple Inc.", b"AppleRomInfo", b"Fsys\x01"),
-    "hp": (b"Hewlett-Packard", b"HP Inc.", b"Hewlett Packard Enterprise"),
+    "hp": (b"Hewlett-Packard", b"HP Inc.", b"Hewlett Packard Enterprise", b"COMPAQ",
+           b"HP UEFI Secure Boot"),
     "lenovo": (b"LENOVO", b"Lenovo", b"ThinkPad", b"$MAN$"),
-    "acer": (b"Acer Aspire", b"Acer", b"TravMate", b"ZFOREST"),
+    # OEM-owned Secure Boot key names (PK/KEK/db) identify the firmware owner
+    "acer": (b"Acer Aspire", b"TravMate", b"ZFOREST", b"ACERABCT",
+             b"Acer Platform Key", b"Acer Key Exchange", b"Acer Database", b"Acer Root CA"),
     "samsung": (b"SAMSUNG ELECTRONICS",),
     "toshiba": (b"Toshiba", b"TOSHIBA"),
     "sony": (b"Sony", b"SONY", b"VAIO"),
@@ -85,8 +88,34 @@ class Traits:
     bundle_kind: str = ""    # "aptio_capsule" / "dell_pfs" / "apple_efirom" / ""
 
 
+_ALNUM = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+
+
+def _word_present(data: bytes, marker: bytes) -> bool:
+    """True if marker occurs where the preceding byte is not a letter or digit."""
+    i = data.find(marker)
+    while i >= 0:
+        if i == 0 or data[i - 1] not in _ALNUM:
+            return True
+        i = data.find(marker, i + 1)
+    return False
+
+
 def _hits(data: bytes, markers) -> list[bytes]:
-    return [m for m in markers if m in data]
+    """Markers present in the image.
+
+    A marker that starts with a letter must not be the tail of a longer word:
+    "iBoot" must not match inside "EfiBootPath". Symbols and binary signatures
+    are matched as plain substrings.
+    """
+    hits = []
+    for m in markers:
+        if m[:1].isalpha():
+            if _word_present(data, m):
+                hits.append(m)
+        elif m in data:
+            hits.append(m)
+    return hits
 
 
 def classify(data: bytes) -> Traits:

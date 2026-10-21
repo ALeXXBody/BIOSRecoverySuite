@@ -34,3 +34,15 @@ def test_secure_boot_certificate_names_are_not_a_vendor():
     # Microsoft's UEFI CA names appear in almost every modern image.
     data = b"\xFF" * 0x800 + b"Microsoft Corporation UEFI CA 2011" + b"\xFF" * 0x800
     assert classify(data).vendor == "generic"
+
+
+def test_t2_marker_not_matched_inside_efi_variable_names():
+    from bios_recovery.core.traits import ARCH_APPLE_T2
+    data = b"\xFF" * 0x800 + b"UefiBootPathSecurity FastEfiBootOption" + b"\xFF" * 0x800
+    assert classify(data).architecture != ARCH_APPLE_T2
+
+
+def test_t2_marker_matches_as_a_word():
+    from bios_recovery.core.traits import ARCH_APPLE_T2
+    data = b"\xFF" * 0x800 + b"iBoot stage 2" + b"\xFF" * 0x800
+    assert classify(data).architecture == ARCH_APPLE_T2
