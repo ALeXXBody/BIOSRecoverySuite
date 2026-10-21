@@ -128,6 +128,54 @@ def _diagnose_qt_import_failure(exc):
     return "\n".join(lines)
 
 
+def _library_cli(argv) -> int:
+    """`library add-folder|remove-folder|list|scan [PATH]`: user-chosen tool and firmware folders."""
+    from bios_recovery.core import user_library as lib
+    usage = ("usage: library add-folder PATH | remove-folder PATH | list | scan\n"
+             "The app ships no Intel tools or ME firmware; add the folders where you keep yours.")
+    if not argv:
+        print(usage, file=sys.stderr)
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    if cmd in ("add-folder", "remove-folder"):
+        if len(rest) != 1:
+            print(usage, file=sys.stderr)
+            return 2
+        try:
+            current = lib.add_folder(rest[0]) if cmd == "add-folder" else lib.remove_folder(rest[0])
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        print(f"config: {lib.config_path()}")
+        for f in current.folders:
+            print(f"  folder: {f}")
+        return 0
+    if cmd == "list":
+        current = lib.load_library()
+        print(f"config: {lib.config_path()}")
+        if not current.folders:
+            print("  (no folders added)")
+        for f in current.folders:
+            print(f"  folder: {f}")
+        return 0
+    if cmd == "scan":
+        result = lib.scan()
+        if not result.folders:
+            print("no folders added; use: library add-folder PATH")
+            return 0
+        print(f"tools found: {len(result.tools)}")
+        for t in result.tools:
+            print(f"  {t.family} {t.version:<18} {t.path}")
+        print(f"firmware found: {len(result.firmware)}")
+        for fw in result.firmware:
+            print(f"  ME {fw.me_version:<16} {fw.size:>10,} bytes  {fw.path}")
+        for note in result.skipped:
+            print(f"  note: {note}")
+        return 0
+    print(usage, file=sys.stderr)
+    return 2
+
+
 def _verify_rebuild_cli(argv) -> int:
     """`verify-rebuild ORIGINAL CANDIDATE`: read-only region gate for a rebuilt image."""
     from bios_recovery.core.rebuild_verify import describe, verify_rebuild
@@ -331,8 +379,19 @@ def _cli_main(argv) -> int:
         print(f"ME version:   {me or 'n/a'}")
         print(f"tool release: {match.release or 'none'} [{match.confidence}]"
               + (f" - {match.note}" if match.note else ""))
-        if args.tool:
-            probe = probe_tool(args.tool)
+        tool_paths = [args.tool] if args.tool else []
+        if not tool_paths:
+            from bios_recovery.core import user_library as lib
+            from bios_recovery.platforms.intel.me.fit_bridge import compatible_with_me as _ok
+            for t in lib.scan().tools:
+                if _ok(probe_tool(t.path), me)[0]:
+                    tool_paths.append(t.path)
+            if not tool_paths:
+                print("tool:         none in your library matches this image "
+                      "(add folders with: library add-folder PATH)")
+                return 0
+        for tool_path in tool_paths:
+            probe = probe_tool(tool_path)
             if not probe.identified:
                 print(f"tool:         refused - {probe.error}")
                 return 4
@@ -378,6 +437,8 @@ def main():
     # CLI mode: `bios-recovery <command> FILE [...]` (no Qt involved)
     if len(sys.argv) > 1 and sys.argv[1] == "verify-rebuild":
         return _verify_rebuild_cli(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "library":
+        return _library_cli(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] in _CLI_COMMANDS:
         return _cli_main(sys.argv[1:])
     try:
