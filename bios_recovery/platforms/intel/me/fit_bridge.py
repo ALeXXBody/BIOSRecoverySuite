@@ -21,6 +21,8 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Optional
 
+from bios_recovery.platforms.intel.me.fit_versions import rule_for_version
+
 PROBE_TIMEOUT = 20
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
 
@@ -47,9 +49,13 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
         return probe
 
     with tempfile.TemporaryDirectory(prefix="fitprobe_") as work:
+        # "-h" prints the banner and exits. With no arguments the Linux build opens a
+        # Qt window and waits, so it must not be run bare. The Qt variables keep it
+        # headless and out of the user's runtime directory.
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_RUNTIME_DIR=work)
         try:
             done = subprocess.run(
-                [os.path.abspath(path)], cwd=work, stdin=subprocess.DEVNULL,
+                [os.path.abspath(path), "-h"], cwd=work, env=env, stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, errors="replace", timeout=timeout,
             )
             output = (done.stdout or "") + (done.stderr or "")
@@ -80,18 +86,24 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
 
 
 def compatible_with_me(probe: ToolProbe, me_version: str) -> tuple[bool, str]:
-    """A tool must share the ME major version; a minor difference is a warning only."""
+    """A tool must belong to the same System Tools release line as the ME version.
+
+    The tool's own version is mapped through the same rule table as the ME version.
+    Different release lines are refused. A range the table marks ambiguous is
+    accepted with a warning, because the table cannot decide it.
+    """
     if not probe.identified or not probe.version:
         return False, "tool is not identified"
     if not me_version:
         return False, "image has no ME version to check against"
-    tool_parts = [int(x) for x in probe.version.split(".")]
-    me_parts = [int(x) for x in re.findall(r"\d+", me_version)[:4]]
-    if not me_parts:
-        return False, "unreadable ME version"
-    if tool_parts[0] != me_parts[0]:
-        return False, (f"tool major {tool_parts[0]} does not match ME major {me_parts[0]}; "
-                       "a mismatched FIT fails the build")
-    if tool_parts[:2] != me_parts[:2]:
-        return True, f"same major version; tool {probe.version} vs ME {me_version} differ in minor version"
-    return True, "tool and ME versions match"
+    tool_rule = rule_for_version(probe.version)
+    me_rule = rule_for_version(me_version)
+    if tool_rule is None or me_rule is None:
+        return False, "no release line covers this tool or ME version"
+    if tool_rule is not me_rule:
+        return False, (f"tool {probe.version} belongs to {tool_rule.release}, ME {me_version} "
+                       f"needs {me_rule.release}; a mismatched FIT fails the build")
+    if me_rule.confidence == "ambiguous":
+        return True, (f"same range ({me_rule.release}), but the table cannot tell these apart; "
+                      "check the tool against the firmware before building")
+    return True, f"tool {probe.version} and ME {me_version} are both {me_rule.release}"

@@ -410,6 +410,8 @@ class BiosAnalyzer:
         Dumpers that over-read add a few erased bytes after the real chip image.
         Anything other than 0xFF beyond that size is not padding.
         """
+        if not data:
+            return 0
         chip = 1 << (len(data).bit_length() - 1)
         tail = data[chip:]
         if tail and not tail.strip(b"\xff"):

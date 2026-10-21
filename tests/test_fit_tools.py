@@ -41,11 +41,11 @@ def test_unknown_or_missing_version():
     assert tool_for_me_version("garbage").release is None
 
 
-def test_compatibility_requires_same_major():
+def test_compatibility_requires_same_release_line():
     probe = ToolProbe(path="x", identified=True, family="MFIT", version="16.1.25.2053")
     assert compatible_with_me(probe, "16.1.25.2091")[0] is True
     ok, why = compatible_with_me(probe, "15.0.3.1402")
-    assert ok is False and "does not match" in why
+    assert ok is False and "belongs to" in why
 
 
 def test_unidentified_tool_is_never_compatible():
@@ -107,3 +107,26 @@ def test_cli_fit_info_checks_supplied_tool(intel_ifd, tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 4
     assert "compatible:   no" in out
+
+
+@POSIX_ONLY
+def test_probe_uses_help_flag_not_bare_run(tmp_path):
+    # A bare run of the real Linux tool opens a window and waits; "-h" prints and exits.
+    tool = tmp_path / "fit"
+    tool.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-h\" ]; then echo 'Intel (R) Flash Image Tool. Version: 15.40.16.2534'; exit 0; fi\n"
+        "sleep 30\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    probe = probe_tool(str(tool), timeout=5)
+    assert probe.identified and probe.family == "FIT" and probe.version == "15.40.16.2534"
+
+
+@POSIX_ONLY
+def test_fit_from_other_release_line_is_refused(tmp_path):
+    tool = tmp_path / "fit"
+    tool.write_text("#!/bin/sh\necho 'Intel (R) Flash Image Tool. Version: 15.40.16.2534'\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    probe = probe_tool(str(tool))
+    ok, why = compatible_with_me(probe, "15.0.3.1402")
+    assert ok is False and "v15.40 r3" in why

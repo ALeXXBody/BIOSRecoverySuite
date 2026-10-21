@@ -74,12 +74,20 @@ def _parse(version: str) -> tuple:
     return tuple(parts)
 
 
-def tool_for_me_version(me_version: str) -> ToolMatch:
-    """Map an ME firmware version (e.g. '15.0.3.1402') to its System Tools release."""
-    v = _parse(me_version)
+def rule_for_version(version: str) -> Optional[ToolRule]:
+    """The release-line rule covering a version string (ME or tool), or None."""
+    v = _parse(version)
     if not v:
-        return ToolMatch(me_version, None, "unknown", "no ME version to match")
+        return None
     for rule in RULES:
         if rule.low <= v < rule.high:
-            return ToolMatch(me_version, rule.release, rule.confidence, rule.note)
-    return ToolMatch(me_version, None, "unknown", "no rule covers this version")
+            return rule
+    return None
+
+
+def tool_for_me_version(me_version: str) -> ToolMatch:
+    """Map an ME firmware version (e.g. '15.0.3.1402') to its System Tools release."""
+    rule = rule_for_version(me_version)
+    if rule is None:
+        return ToolMatch(me_version, None, "unknown", "no ME version to match")
+    return ToolMatch(me_version, rule.release, rule.confidence, rule.note)

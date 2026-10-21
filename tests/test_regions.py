@@ -137,3 +137,11 @@ def test_erased_tail_past_chip_size_is_padding_not_an_issue(tmp_path):
     result = BiosAnalyzer().analyze(str(path))
     assert not any("aligned" in issue for issue in result.issues)
     assert any("padding" in w for w in result.warnings)
+
+
+def test_empty_file_is_reported_not_crashed(tmp_path):
+    path = tmp_path / "empty.bin"
+    path.write_bytes(b"")
+    result = BiosAnalyzer().analyze(str(path))
+    assert result.file_size == 0
+    assert result.bios_type == BiosType.UNKNOWN
