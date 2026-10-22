@@ -167,7 +167,11 @@ class MainWindow(QMainWindow):
         self.dmi_tab = self._build_dmi_tab()
         self.password_tab = self._build_password_tab()
         self.extract_tab = self._build_extract_tab()
-        self.spi_tab = SPITab(self)
+        self.spi_tab = SPITab(
+            self,
+            image_provider=lambda: self.current_file,
+            load_image=self.load_file,
+        )
         self.ec_tab = ECTab(self)
         self.lenovo_tab = LenovoTab(self)
 
@@ -375,19 +379,10 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("File:"))
-        self.repair_file = QLineEdit()
-        self.repair_file.setReadOnly(True)
-        file_row.addWidget(self.repair_file, 1)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.open_file)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
 
         options_group = QGroupBox("Repair Options")
         options_layout = QVBoxLayout(options_group)
-        me_hint = QLabel("ME region cleaning is done on the ME Cleaner page, with its own options.")
+        me_hint = QLabel("ME region cleaning is done on the ME Region page, with its own options.")
         me_hint.setStyleSheet("color: #7F849C;")
         options_layout.addWidget(me_hint)
         self.repair_checksum_ck = QCheckBox("Fix FPT Checksum")
@@ -427,15 +422,6 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("File:"))
-        self.dmi_file = QLineEdit()
-        self.dmi_file.setReadOnly(True)
-        file_row.addWidget(self.dmi_file, 1)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.open_file)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
 
         self.dmi_extract_btn = QPushButton("Extract DMI / SMBIOS Data")
         self.dmi_extract_btn.clicked.connect(self.extract_dmi)
@@ -470,12 +456,7 @@ class MainWindow(QMainWindow):
                 "BIOS image so the machine keeps its identity after a reflash."
             )
         )
-        clone_row = QHBoxLayout()
-        clone_row.addWidget(QLabel("Old dump:"))
-        self.clone_old_edit = QLineEdit()
-        self.clone_old_edit.setReadOnly(True)
-        clone_row.addWidget(self.clone_old_edit, 1)
-        clone_layout.addLayout(clone_row)
+        clone_layout.addWidget(QLabel("Old dump: the file loaded in the header (File > Open)"))
 
         new_row = QHBoxLayout()
         new_row.addWidget(QLabel("New dump:"))
@@ -506,7 +487,7 @@ class MainWindow(QMainWindow):
             self.clone_new_edit.setText(path)
 
     def clone_dmi(self):
-        old_path = self.clone_old_edit.text().strip() or self.current_file
+        old_path = self.current_file
         new_path = self.clone_new_edit.text().strip()
         if not old_path or not os.path.exists(old_path):
             QMessageBox.warning(self, "No Old Dump", "Load the original dump first.")
@@ -534,15 +515,6 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("File:"))
-        self.password_file = QLineEdit()
-        self.password_file.setReadOnly(True)
-        file_row.addWidget(self.password_file, 1)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.open_file)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
 
         self.scan_btn = QPushButton("Scan for Password Structures")
         self.scan_btn.clicked.connect(self.scan_passwords)
@@ -594,15 +566,6 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("Source EXE/File:"))
-        self.extract_file = QLineEdit()
-        self.extract_file.setReadOnly(True)
-        file_row.addWidget(self.extract_file, 1)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.open_file)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
 
         method_row = QHBoxLayout()
         method_row.addWidget(QLabel("Method:"))
@@ -688,21 +651,20 @@ class MainWindow(QMainWindow):
             "All Files (*)",
         )
         if path:
-            self.current_file = path
-            self.file_label.setText(os.path.basename(path))
-            self.repair_file.setText(path)
-            self.me_page.refresh()
-            self.spi_tab.set_image(path)
-            self.dmi_file.setText(path)
-            self.password_file.setText(path)
-            self.extract_file.setText(path)
-            self.ec_tab.current_dump = path
-            self.ec_tab.ec_file.setText(path)
-            self.lenovo_tab.set_file(path)
-            self.clone_old_edit.setText(path)
-            self._clear_results()
-            self.statusBar().showMessage(f"Loaded: {path}")
-            self.run_analysis()
+            self.load_file(path)
+
+    def load_file(self, path: str):
+        """The one place a file becomes the image every page works on."""
+        self.current_file = path
+        self.file_label.setText(os.path.basename(path))
+        self.file_label.setToolTip(path)
+        self.me_page.refresh()
+        self.spi_tab.refresh()
+        self.ec_tab.set_file(path)
+        self.lenovo_tab.set_file(path)
+        self._clear_results()
+        self.statusBar().showMessage(f"Loaded: {path}")
+        self.run_analysis()
 
     def _clear_results(self):
         """Results shown for the previous file must not stay on screen for the new one."""

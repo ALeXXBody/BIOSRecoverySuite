@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -45,15 +44,7 @@ class LenovoTab(QWidget):
     def _build(self):
         layout = QVBoxLayout(self)
 
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("BIOS dump:"))
-        self.file_edit = QLineEdit()
-        self.file_edit.setReadOnly(True)
-        file_row.addWidget(self.file_edit, 1)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.browse)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
+        layout.addWidget(QLabel("Works on the file loaded in the header (File > Open)."))
 
         # ---- detection -----------------------------------------------
         self.detect_btn = QPushButton("Detect Lenovo Features")
@@ -142,7 +133,6 @@ class LenovoTab(QWidget):
 
     def set_file(self, path: str):
         self.current_dump = path
-        self.file_edit.setText(path)
         self._clear_scan()
         self._log(f"Loaded {path}")
 
@@ -150,13 +140,6 @@ class LenovoTab(QWidget):
         """Results belong to one file. A new file, or a failed scan, must not leave old ones."""
         self._scan_results = {}
         self.groups_table.setRowCount(0)
-
-    def browse(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open BIOS dump", "", "Binary (*.bin *.rom *.fd *.dump);;All Files (*)"
-        )
-        if path:
-            self.set_file(path)
 
     def _log(self, text: str):
         self.log_text.appendPlainText(text)

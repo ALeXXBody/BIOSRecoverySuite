@@ -187,8 +187,7 @@ def test_generate_passwords_every_generator(window):
 
 def test_ec_tab_full_flow(window, ec_dump, tmp_path, monkeypatch):
     tab = window.ec_tab
-    tab.current_dump = ec_dump
-    tab.ec_file.setText(ec_dump)
+    tab.set_file(ec_dump)
     tab.analyze()
     assert "EC firmware found" in tab.analysis_text.toPlainText()
 

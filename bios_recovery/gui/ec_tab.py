@@ -36,15 +36,7 @@ class ECTab(QWidget):
     def _build(self):
         layout = QVBoxLayout(self)
 
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("SPI dump / EC file:"))
-        self.ec_file = QLineEdit()
-        self.ec_file.setReadOnly(True)
-        file_row.addWidget(self.ec_file, 1)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.browse)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
+        layout.addWidget(QLabel("Works on the file loaded in the header (File > Open)."))
 
         analyze_btn = QPushButton("Analyze EC Firmware")
         analyze_btn.clicked.connect(self.analyze)
@@ -173,17 +165,10 @@ class ECTab(QWidget):
         self.patch_desc.setText("")
         self.verified_label.setText("")
 
-    def browse(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open SPI dump or EC firmware",
-            "",
-            "Binary (*.bin *.rom *.dump);;All Files (*)",
-        )
-        if path:
-            self.current_dump = path
-            self.ec_file.setText(path)
-            self._log(f"Loaded {path}")
+    def set_file(self, path: str):
+        """Called by the window when a file is loaded; the EC tab never picks its own."""
+        self.current_dump = path
+        self._log(f"Loaded {path}")
 
     def browse_extract(self):
         path, _ = QFileDialog.getSaveFileName(

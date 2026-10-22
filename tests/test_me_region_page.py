@@ -89,9 +89,35 @@ def test_spi_page_hex_view_reads_the_shared_image(qapp, tmp_path):
 
     img = tmp_path / "img.bin"
     img.write_bytes(bytes(range(64)))
-    tab = SPITab()
-    tab.set_image(str(img))
+    tab = SPITab(image_provider=lambda: str(img))
     tab.hex_offset.setText("0")
     tab.hex_length.setText("16")
     tab.view_hex()
     assert "00 01 02 03" in tab.log_text.toPlainText()
+
+
+def test_one_open_serves_every_page(qapp, tmp_path, monkeypatch):
+    """Opening a file once must make it the image for every page; no page keeps a copy."""
+    from PySide6.QtWidgets import QFileDialog
+
+    from bios_recovery.gui.main_window import MainWindow
+
+    img = tmp_path / "dump.bin"
+    img.write_bytes(build_intel_ifd_image())
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(img), ""))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+
+    w = MainWindow()
+    w.open_file()
+
+    assert w.current_file == str(img)
+    assert w.me_page._image() == str(img)
+    assert w.me_page.image_label.text() == str(img)
+    assert w.spi_tab._image() == str(img)
+    assert w.ec_tab.current_dump == str(img)
+    assert w.lenovo_tab.current_dump == str(img)
+    for name in ("repair_file", "dmi_file", "password_file", "extract_file", "ec_file",
+                 "file_edit", "clone_old_edit", "image_edit", "write_path"):
+        for owner in (w, w.ec_tab, w.lenovo_tab):
+            assert not hasattr(owner, name)
+    assert w.file_label.toolTip() == str(img)

@@ -1,7 +1,7 @@
 """Flash & Hex page: SPI programmer (flashrom / CH341A) and a hex view of the image.
 
-One image field serves both: the write source and the hex view. A completed backup
-read becomes that image, so its contents can be viewed without a browse step.
+Both use the file loaded in the window (File > Open). A completed backup read is loaded
+into the window the same way, so it can be viewed without a browse step.
 Results of every action go to one output pane.
 """
 
@@ -30,26 +30,26 @@ from bios_recovery.gui.workers import Job
 class SPITab(QWidget):
     """Read / write / erase SPI flash chips through flashrom."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, image_provider=None, load_image=None):
         super().__init__(parent)
         self.flasher = SPIFlasher()
         self._jobs = {}
         self._job_seq = 0
         self.parent_window = parent
+        self._image = image_provider or (lambda: None)
+        self._load_image = load_image
         self.current_image = None
         self._build()
 
     def _build(self):
         layout = QVBoxLayout(self)
 
+        self.image_label = QLineEdit()
+        self.image_label.setReadOnly(True)
+        self.image_label.setPlaceholderText("Open a BIOS file (File > Open) to write or view it")
         image_row = QHBoxLayout()
         image_row.addWidget(QLabel("Image:"))
-        self.image_edit = QLineEdit()
-        self.image_edit.setPlaceholderText("BIOS image to write, or to view in hex")
-        image_row.addWidget(self.image_edit, 1)
-        image_browse = QPushButton("Browse...")
-        image_browse.clicked.connect(self._browse_open)
-        image_row.addWidget(image_browse)
+        image_row.addWidget(self.image_label, 1)
         layout.addLayout(image_row)
 
         hex_row = QHBoxLayout()
@@ -140,12 +140,12 @@ class SPITab(QWidget):
         self.log_text.setReadOnly(True)
         layout.addWidget(self.log_text, 1)
 
-    def set_image(self, path: str) -> None:
-        """Make path the image used for writing and for the hex view."""
-        self.image_edit.setText(path)
+    def refresh(self) -> None:
+        """Show the image loaded in the window."""
+        self.image_label.setText(self._image() or "")
 
     def view_hex(self):
-        path = self.image_edit.text().strip()
+        path = (self._image() or "").strip()
         if not path or not os.path.exists(path):
             QMessageBox.warning(self, "No Image", "Choose an image first.")
             return
@@ -180,13 +180,6 @@ class SPITab(QWidget):
         )
         if path:
             self.read_path.setText(path)
-
-    def _browse_open(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open BIOS image", "", "Binary (*.bin *.rom);;All Files (*)"
-        )
-        if path:
-            self.image_edit.setText(path)
 
     def _log(self, text: str):
         self.log_text.appendPlainText(text)
@@ -257,7 +250,8 @@ class SPITab(QWidget):
                 self._log(result.output.strip())
             if result.status == SPIStatus.SUCCESS:
                 self.current_image = path
-                self.set_image(path)
+                if self._load_image:
+                    self._load_image(path)
                 self._log(f"Backup saved to {path} ({result.flash_size:,} bytes)")
 
         self._start_job(
@@ -270,9 +264,9 @@ class SPITab(QWidget):
         if not self.write_consent.isChecked():
             QMessageBox.warning(self, "Consent Required", "Check the write consent box first.")
             return
-        image = self.image_edit.text().strip()
+        image = (self._image() or "").strip()
         if not image:
-            QMessageBox.warning(self, "No Image", "Select the BIOS image to write.")
+            QMessageBox.warning(self, "No Image", "Open the BIOS image first (File > Open).")
             return
         if not os.path.exists(image):
             QMessageBox.warning(self, "Missing Image", "Image file not found.")
