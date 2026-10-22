@@ -681,6 +681,12 @@ def asus_date(date_str: str) -> str:
 #  dispatcher                                                            #
 # --------------------------------------------------------------------- #
 
+def _dell_code(code: str) -> list[str]:
+    from bios_recovery.utils.dell_passwords import dell_from_code
+
+    return dell_from_code(code)
+
+
 GENERATORS = {
     "phoenix_5dec": ("Phoenix / HP / Compaq / FSI (5 decimal digits)", phoenix_5dec),
     "fsi_hex": ("Fujitsu-Siemens (8 hex digits or 5x4 hex)", fsi_hex),
@@ -690,6 +696,7 @@ GENERATORS = {
     "sony_4x4": ("Sony (4x4 hexadecimal OTP)", sony_4x4),
     "hp_mini": ("HP/Compaq Mini (10 char serial)", hp_mini),
     "hp_ami": ("HP AMI (8 hex digits)", hp_ami),
+    "dell": ("Dell (1234567-595B, or an 11-character HDD serial)", _dell_code),
     "asus_date": ("ASUS (system date, e.g. 2013-12-31)", asus_date),
 }
 
@@ -702,6 +709,14 @@ def generate(generator_key: str, code: str):
         return list(result.items())
     if isinstance(result, str):
         return [("password", result)]
+    if isinstance(result, list) and result and isinstance(result[0], str):
+        labelled = []
+        for i, item in enumerate(result):
+            name = f"password {i + 1}" if len(result) > 1 else "password"
+            labelled.append((name, item))
+        return labelled
+    if isinstance(result, list) and not result:
+        raise ValueError("no password for this input")
     if isinstance(result, list):  # samsung: list of dicts
         return [
             (

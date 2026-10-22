@@ -266,12 +266,14 @@ class PasswordRemover:
             )
 
     def generate_dell_master_password(self, service_tag: str, suffix: str) -> list[str]:
-        """Refused: no published Dell master-password algorithm is implemented here.
+        """Dell master passwords for a service tag or 11-character HDD serial plus a suffix.
 
-        dogbert's dell.c uses an MD5-style block transform with custom tables. Nothing in this
-        repository reproduces it, so no password is produced rather than a guess.
+        Same inputs as pwgen-for-bios. An unrecognised suffix or length returns no password.
         """
-        return []
+        from bios_recovery.utils.dell_passwords import dell_password
+
+        text = (service_tag or "").strip()
+        return dell_password(text, suffix, hdd=len(text) == 11)
 
     def generate_hp_master_password(self, code: str) -> str:
         """HP AMI master password from an 8-digit hex code. Empty if the code is not that form."""

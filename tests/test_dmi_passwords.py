@@ -77,7 +77,8 @@ def test_password_removal_refuses_output_equal_to_input(intel_ifd):
 
 def test_dell_master_password_is_refused():
     # no published Dell algorithm is implemented, so no guessed password is returned
-    assert PasswordRemover().generate_dell_master_password("ABC1234", "595B") == []
+    assert PasswordRemover().generate_dell_master_password("1234567", "595B") == ["46rg65ky"]
+    assert PasswordRemover().generate_dell_master_password("ABC1234", "NOPE") == []
 
 
 def test_hp_master_password_is_refused():
