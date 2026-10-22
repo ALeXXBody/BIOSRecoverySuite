@@ -77,11 +77,13 @@ class BiosAnalysisResult:
 def decode_flreg(value: int) -> tuple[int, int]:
     """(base, limit) in bytes, relative to the descriptor, from one FLREG register.
 
-    Per the Intel flash descriptor layout (and coreboot's ifdtool / intel_fw): base is
-    bits 12:0 and limit is bits 28:16, both in 4 KB pages, the limit inclusive.
+    base is bits 14:0 and limit bits 30:16, both in 4 KB pages, limit inclusive. A
+    15-bit page field addresses 128 MB; the 13-bit field some tools use covers only
+    32 MB and would mis-place regions of larger chips. Matches me_cleaner's
+    flreg_to_start_end().
     """
-    base = (value & 0x1FFF) << 12
-    limit = (((value >> 16) & 0x1FFF) << 12) | 0xFFF
+    base = (value & 0x7FFF) << 12
+    limit = (((value >> 16) & 0x7FFF) << 12) | 0xFFF
     return base, limit
 
 
