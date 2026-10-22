@@ -1,2 +1,3 @@
 include bios_recovery/third_party/mea/*.py
 include bios_recovery/third_party/mea/*.dat
+recursive-include bios_recovery/patches *

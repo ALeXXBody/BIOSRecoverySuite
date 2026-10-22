@@ -469,6 +469,9 @@ def _cli_main(argv) -> int:
         from bios_recovery.platforms.ec.ec_patcher import ECPatcher
 
         p_ = ECPatcher()
+        if p_.load_error:
+            print(f"Error: {p_.load_error}", file=sys.stderr)
+            return 1
         hits = p_.scan_patch_sites(f)
         found = [h for h in hits if h.get("found")]
         print(f"EC patches in table: {len(hits)}  (signatures present: {len(found)})")

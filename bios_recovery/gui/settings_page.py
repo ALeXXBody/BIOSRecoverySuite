@@ -32,7 +32,7 @@ DISCLAIMER = (
 )
 
 
-def _run_inline(task, on_done):
+def _run_inline(task, on_done, button=None):
     on_done(task())
 
 
@@ -143,7 +143,6 @@ class SettingsPage(QWidget):
         return results
 
     def start_scan(self, on_done=None):
-        self.scan_button.setEnabled(False)
         self.scan_status.setText("Scanning…")
 
         def finished(result):
@@ -151,10 +150,9 @@ class SettingsPage(QWidget):
             if on_done:
                 on_done(result)
 
-        self._run_task(lib.scan, finished)
+        self._run_task(lib.scan, finished, button=self.scan_button)
 
     def _show_result(self, result):
-        self.scan_button.setEnabled(True)
         self.tools_table.setRowCount(0)
         for t in result.tools:
             self._add_row(
@@ -192,7 +190,6 @@ class SettingsPage(QWidget):
         path = self._selected_tool_path()
         if not path:
             return
-        self.identify_button.setEnabled(False)
         self.scan_status.setText("Identifying (running the tool once)...")
 
         def finished(probe):
@@ -204,7 +201,7 @@ class SettingsPage(QWidget):
                 on_done(probe)
             self.start_scan()
 
-        self._run_task(lambda: lib.identify_tool(path), finished)
+        self._run_task(lambda: lib.identify_tool(path), finished, button=self.identify_button)
 
     @staticmethod
     def _add_row(table, values):

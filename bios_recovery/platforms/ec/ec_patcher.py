@@ -143,6 +143,7 @@ class ECPatcher:
     def __init__(self, patches_path: Optional[str] = None):
         self.patches_path = patches_path or self._default_patches_path()
         self._patches: list[ECPatch] = []
+        self.load_error: Optional[str] = None
         self._load_patches()
 
     def _default_patches_path(self) -> str:
@@ -856,6 +857,7 @@ class ECPatcher:
 
     def _load_patches(self) -> None:
         if not os.path.exists(self.patches_path):
+            self.load_error = f"EC patch registry not found: {self.patches_path}"
             return
         try:
             with open(self.patches_path, "r") as f:

@@ -189,7 +189,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.spi_tab, "Flash & Hex")
         self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock")
         self.settings_page = SettingsPage(
-            self, run_task=lambda task, done: self._run_in_thread(task, done)
+            self, run_task=lambda task, done, button=None: self._run_in_thread(
+                task, done, button=button
+            )
         )
         self.tabs.addTab(self.settings_page, "Settings")
 
@@ -826,7 +828,6 @@ class MainWindow(QMainWindow):
     def run_repair(self):
         if not self.current_file:
             return
-        self.repair_btn.setEnabled(False)
         output = self.current_file.rsplit(".", 1)[0] + "_repaired.bin"
         self._run_in_thread(
             self.repair_engine.auto_repair,
@@ -835,10 +836,10 @@ class MainWindow(QMainWindow):
             output,
             self.repair_checksum_ck.isChecked(),
             self.repair_size_ck.isChecked(),
+            button=self.repair_btn,
         )
 
     def _repair_done(self, report):
-        self.repair_btn.setEnabled(True)
         lines = []
         lines.append(f"Repair {'Success' if report.success else 'Failed'}")
         lines.append(f"Output: {report.output_path}")
@@ -864,14 +865,16 @@ class MainWindow(QMainWindow):
         )
         if not donor:
             return
-        self.graft_btn.setEnabled(False)
         engine = BiosRepairEngine()
         self._run_in_thread(
-            engine.auto_graft_from_donor, self._graft_done, self.current_file, donor
+            engine.auto_graft_from_donor,
+            self._graft_done,
+            self.current_file,
+            donor,
+            button=self.graft_btn,
         )
 
     def _graft_done(self, report):
-        self.graft_btn.setEnabled(True)
         lines = [
             f"Graft {'Success' if report.success else 'Failed'}",
             f"Output: {report.output_path}",
@@ -891,15 +894,14 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a capsule update (.CAP/.308/.217) first.")
             return
-        self.capsule_btn.setEnabled(False)
         self._run_in_thread(
             extract_flashable_image,
             self._flashable_done,
             self.current_file,
+            button=self.capsule_btn,
         )
 
     def _flashable_done(self, info):
-        self.capsule_btn.setEnabled(True)
         if not info.success:
             QMessageBox.warning(self, "Capsule Error", " ".join(info.messages) or "Unknown error")
             self.statusBar().showMessage("Capsule extraction failed")
@@ -932,23 +934,22 @@ class MainWindow(QMainWindow):
         )
         if not dump_path:
             return
-        self.capsule_merge_btn.setEnabled(False)
+        path = self.current_file
 
         def task():
             base = extract_flashable_image(
-                self.current_file,
-                output_path=self.current_file.rsplit(".", 1)[0] + "_flashable_merged_base.bin",
+                path,
+                output_path=path.rsplit(".", 1)[0] + "_flashable_merged_base.bin",
             )
             if not base.success:
                 return base
             merged = base.output_path
-            out = self.current_file.rsplit(".", 1)[0] + "_flashable_merged.bin"
+            out = path.rsplit(".", 1)[0] + "_flashable_merged.bin"
             return restore_nvar_from_dump(merged, dump_path, out)
 
-        self._run_in_thread(task, self._flashable_merge_done)
+        self._run_in_thread(task, self._flashable_merge_done, button=self.capsule_merge_btn)
 
     def _flashable_merge_done(self, info):
-        self.capsule_merge_btn.setEnabled(True)
         if not info.success:
             QMessageBox.warning(self, "Merge Error", " ".join(info.messages) or "Unknown error")
             self.statusBar().showMessage("Capsule merge failed")
@@ -989,12 +990,12 @@ class MainWindow(QMainWindow):
     def extract_dmi(self):
         if not self.current_file:
             return
-        self.dmi_extract_btn.setEnabled(False)
-        self._run_in_thread(read_identity_file, self._dmi_done, self.current_file)
+        self._run_in_thread(
+            read_identity_file, self._dmi_done, self.current_file, button=self.dmi_extract_btn
+        )
 
     def _dmi_done(self, result):
         info, nvram = result
-        self.dmi_extract_btn.setEnabled(True)
         if info is None:
             lines = [
                 "No SMBIOS table was found in this image.",
@@ -1091,14 +1092,19 @@ class MainWindow(QMainWindow):
         if not (serial or uuid or mac):
             QMessageBox.information(self, "Nothing to Edit", "Fill in a serial, UUID or MAC first.")
             return
-        self.dmi_apply_btn.setEnabled(False)
         editor = DMIEditor()
         self._run_in_thread(
-            editor.set_identity, self._dmi_edit_done, self.current_file, None, serial, uuid, mac
+            editor.set_identity,
+            self._dmi_edit_done,
+            self.current_file,
+            None,
+            serial,
+            uuid,
+            mac,
+            button=self.dmi_apply_btn,
         )
 
     def _dmi_edit_done(self, rep):
-        self.dmi_apply_btn.setEnabled(True)
         lines = [f"Edit {'Success' if rep.success else 'Failed'}", f"Output: {rep.output_path}"]
         for op in rep.operations:
             lines.append(f"  + {op}")
@@ -1114,11 +1120,11 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
             return
-        self.apple_btn.setEnabled(False)
-        self._run_in_thread(_apple_fsys_task, self._apple_fsys_done, self.current_file)
+        self._run_in_thread(
+            _apple_fsys_task, self._apple_fsys_done, self.current_file, button=self.apple_btn
+        )
 
     def _apple_fsys_done(self, rep):
-        self.apple_btn.setEnabled(True)
         lines = [f"{'Success' if rep.success else 'Failed'}: {rep.message}"]
         for op in rep.operations:
             lines.append(f"  + {op}")
@@ -1133,11 +1139,11 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
             return
-        self.dvar_btn.setEnabled(False)
-        self._run_in_thread(recover_passwords, self._dvar_recovery_done, self.current_file)
+        self._run_in_thread(
+            recover_passwords, self._dvar_recovery_done, self.current_file, button=self.dvar_btn
+        )
 
     def _dvar_recovery_done(self, rep):
-        self.dvar_btn.setEnabled(True)
         lines = [f"Recovery {'Success' if rep.success else 'Failed'}", rep.message]
         for pw in rep.passwords:
             lines.append(
@@ -1152,13 +1158,14 @@ class MainWindow(QMainWindow):
     def scan_passwords(self):
         if not self.current_file:
             return
-        self.scan_btn.setEnabled(False)
         self._run_in_thread(
-            self.password_remover.find_password_in_dump, self._password_scan_done, self.current_file
+            self.password_remover.find_password_in_dump,
+            self._password_scan_done,
+            self.current_file,
+            button=self.scan_btn,
         )
 
     def _password_scan_done(self, found):
-        self.scan_btn.setEnabled(True)
         if not found:
             self.password_text.setPlainText("No password structures found.")
             return
@@ -1173,17 +1180,16 @@ class MainWindow(QMainWindow):
     def remove_passwords(self):
         if not self.current_file:
             return
-        self.remove_btn.setEnabled(False)
         output = self.current_file.rsplit(".", 1)[0] + "_nopass.bin"
         self._run_in_thread(
             self.password_remover.remove_passwords,
             self._password_remove_done,
             self.current_file,
             output,
+            button=self.remove_btn,
         )
 
     def _password_remove_done(self, report):
-        self.remove_btn.setEnabled(True)
         lines = [
             f"Status: {report.status.name}",
             f"Output: {report.output_path}",
@@ -1198,8 +1204,6 @@ class MainWindow(QMainWindow):
     def extract_bios(self):
         if not self.current_file:
             return
-        self.extract_btn.setEnabled(False)
-
         method_map = {
             0: "AUTO",
             1: "DELL_PFS",
@@ -1220,11 +1224,15 @@ class MainWindow(QMainWindow):
         method = ExtractionMethod[method_name]
 
         self._run_in_thread(
-            self.bios_extractor.extract, self._extract_done, self.current_file, None, method
+            self.bios_extractor.extract,
+            self._extract_done,
+            self.current_file,
+            None,
+            method,
+            button=self.extract_btn,
         )
 
     def _extract_done(self, result):
-        self.extract_btn.setEnabled(True)
         lines = [
             f"Success: {result.success}",
             f"Method: {result.method_used}",

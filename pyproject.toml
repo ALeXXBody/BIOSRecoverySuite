@@ -1,10 +1,10 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "BIOSRecoverySuite"
-version = "0.4.17"
+version = "0.4.18"
 description = "Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password removal tool"
 readme = "README.md"
 license = {text = "MIT"}
@@ -46,6 +46,15 @@ bios-recovery = "bios_recovery.main:main"
 
 [tool.setuptools.packages.find]
 include = ["bios_recovery*"]
+
+[tool.setuptools.package-data]
+bios_recovery = [
+    "patches/*.json",
+    "patches/*.txt",
+    "patches/dxe/*",
+    "third_party/mea/*.py",
+    "third_party/mea/*.dat",
+]
 
 [tool.ruff]
 line-length = 100

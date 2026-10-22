@@ -12,7 +12,8 @@ a = Analysis(
         ("bios_recovery/third_party/mea/MEA.py", "bios_recovery/third_party/mea"),
         ("bios_recovery/third_party/mea/MEA.dat", "bios_recovery/third_party/mea"),
         ("bios_recovery/third_party/mea/Huffman.dat", "bios_recovery/third_party/mea"),
-        ("bios_recovery/third_party/mea/FileTable.dat", "bios_recovery/third_party/mea")],
+        ("bios_recovery/third_party/mea/FileTable.dat", "bios_recovery/third_party/mea"),
+        ("bios_recovery/patches", "bios_recovery/patches")],
     hiddenimports=[
         "bios_recovery.engines.mea_bridge",
         "bios_recovery.third_party.mea",

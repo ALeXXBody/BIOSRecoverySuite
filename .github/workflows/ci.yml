@@ -57,6 +57,15 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm bios_recovery.spec
 
+      - name: Check the built app contains the patch registries
+        shell: pwsh
+        run: |
+          $req = @("dist\BIOSRecoverySuite\_internal\bios_recovery\patches\ec_patches.json",
+                   "dist\BIOSRecoverySuite\_internal\bios_recovery\patches\lenovo_patches.txt")
+          foreach ($f in $req) {
+            if (-not (Test-Path $f)) { Write-Error "missing from build: $f"; exit 1 }
+          }
+
       - name: Build Windows installer (Inno Setup)
         shell: pwsh
         run: |

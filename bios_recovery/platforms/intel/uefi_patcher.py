@@ -102,6 +102,7 @@ class UEFIPatcher:
     def __init__(self, patches_path: Optional[str] = None):
         self.patches_path = patches_path or self._default_patches_path()
         self.groups: list[dict] = []
+        self.load_error: Optional[str] = None
         self._load_patches()
 
     def _default_patches_path(self) -> str:
@@ -115,6 +116,7 @@ class UEFIPatcher:
     def _load_patches(self):
         self.groups = []
         if not os.path.exists(self.patches_path):
+            self.load_error = f"Lenovo patch registry not found: {self.patches_path}"
             return
         cur = None
         with open(self.patches_path, "r") as f:
