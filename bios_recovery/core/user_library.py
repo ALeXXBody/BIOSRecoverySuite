@@ -327,7 +327,6 @@ def firmware_for_version(version: str) -> list:
 
 def scan(folders: Optional[list] = None) -> ScanResult:
     """List Intel tools and ME firmware in the user's folders. Nothing is executed."""
-    from bios_recovery.core.bios_analyzer import BiosAnalyzer
     from bios_recovery.core.me_manifest import iter_manifest_versions
 
     lib = load_library()
@@ -382,7 +381,7 @@ def scan(folders: Optional[list] = None) -> ScanResult:
                     seen_content.add(digest)
                     # A full ME image carries its partition table. Sub-partitions (OEMP, IOMP,
                     # PCH configuration...) carry manifest tags too but no partition table.
-                    if not BiosAnalyzer()._fpt_positions(data):
+                    if not _looks_like_me_image(data):
                         continue
                     versions = iter_manifest_versions(data)
                     if versions:
@@ -404,9 +403,25 @@ class ImportResult:
     refused: str = ""
 
 
+def _has_flash_descriptor(data: bytes) -> bool:
+    """True for a full SPI image. A standalone ME file does not carry this signature.
+
+    The descriptor signature sits at 0x10 in a standard image and at 0 in images
+    whose leading 16 bytes were not captured.
+    """
+    signature = 0x0FF0A55A
+    for offset in (0x10, 0):
+        end = offset + 4
+        if end <= len(data) and int.from_bytes(data[offset:end], "little") == signature:
+            return True
+    return False
+
+
 def _looks_like_me_image(data: bytes) -> bool:
     from bios_recovery.core.bios_analyzer import BiosAnalyzer
 
+    if _has_flash_descriptor(data):
+        return False
     return bool(BiosAnalyzer()._fpt_positions(data))
 
 

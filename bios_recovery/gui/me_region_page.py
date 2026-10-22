@@ -205,6 +205,17 @@ class MERegionPage(QWidget):
             return
         if info["matches"]:
             source = info["matches"][0]
+            if len(info["matches"]) == 1:
+                answer = QMessageBox.question(
+                    self,
+                    "Inject clean ME",
+                    f"Use this library image for ME {version}?\n{source}",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    self._report("Inject clean ME", ["Cancelled; nothing done."])
+                    return
             if len(info["matches"]) > 1:
                 names = [f"{os.path.basename(m)}  ({m})" for m in info["matches"]]
                 choice, ok = QInputDialog.getItem(

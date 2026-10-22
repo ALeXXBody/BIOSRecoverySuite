@@ -160,8 +160,12 @@ def _page(img):
     return MERegionPage(image_provider=lambda: str(img))
 
 
-def test_inject_uses_the_library_image_for_this_version(qapp, tmp_path):
+def test_inject_uses_the_library_image_for_this_version(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
     from bios_recovery.core import user_library as lib
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
 
     img, version = _loaded_image_and_version(tmp_path)
     clean = tmp_path / "clean.bin"

@@ -90,30 +90,34 @@ def test_read_reports_real_chip_and_size(monkeypatch, tool, tmp_path):
 def test_write_with_verify_does_not_pass_v(monkeypatch, tool, tmp_path):
     """SP-1: -v with -w is two operations; flashrom auto-verifies after -w."""
     image = tmp_path / "img.bin"
-    image.write_bytes(b"\xab" * 4096)
-    rec = Recorder(stderr=PROBE + "\n")
+    image.write_bytes(b"\xab" * MB16)
+    rec = Recorder(
+        stdout='vendor="Winbond" name="W25Q128.V"\n',
+        stderr=PROBE + "\n",
+    )
     monkeypatch.setattr(spi_flasher.subprocess, "run", rec)
     result = SPIFlasher(tool).write_chip(
         str(image), "ch341a_spi", consent=True, verify=True, backup=False
     )
-    assert result.status == SPIStatus.SUCCESS
-    (argv,) = rec.argvs()
-    assert "-w" in argv and "-v" not in argv and "-n" not in argv
+    assert result.status == SPIStatus.SUCCESS, result.message
+    write = [argv for argv in rec.argvs() if "-w" in argv]
+    assert len(write) == 1
+    assert "-v" not in write[0] and "-n" not in write[0]
 
 
 def test_write_without_verify_passes_noverify(monkeypatch, tool, tmp_path):
     """SP-8: verify=False passes -n, which is the flag that turns auto-verify off."""
     image = tmp_path / "img.bin"
-    image.write_bytes(b"\xab" * 4096)
-    rec = Recorder()
+    image.write_bytes(b"\xab" * MB16)
+    rec = Recorder(stdout='vendor="Winbond" name="W25Q128.V"\n', stderr=PROBE + "\n")
     monkeypatch.setattr(spi_flasher.subprocess, "run", rec)
     result = SPIFlasher(tool).write_chip(
         str(image), "ch341a_spi", consent=True, verify=False, backup=False
     )
-    assert result.status == SPIStatus.SUCCESS
+    assert result.status == SPIStatus.SUCCESS, result.message
     assert "Write complete (not verified)" == result.message
-    (argv,) = rec.argvs()
-    assert argv[-1] == "-n" and "-v" not in argv
+    write = [argv for argv in rec.argvs() if "-w" in argv]
+    assert write[0][-1] == "-n" and "-v" not in write[0]
 
 
 def test_write_takes_backup_first_and_stops_when_backup_fails(monkeypatch, tool, tmp_path):
@@ -131,7 +135,7 @@ def test_write_takes_backup_first_and_stops_when_backup_fails(monkeypatch, tool,
 def test_write_backup_default_name_is_not_overwritten(monkeypatch, tool, tmp_path):
     """SP-4: an earlier backup is kept; the new one gets a numbered name."""
     image = tmp_path / "img.bin"
-    image.write_bytes(b"\xab" * 4096)
+    image.write_bytes(b"\xab" * MB16)
     earlier = tmp_path / "img_prewrite_backup.bin"
     earlier.write_bytes(b"EARLIER")
     rec = Recorder(stderr=PROBE + "\n", on_call=_write_partial)
@@ -155,6 +159,20 @@ def test_write_refuses_missing_or_empty_image_without_running_tool(monkeypatch, 
     blank = flasher.write_chip(str(empty), consent=True)
     assert blank.status == SPIStatus.ERROR
     assert rec.calls == []
+
+
+def test_write_refuses_when_image_size_differs_from_chip(monkeypatch, tool, tmp_path):
+    """SP-5: a size mismatch is refused after the chip size is known, and -w is not run."""
+    image = tmp_path / "img.bin"
+    image.write_bytes(b"\xab" * 4096)
+    rec = Recorder(stdout='vendor="Winbond" name="W25Q128.V"\n', stderr=PROBE + "\n")
+    monkeypatch.setattr(spi_flasher.subprocess, "run", rec)
+    result = SPIFlasher(tool).write_chip(
+        str(image), "ch341a_spi", consent=True, backup=False
+    )
+    assert result.status == SPIStatus.ERROR
+    assert "4096 bytes" in result.message and "Nothing was written" in result.message
+    assert all("-w" not in argv for argv in rec.argvs())
 
 
 def test_discover_uses_list_supported_without_extra_word(monkeypatch, tool):
@@ -200,20 +218,23 @@ def test_read_failure_leaves_no_partial_file(monkeypatch, tool, tmp_path):
 def test_write_and_erase_have_no_timeout(monkeypatch, tool, tmp_path):
     """SP-6: a write or erase is never killed by a timer."""
     image = tmp_path / "img.bin"
-    image.write_bytes(b"\xab" * 4096)
-    rec = Recorder()
+    image.write_bytes(b"\xab" * MB16)
+    rec = Recorder(stdout='vendor="Winbond" name="W25Q128.V"\n', stderr=PROBE + "\n")
     monkeypatch.setattr(spi_flasher.subprocess, "run", rec)
     flasher = SPIFlasher(tool)
     flasher.write_chip(str(image), consent=True, backup=False)
     flasher.erase_chip(consent=True)
-    assert [kw["timeout"] for _, kw in rec.calls] == [None, None]
+    writes = [kw["timeout"] for cmd, kw in rec.calls if "-w" in cmd or "-E" in cmd]
+    assert writes == [None, None]
 
 
 def test_failed_write_says_chip_state_is_unknown(monkeypatch, tool, tmp_path):
     """SP-6: after a failed or interrupted write the user is told to restore the backup."""
     image = tmp_path / "img.bin"
-    image.write_bytes(b"\xab" * 4096)
-    rec = Recorder(returncode=1)
+    image.write_bytes(b"\xab" * MB16)
+    rec = Recorder(
+        returncode=1, stdout='vendor="Winbond" name="W25Q128.V"\n', stderr=PROBE + "\n"
+    )
     monkeypatch.setattr(spi_flasher.subprocess, "run", rec)
     result = SPIFlasher(tool).write_chip(str(image), consent=True, backup=False)
     assert result.status == SPIStatus.ERROR
@@ -232,7 +253,7 @@ def test_verified_write_end_to_end_with_test_double(tmp_path, monkeypatch):
     """SP-1: the repo's flashrom test double rejects -w with -v; the default write works."""
     fake = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_flashrom.py")
     image = tmp_path / "img.bin"
-    image.write_bytes(b"\xab" * 4096)
+    image.write_bytes(b"\xab" * MB16)
     chip = tmp_path / "chip.bin"
     monkeypatch.setenv("FAKE_FLASH_IMAGE", str(chip))
     flasher = SPIFlasher(flashrom_path=fake)

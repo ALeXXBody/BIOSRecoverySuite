@@ -99,6 +99,29 @@ def test_tool_file_name_rejects_path_parts():
         lib.tool_file_name("FIT", "1.2/3", "Linux")
 
 
+def test_full_spi_image_is_not_listed_as_me_firmware(tmp_path):
+    """F-29: a full flash image is not a clean ME donor, even if it contains $FPT."""
+    from tests.fixture_builder import build_intel_ifd_image
+
+    folder = tmp_path / "fw"
+    folder.mkdir()
+    full = bytearray(build_intel_ifd_image())
+    full[0x2000:0x2004] = b"$FPT"
+    full[0x2004:0x2008] = (2).to_bytes(4, "little")
+    (folder / "board.bin").write_bytes(bytes(full))
+    standalone = bytearray(b"\xff" * 0x1000)
+    standalone[0:4] = b"$FPT"
+    standalone[4:8] = (2).to_bytes(4, "little")
+    (folder / "me_only.bin").write_bytes(bytes(standalone))
+
+    assert not lib._looks_like_me_image(bytes(full))
+    assert lib._looks_like_me_image(bytes(standalone))
+    refused = lib.import_files([str(folder / "board.bin")], "firmware")[0]
+    assert refused.refused and not refused.copied_to
+    kept = lib.import_files([str(folder / "me_only.bin")], "firmware")[0]
+    assert kept.copied_to and not kept.refused
+
+
 def test_library_cli_config_path_is_a_file_returns_2(tmp_path, monkeypatch, capsys):
     """LB-4: an unusable config location is a one-line error, not a traceback."""
     blocker = tmp_path / "not_a_dir"

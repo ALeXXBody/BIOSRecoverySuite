@@ -13,11 +13,13 @@ Vendors / formats covered:
   * Samsung                                      - 12/18 hex digits
   * Sony                                         - 4x4 hex OTP
   * HP/Compaq Mini netbooks                      - 10 character serial
+  * HP AMI                                       - 8 hex digits
   * ASUS                                         - system date (Alt+R)
 """
 
 import struct
 import time
+import zlib
 
 # --------------------------------------------------------------------- #
 #  shared building blocks (from dogbert's scripts)                       #
@@ -562,6 +564,43 @@ _HP_MINI_TABLE2 = dict(_HP_MINI_TABLE1)
 _HP_MINI_TABLE2["x"] = "R"
 
 
+_HP_AMI_SALT = bytes(
+    [
+        0xB9,
+        0xED,
+        0xF5,
+        0x69,
+        0x9D,
+        0x16,
+        0x49,
+        0xF9,
+        0x8C,
+        0x5F,
+        0x7C,
+        0xB3,
+        0x68,
+        0x3C,
+        0xD4,
+        0xA7,
+    ]
+)
+
+
+def hp_ami(code: str) -> str:
+    """HP AMI master password from an 8-digit hex code (pwgen-for-bios hpami).
+
+    Refuses anything that is not 8 hex digits rather than returning a guess.
+    """
+    text = (code or "").strip()
+    if len(text) != 8 or any(c not in "0123456789abcdefABCDEF" for c in text):
+        raise ValueError("HP AMI code must be 8 hex digits")
+    value = int(text, 16)
+    inner = bytes(b ^ 0x36 for b in _HP_AMI_SALT) + value.to_bytes(4, "little")
+    mixed = zlib.crc32(inner) & 0xFFFFFFFF
+    outer = bytes(b ^ 0x5C for b in _HP_AMI_SALT) + mixed.to_bytes(4, "little")
+    return f"{zlib.crc32(outer) & 0xFFFFFFFF:08x}"
+
+
 def hp_mini(code: str) -> str:
     code = (code or "").strip()
     if not code or any(c.lower() not in _HP_MINI_TABLE1 for c in code):
@@ -650,6 +689,7 @@ GENERATORS = {
     "samsung": ("Samsung (12/18 hex digits)", samsung),
     "sony_4x4": ("Sony (4x4 hexadecimal OTP)", sony_4x4),
     "hp_mini": ("HP/Compaq Mini (10 char serial)", hp_mini),
+    "hp_ami": ("HP AMI (8 hex digits)", hp_ami),
     "asus_date": ("ASUS (system date, e.g. 2013-12-31)", asus_date),
 }
 

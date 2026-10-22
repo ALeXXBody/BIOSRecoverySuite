@@ -221,6 +221,7 @@ class SPIFlasher:
                 message="Image is empty; nothing was written.",
                 programmer=programmer,
             )
+        image_size = os.path.getsize(image_path)
 
         saved = ""
         if backup:
@@ -233,6 +234,26 @@ class SPIFlasher:
                     output=taken.output,
                     programmer=programmer,
                 )
+            chip_size = taken.flash_size
+        else:
+            chip_size = self.identify_chip(programmer).size
+        if chip_size <= 0:
+            return FlasherResult(
+                status=SPIStatus.ERROR,
+                message="Could not read the chip size, so nothing was written.",
+                programmer=programmer,
+                backup_path=saved,
+            )
+        if image_size != chip_size:
+            return FlasherResult(
+                status=SPIStatus.ERROR,
+                message=(
+                    f"Image is {image_size} bytes and the chip is {chip_size} bytes. "
+                    "Nothing was written."
+                ),
+                programmer=programmer,
+                backup_path=saved,
+            )
 
         args = ["-p", programmer, "-w", image_path]
         if not verify:

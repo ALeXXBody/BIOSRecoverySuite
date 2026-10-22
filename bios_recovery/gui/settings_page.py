@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QListWidget,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -190,6 +191,16 @@ class SettingsPage(QWidget):
         path = self._selected_tool_path()
         if not path:
             return
+        answer = QMessageBox.question(
+            self,
+            "Run this file",
+            f"Identifying runs this file once with -h, as the current user:\n{path}\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.scan_status.setText("Identify cancelled; the file was not run.")
+            return
         self.scan_status.setText("Identifying (running the tool once)...")
 
         def finished(probe):
@@ -229,6 +240,18 @@ class SettingsPage(QWidget):
         paths, _ = QFileDialog.getOpenFileNames(self, "Choose files to import", "", "All files (*)")
         if not paths:
             return
+        if kind == "tools":
+            answer = QMessageBox.question(
+                self,
+                "Run these files",
+                "Importing a tool runs each file once with -h, as the current user, "
+                "before it is kept. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.scan_status.setText("Import cancelled; nothing was run.")
+                return
         self._run_task(lambda: lib.import_files(paths, kind), self._import_done)
 
     def _import_done(self, results):

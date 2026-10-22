@@ -274,8 +274,13 @@ class PasswordRemover:
         return []
 
     def generate_hp_master_password(self, code: str) -> str:
-        """Refused: no published HP master-password algorithm is implemented here."""
-        return ""
+        """HP AMI master password from an 8-digit hex code. Empty if the code is not that form."""
+        from bios_recovery.utils.master_passwords import hp_ami
+
+        try:
+            return hp_ami(code)
+        except ValueError:
+            return ""
 
     def generate_insyde_master_password(self, code: str) -> str:
         """Insyde H2O master password from the 8-character hash (dogbert pwgen-insyde.py)."""

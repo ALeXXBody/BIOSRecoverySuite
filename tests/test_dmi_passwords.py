@@ -82,6 +82,7 @@ def test_dell_master_password_is_refused():
 
 def test_hp_master_password_is_refused():
     assert PasswordRemover().generate_hp_master_password("12345") == ""
+    assert PasswordRemover().generate_hp_master_password("A7AF422F") == "49163252"
 
 
 def test_insyde_master_password_generation():
