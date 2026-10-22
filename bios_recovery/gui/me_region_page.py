@@ -81,22 +81,20 @@ class MERegionPage(QWidget):
         clean_layout.addWidget(self.clean_btn)
         root.addWidget(clean_group)
 
-        inject_group = QGroupBox("Repair: inject a clean ME region of the same version")
-        inject_layout = QVBoxLayout(inject_group)
-        inject_row = QHBoxLayout()
-        self.clean_edit = QLineEdit()
-        self.clean_edit.setPlaceholderText("Path to clean ME region image (.bin)")
-        inject_row.addWidget(self.clean_edit, 1)
-        browse_clean = QPushButton("Browse...")
-        browse_clean.clicked.connect(self._browse_clean)
-        inject_row.addWidget(browse_clean)
-        inject_layout.addLayout(inject_row)
+        repair_group = QGroupBox("Repair: inject a clean ME of the same version")
+        repair_layout = QVBoxLayout(repair_group)
+        repair_layout.addWidget(
+            QLabel(
+                "Uses the clean ME image for this ME version from your library. If there is "
+                "none, you are asked to choose one, and it is added to the library."
+            )
+        )
         self.inject_btn = QPushButton("Inject Clean ME (writes a _mefixed file)")
         self.inject_btn.clicked.connect(self.inject)
-        inject_layout.addWidget(self.inject_btn)
-        root.addWidget(inject_group)
+        repair_layout.addWidget(self.inject_btn)
+        root.addWidget(repair_group)
 
-        verify_group = QGroupBox("Verify a rebuilt image against the image above")
+        verify_group = QGroupBox("Verify a rebuilt image against the loaded image")
         verify_layout = QVBoxLayout(verify_group)
         verify_row = QHBoxLayout()
         self.rebuilt_edit = QLineEdit()
@@ -182,20 +180,62 @@ class MERegionPage(QWidget):
         path = self._current()
         if not path:
             return
-        clean = self.clean_edit.text().strip()
-        if not clean or not os.path.exists(clean):
-            QMessageBox.warning(self, "No Clean Image", "Select a clean ME region image first.")
+        self._run_task(
+            lambda: _library_lookup(path),
+            lambda info: self._choose_clean_me(path, info),
+            button=self.inject_btn,
+        )
+
+    def _choose_clean_me(self, path: str, info: dict):
+        version = info["version"]
+        if not version:
+            self._report("Inject clean ME", ["No ME version could be read from the loaded image."])
             return
+        if info["matches"]:
+            source = info["matches"][0]
+            self._inject_from(path, source, f"from the library: {os.path.basename(source)}")
+            return
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            f"No clean ME {version} in the library - choose one (it will be added)",
+            "",
+            "Binary (*.bin);;All Files (*)",
+        )
+        if not chosen:
+            self._report(
+                "Inject clean ME", [f"No clean ME {version} in the library; nothing done."]
+            )
+            return
+        from bios_recovery.core import user_library as lib
+
+        result = lib.import_files([chosen], "firmware")[0]
+        if result.refused:
+            self._report("Inject clean ME", [f"Not added to the library: {result.refused}."])
+            return
+        with open(result.copied_to, "rb") as f:
+            added = lib.dominant_me_version(f.read())
+        if added != version:
+            self._report(
+                "Inject clean ME",
+                [
+                    f"Added to the library as {os.path.basename(result.copied_to)} (ME {added}), "
+                    f"but the loaded image is ME {version}. Nothing was injected."
+                ],
+            )
+            return
+        self._inject_from(path, result.copied_to, "added to the library and used")
+
+    def _inject_from(self, path: str, source: str, note: str):
         output = path.rsplit(".", 1)[0] + "_mefixed.bin"
 
         def done(result):
             if result["success"]:
-                self._report("Inject clean ME", [result["message"]])
+                self._report("Inject clean ME", [result["message"], f"Source: {note}"])
             else:
                 QMessageBox.warning(self, "Inject Failed", result["message"])
 
         self._run_task(
-            lambda: self.injector.inject(path, clean, output),
+            lambda: self.injector.inject(path, source, output),
             done,
             button=self.inject_btn,
         )
@@ -217,17 +257,19 @@ class MERegionPage(QWidget):
         self._run_task(lambda: verify_rebuild(path, candidate), done, button=self.verify_btn)
 
     # -- dialogs ----------------------------------------------------------------
-    def _browse_clean(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open clean ME image", "", "Binary (*.bin);;All Files (*)"
-        )
-        if path:
-            self.clean_edit.setText(path)
-
     def _browse_rebuilt(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose rebuilt image", "", "All files (*)")
         if path:
             self.rebuilt_edit.setText(path)
+
+
+def _library_lookup(path: str) -> dict:
+    """Read the loaded image's ME version and find library images that match it."""
+    from bios_recovery.core import user_library as lib
+
+    with open(path, "rb") as f:
+        version = lib.dominant_me_version(f.read())
+    return {"version": version, "matches": lib.firmware_for_version(version)}
 
 
 def _format_me_info(info) -> list:

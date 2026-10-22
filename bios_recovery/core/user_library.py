@@ -279,6 +279,21 @@ def identify_tool(path: str, timeout: int = 20):
     return probe
 
 
+def dominant_me_version(data: bytes) -> str:
+    """The ME version an image carries: its most common manifest version, '' if none."""
+    from bios_recovery.core.me_manifest import iter_manifest_versions
+
+    versions = [v for v, _base in iter_manifest_versions(data)]
+    return max(set(versions), key=versions.count) if versions else ""
+
+
+def firmware_for_version(version: str) -> list:
+    """Library ME images (paths) whose version is exactly `version`. Nothing is run."""
+    if not version:
+        return []
+    return [e.path for e in scan().firmware if e.me_version == version]
+
+
 def scan(folders: Optional[list] = None) -> ScanResult:
     """List Intel tools and ME firmware in the user's folders. Nothing is executed."""
     from bios_recovery.core.bios_analyzer import BiosAnalyzer

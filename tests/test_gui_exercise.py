@@ -109,22 +109,6 @@ def test_me_info_and_clean(window, intel_ifd, tmp_path, monkeypatch):
     assert "Status:" in window.me_page.output.toPlainText()
 
 
-def test_me_inject_with_valid_clean_image(window, intel_ifd, tmp_path, monkeypatch):
-    import struct
-
-    open_via_dialog(monkeypatch, window, intel_ifd)
-    clean = tmp_path / "clean_me.bin"
-    blob = bytearray(bytes((i * 13 + 7) & 0xFF for i in range(0x3FF000)))
-    blob[0x10:0x14] = b"$FPT"
-    blob[0x5000:0x5004] = b"$MN2"
-    struct.pack_into("<HH", blob, 0x5004, 9, 5)
-    clean.write_bytes(bytes(blob))
-    window.me_page.clean_edit.setText(str(clean))
-    window.me_page.inject()
-    _wait_threads(window)
-    assert os.path.exists(str(intel_ifd).rsplit(".", 1)[0] + "_mefixed.bin")
-
-
 def test_dmi_extract_and_clone(window, intel_ifd, tmp_path, monkeypatch):
     open_via_dialog(monkeypatch, window, intel_ifd)
     window.extract_dmi()

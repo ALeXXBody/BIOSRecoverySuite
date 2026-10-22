@@ -128,3 +128,102 @@ def test_audit_removed_duplicates(qapp):
     assert "Capsule → Flashable Image" not in overview_buttons
     repair_buttons = [b.text() for b in w.repair_tab.findChildren(QPushButton)]
     assert "Capsule → Flashable Image" in repair_buttons
+
+
+def _clean_me_blob(version: str, size: int = 0x3FF000) -> bytes:
+    """A minimal ME image: a partition table and one manifest carrying `version`."""
+    import struct
+
+    blob = bytearray(b"\xff" * size)
+    blob[0x10:0x14] = b"$FPT"
+    struct.pack_into("<I", blob, 0x14, 1)
+    tag = 0x5000
+    blob[tag : tag + 4] = b"$MN2"
+    major, minor, hotfix, build = (int(p) for p in version.split("."))
+    struct.pack_into("<HHHH", blob, tag + 8, major, minor, hotfix, build)
+    return bytes(blob)
+
+
+def _loaded_image_and_version(tmp_path):
+    from bios_recovery.core.user_library import dominant_me_version
+
+    img = tmp_path / "loaded.bin"
+    img.write_bytes(build_intel_ifd_image())
+    version = dominant_me_version(img.read_bytes())
+    assert version, "fixture image must carry an ME version"
+    return img, version
+
+
+def _page(img):
+    from bios_recovery.gui.me_region_page import MERegionPage
+
+    return MERegionPage(image_provider=lambda: str(img))
+
+
+def test_inject_uses_the_library_image_for_this_version(qapp, tmp_path):
+    from bios_recovery.core import user_library as lib
+
+    img, version = _loaded_image_and_version(tmp_path)
+    clean = tmp_path / "clean.bin"
+    clean.write_bytes(_clean_me_blob(version))
+    lib.import_files([str(clean)], "firmware")
+
+    page = _page(img)
+    page.inject()
+
+    assert (tmp_path / "loaded_mefixed.bin").exists()
+    assert "from the library:" in page.output.toPlainText()
+
+
+def test_inject_asks_for_a_file_and_adds_it_to_the_library(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    from bios_recovery.core import user_library as lib
+
+    img, version = _loaded_image_and_version(tmp_path)
+    clean = tmp_path / "clean.bin"
+    clean.write_bytes(_clean_me_blob(version))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(clean), ""))
+
+    page = _page(img)
+    page.inject()
+
+    assert (tmp_path / "loaded_mefixed.bin").exists()
+    assert any(e.me_version == version for e in lib.scan().firmware)
+    assert "added to the library and used" in page.output.toPlainText()
+
+
+def test_inject_keeps_a_wrong_version_in_the_library_but_does_not_use_it(
+    qapp, tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QFileDialog
+
+    from bios_recovery.core import user_library as lib
+
+    img, version = _loaded_image_and_version(tmp_path)
+    other = "9.0.0.1000" if not version.startswith("9.") else "10.0.0.1000"
+    clean = tmp_path / "other.bin"
+    clean.write_bytes(_clean_me_blob(other))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(clean), ""))
+
+    page = _page(img)
+    page.inject()
+
+    assert not (tmp_path / "loaded_mefixed.bin").exists()
+    assert any(e.me_version == other for e in lib.scan().firmware)
+    assert "Nothing was injected" in page.output.toPlainText()
+
+
+def test_inject_refuses_a_file_that_is_not_me_firmware(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    img, _version = _loaded_image_and_version(tmp_path)
+    junk = tmp_path / "junk.bin"
+    junk.write_bytes(b"\x00" * 0x1000)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(junk), ""))
+
+    page = _page(img)
+    page.inject()
+
+    assert not (tmp_path / "loaded_mefixed.bin").exists()
+    assert "Not added to the library" in page.output.toPlainText()
