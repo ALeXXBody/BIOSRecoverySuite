@@ -46,5 +46,16 @@ def test_gui_generator_uses_the_same_form():
     assert generate("dell", "1234567-595B") == [("password", "46rg65ky")]
 
 
+def test_latitude_3540_matches_the_published_vectors():
+    from bios_recovery.utils.dell_latitude import latitude3540
+
+    assert latitude3540("5F3988D5E0ACE4BF-7QH8602") == ["98072364"]
+    assert latitude3540("5F3988D5E0ACE4bF-7QH8602") == ["98072364"]
+    assert latitude3540("76A7D90FD9563C5F-3FN2J22") == ["60485207"]
+    assert latitude3540("1B6DD24D26E7B566-BJVDG22") == ["99937880"]
+    assert latitude3540("1B6DD24D26E7C566-BJVDG22") == []
+    assert generate("dell_latitude", "5F3988D5E0ACE4BF-7QH8602") == [("password", "98072364")]
+
+
 def test_unrecognised_suffix_is_not_a_guess():
     assert PasswordRemover().generate_dell_master_password("1234567", "NOPE") == []

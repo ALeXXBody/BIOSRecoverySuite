@@ -687,6 +687,12 @@ def _dell_code(code: str) -> list[str]:
     return dell_from_code(code)
 
 
+def _dell_latitude(code: str) -> list[str]:
+    from bios_recovery.utils.dell_latitude import latitude3540
+
+    return latitude3540(code)
+
+
 GENERATORS = {
     "phoenix_5dec": ("Phoenix / HP / Compaq / FSI (5 decimal digits)", phoenix_5dec),
     "fsi_hex": ("Fujitsu-Siemens (8 hex digits or 5x4 hex)", fsi_hex),
@@ -697,6 +703,10 @@ GENERATORS = {
     "hp_mini": ("HP/Compaq Mini (10 char serial)", hp_mini),
     "hp_ami": ("HP AMI (8 hex digits)", hp_ami),
     "dell": ("Dell (1234567-595B, or an 11-character HDD serial)", _dell_code),
+    "dell_latitude": (
+        "Dell Latitude 3540 (16 hex digits and a 7-character tag)",
+        _dell_latitude,
+    ),
     "asus_date": ("ASUS (system date, e.g. 2013-12-31)", asus_date),
 }
 
