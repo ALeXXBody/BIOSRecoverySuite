@@ -24,6 +24,7 @@ here copies the dump's NVRAM/machine-identity FVs back in.
 from __future__ import annotations
 
 import hashlib
+import os
 import struct
 from dataclasses import dataclass
 
@@ -121,7 +122,7 @@ def extract_flashable_image(
     from bios_recovery.core.safety import SameFileError, ensure_distinct
 
     if output_path is None:
-        output_path = input_path.rsplit(".", 1)[0] + "_flashable.bin"
+        output_path = os.path.splitext(input_path)[0] + "_flashable.bin"
     try:
         ensure_distinct(input_path, output_path)
     except SameFileError as exc:

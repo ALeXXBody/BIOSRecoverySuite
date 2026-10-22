@@ -3,7 +3,7 @@
 import os
 import sys
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -35,11 +35,12 @@ from bios_recovery.core.password_remover import PasswordRemover
 from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
 from bios_recovery.gui.me_region_page import MERegionPage
+from bios_recovery.gui.outputs import confirm_overwrite, derived_path
 from bios_recovery.gui.settings_page import SettingsPage
 from bios_recovery.gui.sidebar_tabs import SidebarTabs
 from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.update_dialog import CheckWorker, UpdateDialog
-from bios_recovery.gui.workers import track, wait_for_workers
+from bios_recovery.gui.workers import Job, hardware_job_running, wait_for_workers
 from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
 from bios_recovery.manufacturers.hp.hp_unlocker import HPUnlocker
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles
@@ -48,27 +49,6 @@ from bios_recovery.utils import master_passwords
 
 # Tab titles whose tool name in core/traits_matrix.py differs from the title.
 _TAB_TOOL_NAMES = {"Security": "Passwords", "ME Region": "ME Cleaner", "Flash & Hex": "SPI Flasher"}
-
-
-class WorkerThread(QThread):
-    """Runs a task in a background thread. Results carry the token the window issued."""
-
-    done = Signal(object, object)   # (token, result)
-    failed = Signal(object, str)    # (token, message)
-
-    def __init__(self, token, task, *args):
-        super().__init__()
-        self.token = token
-        self.task = task
-        self.args = args
-        track(self)
-
-    def run(self):
-        try:
-            result = self.task(*self.args)
-            self.done.emit(self.token, result)
-        except Exception as e:
-            self.failed.emit(self.token, str(e))
 
 
 class MainWindow(QMainWindow):
@@ -121,7 +101,7 @@ class MainWindow(QMainWindow):
         self._update_worker.start()
 
     def _show_update_dialog(self, release):
-        self._update_dialog = UpdateDialog(self)
+        self._update_dialog = UpdateDialog(self, auto_check=False)
         self._update_dialog.present_release(release)
         self._update_dialog.show()
         self._update_dialog.raise_()
@@ -169,8 +149,8 @@ class MainWindow(QMainWindow):
             image_provider=lambda: self.current_file,
             load_image=self.load_file,
         )
-        self.ec_tab = ECTab(self)
-        self.lenovo_tab = LenovoTab(self)
+        self.ec_tab = ECTab(self, run_task=self._run_file_task)
+        self.lenovo_tab = LenovoTab(self, run_task=self._run_file_task)
 
         self.me_page = MERegionPage(
             image_provider=lambda: self.current_file,
@@ -206,7 +186,7 @@ class MainWindow(QMainWindow):
 
         tool_menu = menubar.addMenu("&Tools")
         tool_menu.addAction("Run &Analysis", self.run_analysis)
-        tool_menu.addAction("&ME Analyzer", self.run_mea_analysis)
+        self._mea_action = tool_menu.addAction("&ME Analyzer", self.run_mea_analysis)
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction("&Check for Updates...", self.check_for_updates)
@@ -480,13 +460,17 @@ class MainWindow(QMainWindow):
         if not new_path or not os.path.exists(new_path):
             QMessageBox.warning(self, "No New Dump", "Select the new/clean BIOS image.")
             return
+        output = derived_path(new_path, "_dmiclone.bin")
+        if not confirm_overwrite(self, output):
+            return
         self._run_in_thread(
             self.dmi_clone.clone,
             self._dmi_clone_done,
             old_path,
             new_path,
-            new_path.rsplit(".", 1)[0] + "_dmiclone.bin",
+            output,
             button=self.dmi_clone_btn,
+            source=old_path,
         )
 
     def _dmi_clone_done(self, result):
@@ -660,15 +644,17 @@ class MainWindow(QMainWindow):
         if table is not None:
             table.setRowCount(0)
 
-    def _run_in_thread(self, task, on_done, *args, button=None):
+    def _run_in_thread(self, task, on_done, *args, button=None, source=None):
         """Run task off the UI thread. button is disabled while it runs and re-enabled on
-        success and on error alike, so a failed job never leaves its control stuck."""
+        success and on error alike, so a failed job never leaves its control stuck.
+        source is the file the job works on: its result is not shown once another file
+        is loaded, because it would describe the wrong image."""
         if button is not None:
             button.setEnabled(False)
         self._thread_seq += 1
         token = self._thread_seq
-        self._thread_callbacks[token] = (on_done, button)
-        thread = WorkerThread(token, task, *args)
+        self._thread_callbacks[token] = (on_done, button, source)
+        thread = Job(token, task, *args)
         thread.done.connect(self._thread_done)
         thread.failed.connect(self._thread_failed)
         self._threads.append(thread)
@@ -677,22 +663,50 @@ class MainWindow(QMainWindow):
         self._threads = [t for t in self._threads if t.isRunning() or t is thread]
         return thread
 
+    def _run_file_task(self, task, on_done, button=None):
+        """Task runner for tabs: the job is bound to the file that is loaded now."""
+        return self._run_in_thread(task, on_done, button=button, source=self.current_file)
+
     def _thread_done(self, token, result):
-        on_done, button = self._thread_callbacks.pop(token)
+        on_done, button, source = self._thread_callbacks.pop(token)
         try:
-            on_done(result)
+            if source is None or source == self.current_file:
+                on_done(result)
+            else:
+                self.statusBar().showMessage(
+                    f"Finished for {os.path.basename(source)}; its result was not shown "
+                    "because another file is loaded."
+                )
         finally:
             if button is not None:
                 button.setEnabled(True)
 
     def _thread_failed(self, token, message):
-        _on_done, button = self._thread_callbacks.pop(token)
+        _on_done, button, source = self._thread_callbacks.pop(token)
         if button is not None:
             button.setEnabled(True)
+        if source is not None and source != self.current_file:
+            message = f"For {os.path.basename(source)}: {message}"
         self._show_error(message)
 
     def closeEvent(self, event):
-        wait_for_workers()
+        if hardware_job_running():
+            QMessageBox.warning(
+                self,
+                "Chip operation running",
+                "A chip read, write or erase is still running. Wait for it to finish: "
+                "closing now could leave the chip half-written.",
+            )
+            event.ignore()
+            return
+        if not wait_for_workers():
+            QMessageBox.warning(
+                self,
+                "Task running",
+                "A background task is still running. Close again when it finishes.",
+            )
+            event.ignore()
+            return
         super().closeEvent(event)
 
     def _show_error(self, error: str):
@@ -703,17 +717,29 @@ class MainWindow(QMainWindow):
             return
         path = self.current_file
         self._run_in_thread(
-            self.bios_analyzer.analyze,
-            lambda result: self._analysis_done_for(path, result),
+            self._analyze_and_classify,
+            lambda bundle: self._analysis_done_for(path, bundle),
             path,
+            source=path,
         )
 
-    def _analysis_done_for(self, path, result):
+    def _analyze_and_classify(self, path):
+        from bios_recovery.core.traits import classify
+
+        result = self.bios_analyzer.analyze(path)
+        with open(path, "rb") as f:
+            traits = classify(f.read())
+        return result, traits
+
+    def _analysis_done_for(self, path, bundle):
         # A result for a file the user has since switched away from must not be shown.
         if path == self.current_file:
-            self._analysis_done(result)
+            result, traits = bundle
+            self._analysis_done(result, traits)
 
-    def _analysis_done(self, result):
+    def _analysis_done(self, result, traits=None):
+        from bios_recovery.core.traits import classify
+
         self.current_bios_info = result
         self.info_text.setPlainText(self._format_bios_info(result))
         self._populate_regions(result)
@@ -722,9 +748,8 @@ class MainWindow(QMainWindow):
             f"ME: {result.me_version} {result.me_type} | Issues: {len(result.issues)}"
         )
         # Platform-traits gating (architecture/vendor → which tools apply)
-        from bios_recovery.core.traits import classify
-
-        traits = classify(self._read_current_file_bytes())
+        if traits is None:
+            traits = classify(self._read_current_file_bytes())
         self._apply_traits(traits)
         self._update_overview_cards(result, traits)
         self.tabs.setCurrentWidget(self.main_tab)
@@ -751,6 +776,11 @@ class MainWindow(QMainWindow):
                 continue
             self.tabs.setTabEnabled(idx, row.applies)
             self.tabs.setTabToolTip(idx, "" if row.applies else row.reason)
+
+        # Buttons inside a tab follow their own tool row, as the CLI does.
+        _gate_control(self.dvar_btn, matrix.get("Dell DVAR Recovery"))
+        _gate_control(self.apple_btn, matrix.get("Apple Fsys Tools"))
+        _gate_control(self._mea_action, matrix.get("ME Cleaner"))
 
         # Populate the Platform tab table + info panel
         if hasattr(self, "traits_table"):
@@ -828,7 +858,9 @@ class MainWindow(QMainWindow):
     def run_repair(self):
         if not self.current_file:
             return
-        output = self.current_file.rsplit(".", 1)[0] + "_repaired.bin"
+        output = derived_path(self.current_file, "_repaired.bin")
+        if not confirm_overwrite(self, output):
+            return
         self._run_in_thread(
             self.repair_engine.auto_repair,
             self._repair_done,
@@ -837,12 +869,14 @@ class MainWindow(QMainWindow):
             self.repair_checksum_ck.isChecked(),
             self.repair_size_ck.isChecked(),
             button=self.repair_btn,
+            source=self.current_file,
         )
 
     def _repair_done(self, report):
-        lines = []
-        lines.append(f"Repair {'Success' if report.success else 'Failed'}")
-        lines.append(f"Output: {report.output_path}")
+        written = bool(report.success and report.output_path)
+        lines = ["Repair Success" if written else "Repair Failed: no file was written"]
+        if written:
+            lines.append(f"Output: {report.output_path}")
         for op in report.operations:
             lines.append(f"  + {op}")
         for warn in report.warnings:
@@ -865,20 +899,27 @@ class MainWindow(QMainWindow):
         )
         if not donor:
             return
+        output = derived_path(self.current_file, "_grafted.bin")
+        if not confirm_overwrite(self, output):
+            return
         engine = BiosRepairEngine()
         self._run_in_thread(
             engine.auto_graft_from_donor,
             self._graft_done,
             self.current_file,
             donor,
+            output,
             button=self.graft_btn,
+            source=self.current_file,
         )
 
     def _graft_done(self, report):
+        written = bool(report.success and report.output_path)
         lines = [
-            f"Graft {'Success' if report.success else 'Failed'}",
-            f"Output: {report.output_path}",
+            "Graft Success" if written else "Graft Failed: nothing was grafted, no file written"
         ]
+        if written:
+            lines.append(f"Output: {report.output_path}")
         for op in report.operations:
             lines.append(f"  + {op}")
         for warn in report.warnings:
@@ -886,7 +927,10 @@ class MainWindow(QMainWindow):
         for issue in report.issues_found:
             lines.append(f"  # [{issue.severity}] {issue.description}")
         self.repair_text.setPlainText("\n".join(lines))
-        self.statusBar().showMessage(f"Graft complete: {report.output_path}")
+        if written:
+            self.statusBar().showMessage(f"Graft complete: {report.output_path}")
+        else:
+            self.statusBar().showMessage("Graft: no file was written")
 
     def build_flashable_image(self):
         from bios_recovery.manufacturers.common.bios_capsule import extract_flashable_image
@@ -894,11 +938,16 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a capsule update (.CAP/.308/.217) first.")
             return
+        output = derived_path(self.current_file, "_flashable.bin")
+        if not confirm_overwrite(self, output):
+            return
         self._run_in_thread(
             extract_flashable_image,
             self._flashable_done,
             self.current_file,
+            output,
             button=self.capsule_btn,
+            source=self.current_file,
         )
 
     def _flashable_done(self, info):
@@ -935,19 +984,23 @@ class MainWindow(QMainWindow):
         if not dump_path:
             return
         path = self.current_file
+        base_out = derived_path(path, "_flashable_merged_base.bin")
+        out = derived_path(path, "_flashable_merged.bin")
+        if not (confirm_overwrite(self, base_out) and confirm_overwrite(self, out)):
+            return
 
         def task():
-            base = extract_flashable_image(
-                path,
-                output_path=path.rsplit(".", 1)[0] + "_flashable_merged_base.bin",
-            )
+            base = extract_flashable_image(path, output_path=base_out)
             if not base.success:
                 return base
-            merged = base.output_path
-            out = path.rsplit(".", 1)[0] + "_flashable_merged.bin"
-            return restore_nvar_from_dump(merged, dump_path, out)
+            return restore_nvar_from_dump(base.output_path, dump_path, out)
 
-        self._run_in_thread(task, self._flashable_merge_done, button=self.capsule_merge_btn)
+        self._run_in_thread(
+            task,
+            self._flashable_merge_done,
+            button=self.capsule_merge_btn,
+            source=path,
+        )
 
     def _flashable_merge_done(self, info):
         if not info.success:
@@ -966,19 +1019,23 @@ class MainWindow(QMainWindow):
     def hp_unlock(self):
         if not self.current_file:
             return
+        output = derived_path(self.current_file, "_unlocked.bin")
+        if not confirm_overwrite(self, output):
+            return
         self._run_in_thread(
             self.hp_unlocker.unlock,
             self._hp_unlock_done,
             self.current_file,
-            self.current_file.rsplit(".", 1)[0] + "_unlocked.bin",
+            output,
             button=self.hp_unlock_btn,
+            source=self.current_file,
         )
 
     def _hp_unlock_done(self, report):
         lines = [
             f"Style: {report['style'] or 'unknown'}",
             f"Success: {report['success']}",
-            f"Output: {report['output_path']}",
+            f"Output: {report['output_path'] or 'none (nothing was written)'}",
         ]
         lines.extend(f"  - {m}" for m in report["messages"])
         self.password_text.setPlainText("\n".join(lines))
@@ -991,22 +1048,26 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             return
         self._run_in_thread(
-            read_identity_file, self._dmi_done, self.current_file, button=self.dmi_extract_btn
+            _dmi_task,
+            self._dmi_done,
+            self.current_file,
+            button=self.dmi_extract_btn,
+            source=self.current_file,
         )
 
     def _dmi_done(self, result):
-        info, nvram = result
+        info, nvram, editor = result
         if info is None:
             lines = [
                 "No SMBIOS table was found in this image.",
                 "Some firmware keeps the identity in NVRAM variables instead; see below.",
             ]
         else:
-            lines = self._dmi_info_lines(info)
+            lines = self._dmi_info_lines(info, editor)
         lines.extend(self._nvram_identity_lines(nvram))
         self.dmi_text.setPlainText("\n".join(lines))
 
-    def _dmi_info_lines(self, info) -> list:
+    def _dmi_info_lines(self, info, editor=None) -> list:
         lines = [
             "=== BIOS Information ===",
             f"  Vendor: {info.bios_vendor}",
@@ -1042,7 +1103,7 @@ class MainWindow(QMainWindow):
             )
         lines.append("")
         lines.append(f"Total structures: {len(info.structures)}")
-        lines.extend(self._dmi_editor_summary())
+        lines.extend(_editor_summary_lines(editor or {}))
         return lines
 
     @staticmethod
@@ -1058,28 +1119,6 @@ class MainWindow(QMainWindow):
         return out
 
 
-    def _dmi_editor_summary(self):
-        if not self.current_file:
-            return []
-        from bios_recovery.core.dmi_editor import DMIEditor
-
-        try:
-            info = DMIEditor().info(self.current_file)
-        except Exception:
-            return []
-        if not info.get("found"):
-            return []
-        s = info.get("serials", {})
-        return [
-            "",
-            "=== Editor (current fixed-size values) ===",
-            f"  System serial: {s.get('system')}",
-            f"  Baseboard serial: {s.get('baseboard')}",
-            f"  UUID: {info.get('uuid')}",
-            f"  MAC: {info.get('mac') or 'n/a (no descriptor GbE region)'}",
-            "  Serial edits: equal-length in-place swap only; UUID/GBE-MAC: fixed-size writes.",
-        ]
-
     def apply_dmi_edits(self):
         from bios_recovery.core.dmi_editor import DMIEditor
 
@@ -1092,20 +1131,27 @@ class MainWindow(QMainWindow):
         if not (serial or uuid or mac):
             QMessageBox.information(self, "Nothing to Edit", "Fill in a serial, UUID or MAC first.")
             return
+        output = derived_path(self.current_file, "_edited.bin")
+        if not confirm_overwrite(self, output):
+            return
         editor = DMIEditor()
         self._run_in_thread(
             editor.set_identity,
             self._dmi_edit_done,
             self.current_file,
-            None,
+            output,
             serial,
             uuid,
             mac,
             button=self.dmi_apply_btn,
+            source=self.current_file,
         )
 
     def _dmi_edit_done(self, rep):
-        lines = [f"Edit {'Success' if rep.success else 'Failed'}", f"Output: {rep.output_path}"]
+        written = bool(rep.success and rep.output_path)
+        lines = ["Edit Success" if written else "Edit Failed: nothing was saved"]
+        if written:
+            lines.append(f"Output: {rep.output_path}")
         for op in rep.operations:
             lines.append(f"  + {op}")
         for warn in rep.warnings:
@@ -1113,19 +1159,32 @@ class MainWindow(QMainWindow):
         if rep.message:
             lines.append(f"  # {rep.message}")
         self.dmi_text.setPlainText("\n".join(lines))
-        self.statusBar().showMessage(f"Identity edit written: {rep.output_path}")
+        if written:
+            self.statusBar().showMessage(f"Identity edit written: {rep.output_path}")
+        else:
+            self.statusBar().showMessage("Identity edit not written")
 
     def run_apple_fsys(self):
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
             return
+        output = derived_path(self.current_file, "_fsysfixed.bin")
+        if not confirm_overwrite(self, output):
+            return
         self._run_in_thread(
-            _apple_fsys_task, self._apple_fsys_done, self.current_file, button=self.apple_btn
+            _apple_fsys_task,
+            self._apple_fsys_done,
+            self.current_file,
+            output,
+            button=self.apple_btn,
+            source=self.current_file,
         )
 
     def _apple_fsys_done(self, rep):
         lines = [f"{'Success' if rep.success else 'Failed'}: {rep.message}"]
+        if rep.output_path:
+            lines.append(f"Output: {rep.output_path}")
         for op in rep.operations:
             lines.append(f"  + {op}")
         for warn in rep.warnings:
@@ -1140,7 +1199,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
             return
         self._run_in_thread(
-            recover_passwords, self._dvar_recovery_done, self.current_file, button=self.dvar_btn
+            recover_passwords,
+            self._dvar_recovery_done,
+            self.current_file,
+            button=self.dvar_btn,
+            source=self.current_file,
         )
 
     def _dvar_recovery_done(self, rep):
@@ -1163,6 +1226,7 @@ class MainWindow(QMainWindow):
             self._password_scan_done,
             self.current_file,
             button=self.scan_btn,
+            source=self.current_file,
         )
 
     def _password_scan_done(self, found):
@@ -1180,19 +1244,22 @@ class MainWindow(QMainWindow):
     def remove_passwords(self):
         if not self.current_file:
             return
-        output = self.current_file.rsplit(".", 1)[0] + "_nopass.bin"
+        output = derived_path(self.current_file, "_nopass.bin")
+        if not confirm_overwrite(self, output):
+            return
         self._run_in_thread(
             self.password_remover.remove_passwords,
             self._password_remove_done,
             self.current_file,
             output,
             button=self.remove_btn,
+            source=self.current_file,
         )
 
     def _password_remove_done(self, report):
         lines = [
             f"Status: {report.status.name}",
-            f"Output: {report.output_path}",
+            f"Output: {report.output_path or 'none (nothing was written)'}",
             f"Found Structures: {len(report.found_passwords)}",
         ]
         for msg in report.messages:
@@ -1223,13 +1290,22 @@ class MainWindow(QMainWindow):
 
         method = ExtractionMethod[method_name]
 
+        default_dir = self.current_file.rsplit(".", 1)[0] + "_extracted"
+        output_dir = QFileDialog.getExistingDirectory(
+            self, "Choose a folder for the extracted files", os.path.dirname(default_dir)
+        )
+        if not output_dir:
+            return
+        output_dir = os.path.join(output_dir, os.path.basename(default_dir))
+
         self._run_in_thread(
             self.bios_extractor.extract,
             self._extract_done,
             self.current_file,
-            None,
+            output_dir,
             method,
             button=self.extract_btn,
+            source=self.current_file,
         )
 
     def _extract_done(self, result):
@@ -1268,7 +1344,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No File", "Open a BIOS file first.")
             return
         self.statusBar().showMessage("Running ME Analyzer...")
-        self._run_in_thread(mea_bridge.run_mea_analyzer, self._mea_done, self.current_file)
+        self._run_in_thread(
+            mea_bridge.run_mea_analyzer,
+            self._mea_done,
+            self.current_file,
+            button=self._mea_action,
+            source=self.current_file,
+        )
 
     def _mea_done(self, res):
         lines = ["ME Analyzer Result:"]
@@ -1298,10 +1380,52 @@ class MainWindow(QMainWindow):
         )
 
 
-def _apple_fsys_task(file_path):
+def _dmi_task(path):
+    info, nvram = read_identity_file(path)
+    return info, nvram, _editor_info(path)
+
+
+def _editor_info(path):
+    from bios_recovery.core.dmi_editor import DMIEditor
+
+    try:
+        info = DMIEditor().info(path)
+    except Exception:
+        return {}
+    return info if info.get("found") else {}
+
+
+def _editor_summary_lines(info) -> list:
+    if not info:
+        return []
+    s = info.get("serials", {})
+    return [
+        "",
+        "=== Editor (current fixed-size values) ===",
+        f"  System serial: {s.get('system')}",
+        f"  Baseboard serial: {s.get('baseboard')}",
+        f"  UUID: {info.get('uuid')}",
+        f"  MAC: {info.get('mac') or 'n/a (no descriptor GbE region)'}",
+        "  Serial edits: equal-length in-place swap only; UUID/GBE-MAC: fixed-size writes.",
+    ]
+
+
+def _gate_control(control, row):
+    """Enable a button or menu action only when its tool applies; say why when it does not."""
+    if row is None:
+        return
+    base = control.property("base_tip")
+    if base is None:
+        base = control.toolTip()
+        control.setProperty("base_tip", base)
+    control.setEnabled(row.applies)
+    control.setToolTip(base if row.applies else row.reason)
+
+
+def _apple_fsys_task(file_path, output_path):
     from bios_recovery.manufacturers.apple.apple_efi import fix_fsys_checksum, rom_info
 
     info = rom_info(file_path)
-    rep = fix_fsys_checksum(file_path)
+    rep = fix_fsys_checksum(file_path, output_path)
     rep.notes = [f"rom_info: {info}"]
     return rep

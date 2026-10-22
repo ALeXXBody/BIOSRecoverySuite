@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
+from bios_recovery.core.safety import write_file_atomic
+
 
 class ExtractionMethod(Enum):
     AUTO = auto()
@@ -82,7 +84,7 @@ class BiosExtractor:
             data = f.read()
 
         if output_dir is None:
-            output_dir = input_path.rsplit(".", 1)[0] + "_extracted"
+            output_dir = os.path.splitext(input_path)[0] + "_extracted"
         os.makedirs(output_dir, exist_ok=True)
 
         if method == ExtractionMethod.AUTO:
@@ -198,8 +200,7 @@ class BiosExtractor:
                     pfs_size = struct.unpack_from("<I", data, idx + 0x04)[0]
                     if 0 < pfs_size <= len(data) and idx + pfs_size <= len(data):
                         output_file = os.path.join(output_dir, f"pfs_segment_{idx:#x}.bin")
-                        with open(output_file, "wb") as f:
-                            f.write(data[idx : idx + pfs_size])
+                        write_file_atomic(output_file, data[idx : idx + pfs_size])
                         result.files.append(
                             {
                                 "name": os.path.basename(output_file),
@@ -225,8 +226,7 @@ class BiosExtractor:
         bios_regions = self._find_bios_regions(data)
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
-            with open(output_file, "wb") as f:
-                f.write(data[offset : offset + size])
+            write_file_atomic(output_file, data[offset : offset + size])
             result.files.append(
                 {
                     "name": os.path.basename(output_file),
@@ -240,8 +240,7 @@ class BiosExtractor:
         me_regions = self._find_me_regions(data)
         for i, (offset, size) in enumerate(me_regions):
             output_file = os.path.join(output_dir, f"me_region_{i:#x}.bin")
-            with open(output_file, "wb") as f:
-                f.write(data[offset : offset + size])
+            write_file_atomic(output_file, data[offset : offset + size])
             result.files.append(
                 {
                     "name": os.path.basename(output_file),
@@ -268,8 +267,7 @@ class BiosExtractor:
         bios_regions = self._find_bios_regions(data)
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
-            with open(output_file, "wb") as f:
-                f.write(data[offset : offset + size])
+            write_file_atomic(output_file, data[offset : offset + size])
             result.files.append(
                 {
                     "name": os.path.basename(output_file),
@@ -307,8 +305,7 @@ class BiosExtractor:
         bios_regions = self._find_bios_regions(data)
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
-            with open(output_file, "wb") as f:
-                f.write(data[offset : offset + size])
+            write_file_atomic(output_file, data[offset : offset + size])
             result.files.append(
                 {
                     "name": os.path.basename(output_file),
@@ -336,8 +333,7 @@ class BiosExtractor:
         bios_regions = self._find_bios_regions(data)
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
-            with open(output_file, "wb") as f:
-                f.write(data[offset : offset + size])
+            write_file_atomic(output_file, data[offset : offset + size])
             result.files.append(
                 {
                     "name": os.path.basename(output_file),
@@ -364,8 +360,7 @@ class BiosExtractor:
 
         image = data[info.header_size : info.image_end]
         output_file = os.path.join(output_dir, "flashable.bin")
-        with open(output_file, "wb") as f:
-            f.write(image)
+        write_file_atomic(output_file, image)
 
         result.files.append(
             {
@@ -393,8 +388,7 @@ class BiosExtractor:
         bios_regions = self._find_bios_regions(data)
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
-            with open(output_file, "wb") as f:
-                f.write(data[offset : offset + size])
+            write_file_atomic(output_file, data[offset : offset + size])
             result.files.append(
                 {
                     "name": os.path.basename(output_file),
@@ -408,8 +402,7 @@ class BiosExtractor:
         me_regions = self._find_me_regions(data)
         for i, (offset, size) in enumerate(me_regions):
             output_file = os.path.join(output_dir, f"me_region_{i:#x}.bin")
-            with open(output_file, "wb") as f:
-                f.write(data[offset : offset + size])
+            write_file_atomic(output_file, data[offset : offset + size])
             result.files.append(
                 {
                     "name": os.path.basename(output_file),
@@ -424,8 +417,7 @@ class BiosExtractor:
             fv_regions = self._find_firmware_volumes(data)
             for i, (offset, size) in enumerate(fv_regions):
                 output_file = os.path.join(output_dir, f"firmware_volume_{i:#x}.bin")
-                with open(output_file, "wb") as f:
-                    f.write(data[offset : offset + size])
+                write_file_atomic(output_file, data[offset : offset + size])
                 result.files.append(
                     {
                         "name": os.path.basename(output_file),
@@ -508,8 +500,7 @@ class BiosExtractor:
         if not decomp.eof or not decompressed:
             return
         output_file = os.path.join(output_dir, f"decompressed_{offset:#x}.bin")
-        with open(output_file, "wb") as f:
-            f.write(decompressed)
+        write_file_atomic(output_file, decompressed)
         result.files.append(
             {
                 "name": os.path.basename(output_file),

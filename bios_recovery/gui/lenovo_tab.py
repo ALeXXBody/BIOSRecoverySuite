@@ -26,14 +26,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bios_recovery.gui.outputs import confirm_overwrite, derived_path
 from bios_recovery.platforms.intel.uefi_patcher import UEFIPatcher, UEFIPatchError
+
+
+def _run_inline(task, on_done, button=None):
+    on_done(task())
 
 
 class LenovoTab(QWidget):
     """Apply community Lenovo unlock patches to a firmware dump."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, run_task=None):
         super().__init__(parent)
+        self._run_task = run_task or _run_inline
         self.patcher = UEFIPatcher()
         self.current_dump = None
         self._scan_results = {}
@@ -155,11 +161,13 @@ class LenovoTab(QWidget):
     def run_detect(self):
         if not self._require_file():
             return
-        try:
-            det = self.patcher.detect_lenovo(self.current_dump)
-        except Exception as e:
-            self._log(f"detection failed: {e}")
-            return
+        self._run_task(
+            lambda: self.patcher.detect_lenovo(self.current_dump),
+            self._detect_done,
+            button=self.detect_btn,
+        )
+
+    def _detect_done(self, det):
         lines = []
         lines.append(f"Lenovo firmware detected: {'YES' if det['is_lenovo'] else 'no'}")
         ce = det["ce_backdoor"]
@@ -188,14 +196,14 @@ class LenovoTab(QWidget):
         if not self._require_file():
             return
         self._clear_scan()
-        self.scan_btn.setEnabled(False)
-        try:
-            self._scan_results = self.patcher.scan(self.current_dump)
-        except Exception as e:
-            self._log(f"scan failed: {e}")
-            return
-        finally:
-            self.scan_btn.setEnabled(True)
+        self._run_task(
+            lambda: self.patcher.scan(self.current_dump),
+            self._scan_done,
+            button=self.scan_btn,
+        )
+
+    def _scan_done(self, results):
+        self._scan_results = results
         for i, g in enumerate(self.patcher.groups):
             self.groups_table.insertRow(i)
             chk = QTableWidgetItem()
@@ -232,12 +240,34 @@ class LenovoTab(QWidget):
                 self, "Nothing Selected", "Tick at least one patch group (run a scan first)."
             )
             return
-        out = self.current_dump.rsplit(".", 1)[0] + "_patched.bin"
-        try:
-            report = self.patcher.apply(self.current_dump, out, group_keys=sel)
-        except UEFIPatchError as e:
-            QMessageBox.critical(self, "Patch Failed", str(e))
+        out = derived_path(self.current_dump, "_patched.bin")
+        if not confirm_overwrite(self, out):
             return
+        path = self.current_dump
+
+        def task():
+            try:
+                return self.patcher.apply(path, out, group_keys=sel)
+            except UEFIPatchError as e:
+                return {"error": str(e)}
+
+        self._run_task(task, self._patches_done, button=self.apply_btn)
+
+    def _patches_done(self, report):
+        if "error" in report:
+            QMessageBox.critical(self, "Patch Failed", report["error"])
+            return
+        if not report.get("output_path"):
+            self._log("Nothing written: no pattern patch changed the image.")
+            for msg in report["messages"]:
+                self._log(f"  {msg}")
+            QMessageBox.warning(
+                self,
+                "Nothing Applied",
+                "No pattern patch changed the image, so no file was written.",
+            )
+            return
+        out = report["output_path"]
         self._log(f"Applied {report['matches_total']} patch(es) -> {out}")
         for msg in report["messages"]:
             self._log(f"  {msg}")
@@ -254,14 +284,13 @@ class LenovoTab(QWidget):
     def _reload_dxe_registry(self):
         self._dxe_entries = self.patcher.load_dxe_replacements()
         self.dxe_table.setRowCount(0)
-        patches_dir = os.path.dirname(self.patcher.patches_path)
         for i, e in enumerate(self._dxe_entries):
             self.dxe_table.insertRow(i)
             chk = QTableWidgetItem()
             chk.setFlags(chk.flags() | Qt.ItemIsUserCheckable)
             chk.setCheckState(Qt.Unchecked)
             self.dxe_table.setItem(i, 0, chk)
-            bin_path = os.path.join(patches_dir, e["file"])
+            bin_path = self.patcher.dxe_binary_path(e["file"])
             missing = "" if os.path.exists(bin_path) else "  [binary missing]"
             self.dxe_table.setItem(i, 1, QTableWidgetItem(e["key"] + missing))
             self.dxe_table.setItem(i, 2, QTableWidgetItem(e["target_guid"]))
@@ -290,31 +319,53 @@ class LenovoTab(QWidget):
                 self, "Nothing Selected", "Tick at least one driver replacement."
             )
             return
-        patches_dir = os.path.dirname(self.patcher.patches_path)
-        work = self.current_dump
-        applied = 0
+        out = derived_path(self.current_dump, "_dxe.bin")
+        if not confirm_overwrite(self, out):
+            return
+        path = self.current_dump
+
+        def task():
+            return self._apply_dxe_chain(path, out, sel)
+
+        self._run_task(task, self._dxe_done, button=self.dxe_apply_btn)
+
+    def _apply_dxe_chain(self, path, out, sel):
+        """Replace each selected driver in turn. Each step reads the previous result."""
+        work = path
+        applied = []
+        log = []
         for e in sel:
-            bin_path = os.path.join(patches_dir, e["file"])
+            bin_path = self.patcher.dxe_binary_path(e["file"])
             if not os.path.exists(bin_path):
-                self._log(f"skip {e['key']}: binary missing ({e['file']})")
+                log.append(f"skip {e['key']}: binary missing ({e['file']})")
                 continue
-            out = work.rsplit(".", 1)[0] + "_dxe.bin"
-            res = self.patcher.replace_ffs_file(work, out, e["target_guid"], bin_path)
+            nxt = out + ".tmp"
+            res = self.patcher.replace_ffs_file(work, nxt, e["target_guid"], bin_path)
             if res["success"]:
-                self._log(
+                os.replace(nxt, out)
+                log.append(
                     f"{e['key']}: replaced {e['target_guid']} "
                     f"({res['old_size']} -> {res['new_size']} bytes)"
                 )
                 work = out
-                applied += 1
+                applied.append(e["key"])
             else:
-                self._log(f"{e['key']} FAILED: {res['message']}")
-        if applied:
+                log.append(f"{e['key']} FAILED: {res['message']}")
+        return {"applied": applied, "output": out if applied else "", "log": log}
+
+    def _dxe_done(self, result):
+        for line in result["log"]:
+            self._log(line)
+        if result["output"]:
             QMessageBox.information(
-                self, "Drivers Replaced", f"{applied} replacement(s) applied.\nOutput: {work}"
+                self,
+                "Drivers Replaced",
+                f"{len(result['applied'])} replacement(s) applied.\nOutput: {result['output']}",
             )
         else:
-            QMessageBox.warning(self, "Nothing Applied", "No replacements were applied.")
+            QMessageBox.warning(
+                self, "Nothing Applied", "No replacements were applied; no file was written."
+            )
 
     def run_full_autopatch(self):
         if not self._require_file():
@@ -324,19 +375,45 @@ class LenovoTab(QWidget):
                 self, "Consent Required", "Tick the consent box before running the autopatch."
             )
             return
-        out = self.current_dump.rsplit(".", 1)[0] + "_autopatched.bin"
-        try:
-            report = self.patcher.run_autopatch(self.current_dump, out)
-        except Exception as e:
-            QMessageBox.critical(self, "Autopatch Failed", str(e))
+        out = derived_path(self.current_dump, "_autopatched.bin")
+        if not confirm_overwrite(self, out):
+            return
+        path = self.current_dump
+
+        def task():
+            try:
+                return self.patcher.run_autopatch(path, out)
+            except Exception as e:
+                return {"error": str(e)}
+
+        self._run_task(task, self._autopatch_done, button=self.autopatch_btn)
+
+    def _autopatch_done(self, report):
+        if "error" in report:
+            QMessageBox.critical(self, "Autopatch Failed", report["error"])
             return
         for s in report["steps"]:
             tag = "OK " if s["ok"] else ("SKIP" if s.get("skipped") else "FAIL")
             self._log(f"[{tag}] {s['step']}: {s['message']}")
+        if not report.get("output_path"):
+            QMessageBox.warning(
+                self,
+                "Autopatch Not Applied",
+                "No step changed the image, so no patched file was written.",
+            )
+            return
+        if not report["success"]:
+            QMessageBox.warning(
+                self,
+                "Autopatch Partly Applied",
+                "Some steps failed or were skipped. The patched file below contains only the "
+                "steps that succeeded; see the log.\n\n" + report["output_path"],
+            )
+            return
         QMessageBox.information(
             self,
             "Autopatch Complete",
-            "Patched image written to:\n" + out + "\n\n[ HOW TO USE THE PATCH ]\n"
+            "Patched image written to:\n" + report["output_path"] + "\n\n[ HOW TO USE THE PATCH ]\n"
             "1. Flash the PATCHED image\n"
             "2. Boot and enter BIOS settings (ENTER/F1)\n"
             "3. Enter any character when asked for Supervisor Password\n"
@@ -363,17 +440,29 @@ class LenovoTab(QWidget):
         outdir = QFileDialog.getExistingDirectory(self, "Where to store extracted drivers")
         if not outdir:
             return
-        try:
-            derived = self.patcher.derive_replacements(orig, patched, outdir)
-        except Exception as e:
-            QMessageBox.critical(self, "Derive Failed", str(e))
-            return
+        self._run_task(
+            lambda: self.patcher.derive_replacements(orig, patched, outdir),
+            self._derive_done,
+            button=self.derive_btn,
+        )
+
+    def _derive_done(self, derived):
         if not derived:
             QMessageBox.information(
                 self, "No Differences", "No replaced files found between the two dumps."
             )
             return
-        entries = self._dxe_entries + derived
-        self.patcher.save_dxe_replacements(entries)
+        try:
+            added = self.patcher.add_user_dxe_replacements(derived)
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                "Derive: registry not saved",
+                f"The drivers were extracted, but the registry could not be saved:\n{e}",
+            )
+            return
         self._reload_dxe_registry()
-        self._log(f"Derived {len(derived)} replacement(s) from the dump pair -> {outdir}")
+        self._log(
+            f"Derived {len(derived)} replacement(s) from the dump pair; "
+            f"{len(added)} new registry entr{'y' if len(added) == 1 else 'ies'} saved."
+        )

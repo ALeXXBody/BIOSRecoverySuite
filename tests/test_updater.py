@@ -107,6 +107,9 @@ class _Resp(io.BytesIO):
     def getheader(self, name):
         return str(self._length) if name == "Content-Length" else None
 
+    def geturl(self):
+        return "https://example.invalid/setup.exe"
+
     def __enter__(self):
         return self
 

@@ -24,7 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 from bios_recovery.apps.spi_flasher import SPIFlasher, SPIStatus
+from bios_recovery.gui.outputs import derived_path, unique_path
 from bios_recovery.gui.workers import Job
+
+BUSY_MESSAGE = "Another chip operation is still running; wait for it to finish."
 
 
 class SPITab(QWidget):
@@ -154,29 +157,53 @@ class SPITab(QWidget):
     def _log(self, text: str):
         self.log_text.appendPlainText(text)
 
-    def _start_job(self, button, task, on_result):
-        """Run a flashrom operation off the UI thread; the button is disabled while it runs."""
-        button.setEnabled(False)
+    def _flash_buttons(self):
+        return (
+            self.refresh_btn,
+            self.identify_btn,
+            self.read_btn,
+            self.write_btn,
+            self.erase_btn,
+        )
+
+    def _set_flash_enabled(self, enabled: bool):
+        for button in self._flash_buttons():
+            button.setEnabled(enabled)
+
+    def _start_job(self, task, on_result):
+        """Run one flashrom operation off the UI thread.
+
+        A programmer serves one operation at a time, so every flash control is disabled
+        while a job runs, and a second job is refused.
+        """
+        if self._jobs:
+            self._log(BUSY_MESSAGE)
+            return None
+        self._set_flash_enabled(False)
         self._job_seq += 1
         token = self._job_seq
-        self._jobs[token] = (button, on_result)
-        job = Job(token, task)
+        self._jobs[token] = on_result
+        job = Job(token, task, hardware=True)
         job.done.connect(self._job_done)
         job.failed.connect(self._job_failed)
         job.start()
         return job
 
     def _job_done(self, token, result):
-        button, on_result = self._jobs.pop(token)
-        button.setEnabled(True)
+        on_result = self._jobs.pop(token)
+        self._set_flash_enabled(True)
         on_result(result)
 
     def _job_failed(self, token, message):
-        button, _ = self._jobs.pop(token)
-        button.setEnabled(True)
+        self._jobs.pop(token)
+        self._set_flash_enabled(True)
         self._log(f"Operation failed: {message}")
 
     def detect_programmers(self):
+        if self._jobs:
+            self._log(BUSY_MESSAGE)
+            return
+
         def on_result(programmers):
             if not programmers:
                 self._log(
@@ -192,20 +219,26 @@ class SPITab(QWidget):
             self.prog_combo.blockSignals(False)
             self._log("Detected programmers: " + ", ".join(programmers))
 
-        self._start_job(self.refresh_btn, self.flasher.discover_programmers, on_result)
+        self._start_job(self.flasher.discover_programmers, on_result)
 
     def identify_chip(self):
+        if self._jobs:
+            self._log(BUSY_MESSAGE)
+            return
+
         def on_result(chip):
             self.chip_label.setText(chip.name or "Unknown")
             self._log(f"Identified chip: {chip.name or 'none'}")
 
         self._start_job(
-            self.identify_btn,
             lambda: self.flasher.identify_chip(self._current_programmer()),
             on_result,
         )
 
     def read_chip(self):
+        if self._jobs:
+            self._log(BUSY_MESSAGE)
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save chip backup", "chip_dump.bin", "Binary (*.bin);;All Files (*)"
         )
@@ -226,12 +259,14 @@ class SPITab(QWidget):
                 self._log(f"Backup saved to {path} ({result.flash_size:,} bytes)")
 
         self._start_job(
-            self.read_btn,
             lambda: self.flasher.read_chip(path, self._current_programmer()),
             on_result,
         )
 
     def write_chip(self):
+        if self._jobs:
+            self._log(BUSY_MESSAGE)
+            return
         if not self.write_consent.isChecked():
             QMessageBox.warning(self, "Consent Required", "Check the write consent box first.")
             return
@@ -244,7 +279,8 @@ class SPITab(QWidget):
             return
 
         if self.write_auto_backup.isChecked():
-            backup = image.rsplit(".", 1)[0] + "_prewrite_backup.bin"
+            # A backup from an earlier write may be the only copy of that chip: never replace it.
+            backup = unique_path(derived_path(image, "_prewrite_backup.bin"))
             self._log(f"Taking automatic backup to {backup} ...")
 
             def after_backup(result):
@@ -257,7 +293,6 @@ class SPITab(QWidget):
                 self._confirm_and_write(image)
 
             self._start_job(
-                self.write_btn,
                 lambda: self.flasher.read_chip(backup, self._current_programmer()),
                 after_backup,
             )
@@ -270,6 +305,8 @@ class SPITab(QWidget):
             "Final Confirmation",
             f"Write {os.path.basename(image)} to the chip?\n\n"
             "This is irreversible. A wrong image can permanently brick the motherboard.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if yes != QMessageBox.StandardButton.Yes:
             return
@@ -285,7 +322,6 @@ class SPITab(QWidget):
 
         verify = self.write_verify.isChecked()
         self._start_job(
-            self.write_btn,
             lambda: self.flasher.write_chip(
                 image, self._current_programmer(), consent=True, verify=verify
             ),
@@ -293,6 +329,9 @@ class SPITab(QWidget):
         )
 
     def erase_chip(self):
+        if self._jobs:
+            self._log(BUSY_MESSAGE)
+            return
         if not self.erase_consent.isChecked():
             QMessageBox.warning(self, "Consent Required", "Check the erase consent box first.")
             return
@@ -300,6 +339,8 @@ class SPITab(QWidget):
             self,
             "Confirm Erase",
             "Erase the entire SPI chip? This destroys all contents including the BIOS.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if yes != QMessageBox.StandardButton.Yes:
             return
@@ -311,7 +352,6 @@ class SPITab(QWidget):
                 self._log(result.output.strip())
 
         self._start_job(
-            self.erase_btn,
             lambda: self.flasher.erase_chip(self._current_programmer(), consent=True),
             on_result,
         )

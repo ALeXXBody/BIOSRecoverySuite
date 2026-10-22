@@ -7,7 +7,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from bios_recovery.core.me_manifest import engine_is_txe, engine_version
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 
 
 class MeGeneration(Enum):
@@ -267,10 +267,9 @@ class IntelMECleaner:
             )
 
         if output_path is None:
-            output_path = input_path.rsplit(".", 1)[0] + "_cleaned.bin"
+            output_path = os.path.splitext(input_path)[0] + "_cleaned.bin"
 
-        with open(output_path, "wb") as f:
-            f.write(data)
+        write_file_atomic(output_path, data)
 
         report.output_path = output_path
         return report

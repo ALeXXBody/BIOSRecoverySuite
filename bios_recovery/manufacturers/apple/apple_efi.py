@@ -19,11 +19,12 @@ write. Anything else is refused with an explicit message.
 from __future__ import annotations
 
 import binascii
+import os
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 
 FSYS_MARKER = b"Fsys\x01"
 CRC32_SIZE = 4
@@ -214,9 +215,8 @@ def fix_fsys_checksum(file_path: str, output_path: Optional[str] = None) -> Appl
         return rep
 
     if output_path is None:
-        output_path = file_path.rsplit(".", 1)[0] + "_fsysfixed.bin"
-    with open(output_path, "wb") as f:
-        f.write(bytes(data))
+        output_path = os.path.splitext(file_path)[0] + "_fsysfixed.bin"
+    write_file_atomic(output_path, bytes(data))
     rep.success = True
     rep.message = "Fsys checksum repaired and verified"
     rep.operations.append(
@@ -271,9 +271,8 @@ def replace_fsys_store(
     rep.operations.extend(fixed)
 
     if output_path is None:
-        output_path = file_path.rsplit(".", 1)[0] + "_fsysreplaced.bin"
-    with open(output_path, "wb") as f:
-        f.write(bytes(data))
+        output_path = os.path.splitext(file_path)[0] + "_fsysreplaced.bin"
+    write_file_atomic(output_path, bytes(data))
     rep.success = True
     rep.message = "Fsys store replaced and checksum repaired/verified"
     rep.output_path = output_path
@@ -341,9 +340,8 @@ def set_serial_number(
     rep.operations.extend(fixed)
 
     if output_path is None:
-        output_path = file_path.rsplit(".", 1)[0] + "_ssnpatched.bin"
-    with open(output_path, "wb") as f:
-        f.write(bytes(data))
+        output_path = os.path.splitext(file_path)[0] + "_ssnpatched.bin"
+    write_file_atomic(output_path, bytes(data))
     rep.success = True
     rep.message = "Serial patched (equal-length) and Fsys checksum repaired/verified"
     rep.output_path = output_path

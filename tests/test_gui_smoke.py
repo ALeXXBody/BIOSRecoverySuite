@@ -49,6 +49,7 @@ def test_lenovo_tab_scan_and_apply(qapp, uefi_patch_image, tmp_path, monkeypatch
 
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
 
     from bios_recovery.gui.lenovo_tab import LenovoTab
 

@@ -15,13 +15,14 @@ message instead of being force-patched.
 
 from __future__ import annotations
 
+import os
 import re
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
 from bios_recovery.core.bios_analyzer import decode_flreg
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 
 _PRINTABLE_SERIAL = re.compile(r"[\x21-\x7E]+")
 _UUID_HEX = re.compile(r"[0-9A-Fa-f]{32}")
@@ -177,7 +178,7 @@ class DMIEditor:
         data = bytearray(original)
 
         if output_path is None:
-            output_path = file_path.rsplit(".", 1)[0] + "_edited.bin"
+            output_path = os.path.splitext(file_path)[0] + "_edited.bin"
         try:
             ensure_distinct(file_path, output_path)
         except SameFileError as exc:
@@ -271,8 +272,7 @@ class DMIEditor:
             report.message = "internal check failed: edit would change the image size - refused"
             return report
 
-        with open(output_path, "wb") as f:
-            f.write(bytes(data))
+        write_file_atomic(output_path, bytes(data))
         report.success = True
         report.output_path = output_path
         return report

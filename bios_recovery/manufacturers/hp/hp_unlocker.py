@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import struct
 
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 
 _USER_CRED = b"U\x00s\x00e\x00r\x00C\x00r\x00e\x00d"
 _VSS_HEADER_SIZE = 32
@@ -119,7 +119,6 @@ class HPUnlocker:
             report["messages"].append("Nothing was written: the image was already clear")
             return report
 
-        with open(output_path, "wb") as f:
-            f.write(bytes(data))
+        write_file_atomic(output_path, bytes(data))
         report["output_path"] = output_path
         return report

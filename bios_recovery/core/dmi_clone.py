@@ -11,7 +11,7 @@ fit inside the new validated span. Nothing is written unless the result validate
 AMI images without an SMBIOS table fall back to the NVRAM identity variables (core.nvar).
 """
 
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 from bios_recovery.core.smbios import find_table
 
 _SM3_ANCHOR = b"_SM3_"
@@ -73,8 +73,7 @@ class DMIClone:
         if not rep.success:
             return {"success": False, "message": f"Identity not carried: {rep.refused}"}
         changed = sum(1 for a, b in zip(before, data) if a != b)
-        with open(output_path, "wb") as f:
-            f.write(bytes(data))
+        write_file_atomic(output_path, bytes(data))
         return {
             "success": True,
             "message": "Identity variables carried over: " + "; ".join(rep.messages),
@@ -119,8 +118,7 @@ class DMIClone:
                 "success": False,
                 "message": "cloned SMBIOS table does not validate - nothing written",
             }
-        with open(output_path, "wb") as f:
-            f.write(bytes(out))
+        write_file_atomic(output_path, bytes(out))
 
         return {
             "success": True,

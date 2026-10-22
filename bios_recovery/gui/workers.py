@@ -15,7 +15,14 @@ _ACTIVE: set = set()
 
 
 def track(thread) -> None:
+    for old in [t for t in _ACTIVE if t.isFinished()]:
+        _ACTIVE.discard(old)
     _ACTIVE.add(thread)
+
+
+def hardware_job_running() -> bool:
+    """True while a job that drives a programmer or chip is still running."""
+    return any(getattr(t, "hardware", False) and t.isRunning() for t in _ACTIVE)
 
 
 class Job(QThread):
@@ -24,16 +31,19 @@ class Job(QThread):
     Results carry a token. The owning widget keeps the callback under that token and
     connects these signals to its own methods, so a result that arrives after the
     widget is destroyed is dropped by Qt instead of reaching a deleted object.
+    A job with hardware=True drives a chip or programmer; the window will not close
+    while one runs.
     """
 
     done = Signal(object, object)   # (token, result)
     failed = Signal(object, str)    # (token, message)
 
-    def __init__(self, token, task, *args):
+    def __init__(self, token, task, *args, hardware=False):
         super().__init__()
         self._token = token
         self._task = task
         self._args = args
+        self.hardware = hardware
         track(self)
 
     def run(self):

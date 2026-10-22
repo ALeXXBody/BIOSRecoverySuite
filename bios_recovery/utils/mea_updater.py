@@ -26,7 +26,8 @@ LATEST_URL = f"https://api.github.com/repos/{MEA_REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{MEA_REPO}/releases"
 USER_AGENT = "BIOSRecoverySuite-MEA-Updater"
 REQUEST_TIMEOUT = 20
-ALLOWED_SUFFIXES = (".py", ".dat")
+# Exact names only: a suffix match would stage any .py or .dat member, whatever its name.
+ALLOWED_FILES = ("MEA.py", "MEA.dat", "Huffman.dat", "FileTable.dat")
 MAX_ZIP_BYTES = 64 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 
@@ -169,7 +170,7 @@ def stage_mea_update(release: MEAReleaseInfo, staging_dir: str) -> list[str]:
                 raise ValueError("archive expands beyond the allowed size; refusing to stage")
             for info in members:
                 base = os.path.basename(info.filename)
-                if not base.lower().endswith(ALLOWED_SUFFIXES):
+                if base not in ALLOWED_FILES:
                     continue
                 with zf.open(info) as src:
                     data = src.read(MAX_UNCOMPRESSED_BYTES + 1)

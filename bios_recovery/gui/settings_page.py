@@ -229,7 +229,10 @@ class SettingsPage(QWidget):
         paths, _ = QFileDialog.getOpenFileNames(self, "Choose files to import", "", "All files (*)")
         if not paths:
             return
-        results = self.import_files(kind, paths)
+        self._run_task(lambda: lib.import_files(paths, kind), self._import_done)
+
+    def _import_done(self, results):
+        self.refresh_folders()
         refused = [f"{os.path.basename(r.source)}: {r.refused}" for r in results if r.refused]
         copied = [r for r in results if r.copied_to]
         self.scan_status.setText(

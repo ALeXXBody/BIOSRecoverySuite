@@ -52,6 +52,32 @@ def _is_mea_child():
     return any(a == "--mea-child" for a in sys.argv[1:])
 
 
+def _ensure_streams():
+    """A windowed Windows build has no stdout or stderr, and print() would drop output.
+
+    On Windows, attach to the console that started the program when there is one, so
+    CLI output reaches the user. Otherwise send the output to nowhere, without errors.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            if ctypes.windll.kernel32.AttachConsole(-1):
+                if sys.stdout is None:
+                    sys.stdout = open("CONOUT$", "w", encoding="utf-8")
+                if sys.stderr is None:
+                    sys.stderr = open("CONOUT$", "w", encoding="utf-8")
+                return
+        except (AttributeError, OSError):
+            pass
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
 if _is_mea_child():
     _run_mea_child()
     sys.exit(0)
@@ -334,7 +360,8 @@ def _cli_main(argv) -> int:
 
         r = BiosExtractor().extract(f, output_dir=args.out)
         print(f"method: {r.method_used} success={r.success}")
-        print(f"dir:    {r.output_dir}")
+        if r.output_dir:
+            print(f"dir:    {r.output_dir}")
         for msg in r.messages:
             print(f"  * {msg}")
         for x in r.files:
@@ -349,8 +376,9 @@ def _cli_main(argv) -> int:
             print(f"  + {op}")
         for w in rep.warnings:
             print(f"  ! {w}")
-        print(f"out: {rep.output_path}")
-        return 0
+        if rep.output_path:
+            print(f"out: {rep.output_path}")
+        return 0 if rep.success else 1
 
     if args.command == "capsule":
         from bios_recovery.manufacturers.common.bios_capsule import extract_flashable_image
@@ -378,19 +406,21 @@ def _cli_main(argv) -> int:
         )
         for m in rep_.messages:
             print(f"  * {m}")
-        print(f"out: {rep_.output_path}")
+        if rep_.output_path:
+            print(f"out: {rep_.output_path}")
         return 0 if rep_.status.name in ("SUCCESS", "ALREADY_CLEAN") else 1
 
     if args.command == "remove-passwords":
         from bios_recovery.core.password_remover import PasswordRemover
 
-        out_f = args.out or f.rsplit(".", 1)[0] + "_nopass.bin"
+        out_f = args.out or os.path.splitext(f)[0] + "_nopass.bin"
         rep_ = PasswordRemover().remove_passwords(f, out_f)
         print(f"status: {rep_.status.name}")
         for m in rep_.messages:
             print(f"  * {m}")
-        print(f"out: {rep_.output_path}")
-        return 0
+        if rep_.output_path:
+            print(f"out: {rep_.output_path}")
+        return 0 if rep_.output_path else 1
 
     if args.command == "recover-passwords":
         from bios_recovery.manufacturers.dell.dvar_passwords import recover_passwords
@@ -433,7 +463,8 @@ def _cli_main(argv) -> int:
             print(f"  ! {w}")
         if rep_.message:
             print(f"  # {rep_.message}")
-        print(f"out: {rep_.output_path}")
+        if rep_.output_path:
+            print(f"out: {rep_.output_path}")
         return 0 if rep_.success else 1
 
     if args.command == "ec-extract":
@@ -555,24 +586,47 @@ commands: analyze, extract, graft, capsule, me-clean, remove-passwords,
           recover-passwords, dmi, set-dmi, ec-extract, ec-scan, fit-info
 
 exit codes: 0 success; 1 operation failed or was refused;
-            2 usage error or file not found; 4 fit-info: tool refused or incompatible
+            2 usage error or file not found; 3 refused: image not accepted by
+              verify-rebuild, or the tool does not apply to this image (use --force);
+            4 fit-info: tool refused or incompatible
 """
+
+# Qt's own command-line options, which the GUI accepts.
+_QT_OPTIONS = {
+    "-platform",
+    "-platformpluginpath",
+    "-plugin",
+    "-style",
+    "-stylesheet",
+    "-geometry",
+    "-font",
+    "-display",
+    "-session",
+    "-reverse",
+    "-widgetcount",
+    "-qmljsdebugger",
+}
 
 
 def main():
+    if len(sys.argv) > 1:
+        _ensure_streams()
     if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "help"):
         print(_CLI_HELP)
         return 0
     # A bare word that is not a command and not an existing path is a typo: refuse it
     # rather than silently opening the GUI. Existing paths (e.g. a file opened from
-    # Explorer) still start the GUI.
-    if (
+    # Explorer) still start the GUI. So does a Qt option; any other flag is refused.
+    if len(sys.argv) > 1 and sys.argv[1].startswith("-"):
+        if sys.argv[1].split("=", 1)[0] not in _QT_OPTIONS:
+            print(f"Error: unknown option '{sys.argv[1]}'\n\n{_CLI_HELP}", file=sys.stderr)
+            return 2
+    elif (
         len(sys.argv) > 1
-        and not sys.argv[1].startswith("-")
         and sys.argv[1] not in (_CLI_COMMANDS | {"verify-rebuild", "library"})
         and not os.path.exists(sys.argv[1])
     ):
-        sys.stderr.write(f"Error: unknown command '{sys.argv[1]}'\n\n{_CLI_HELP}")
+        print(f"Error: unknown command '{sys.argv[1]}'\n\n{_CLI_HELP}", file=sys.stderr)
         return 2
     # CLI mode: `bios-recovery <command> FILE [...]` (no Qt involved)
     if len(sys.argv) > 1 and sys.argv[1] == "verify-rebuild":
@@ -584,8 +638,7 @@ def main():
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError as exc:
-        sys.stderr.write(_diagnose_qt_import_failure(exc))
-        sys.stderr.flush()
+        print(_diagnose_qt_import_failure(exc), file=sys.stderr)
         return 1
 
     from bios_recovery.gui.main_window import MainWindow

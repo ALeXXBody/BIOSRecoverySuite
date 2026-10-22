@@ -7,7 +7,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from bios_recovery.core.nvar import ATTR_VALID, NVAR, is_valid, iter_records
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 
 
 class PasswordType(Enum):
@@ -87,7 +87,7 @@ class PasswordRemover:
             )
 
         if output_path is None:
-            output_path = input_path.rsplit(".", 1)[0] + "_nopass.bin"
+            output_path = os.path.splitext(input_path)[0] + "_nopass.bin"
 
         try:
             ensure_distinct(input_path, output_path)
@@ -118,8 +118,7 @@ class PasswordRemover:
             report.messages.append("Nothing was written: no change to the image")
             return report
 
-        with open(output_path, "wb") as f:
-            f.write(data)
+        write_file_atomic(output_path, data)
 
         report.output_path = output_path
         return report

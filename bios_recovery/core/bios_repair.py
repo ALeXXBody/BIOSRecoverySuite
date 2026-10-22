@@ -134,7 +134,7 @@ class BiosRepairEngine:
         if not os.path.exists(input_path):
             return RepairReport(success=False, issues_found=[])
 
-        output = output_path or input_path.rsplit(".", 1)[0] + "_repaired.bin"
+        output = output_path or os.path.splitext(input_path)[0] + "_repaired.bin"
         try:
             ensure_distinct(input_path, output)
         except SameFileError as exc:
@@ -163,6 +163,7 @@ class BiosRepairEngine:
         else:
             report.success = False
             report.operations = []
+            report.output_path = ""
             report.warnings.append("Nothing needed repair; no file was written")
 
         return report
@@ -449,7 +450,7 @@ class BiosRepairEngine:
         """
         report = RepairReport(success=False, issue=RepairType.AUTO)
         if output_path is None:
-            output_path = input_path.rsplit(".", 1)[0] + "_grafted.bin"
+            output_path = os.path.splitext(input_path)[0] + "_grafted.bin"
         try:
             ensure_distinct(input_path, output_path)
             ensure_distinct(donor_path, output_path)

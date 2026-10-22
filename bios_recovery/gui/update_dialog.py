@@ -75,7 +75,7 @@ class DownloadWorker(QThread):
 class UpdateDialog(QDialog):
     """Shows update status, release notes, and performs the update."""
 
-    def __init__(self, parent=None, auto_silent=False):
+    def __init__(self, parent=None, auto_silent=False, auto_check=True):
         super().__init__(parent)
         self.setWindowTitle("Software Update")
         self.setMinimumWidth(520)
@@ -84,7 +84,10 @@ class UpdateDialog(QDialog):
         self._downloader = None
         self._auto_silent = auto_silent
         self._build()
-        self.check()
+        # The startup check already fetched the release it shows, so it must not
+        # send a second request.
+        if auto_check:
+            self.check()
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -160,6 +163,11 @@ class UpdateDialog(QDialog):
         self.status_label.setText(f"You are up to date (v{__version__}).")
 
     def _on_check_failed(self, error: str):
+        if self.release is not None:
+            # A release is already shown; a failed check must not replace it.
+            self.notes_text.setVisible(True)
+            self.notes_text.appendPlainText(f"\nThe update check could not be repeated:\n{error}")
+            return
         self.status_label.setText("Could not check for updates.")
         self.notes_text.setVisible(True)
         self.notes_text.setPlainText(

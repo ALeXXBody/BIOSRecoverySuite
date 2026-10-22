@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from bios_recovery.core.rebuild_verify import describe, verify_rebuild
+from bios_recovery.gui.outputs import confirm_overwrite, derived_path
 from bios_recovery.platforms.intel.me.fit_check import check_image as check_tools
 from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
 from bios_recovery.platforms.intel.me.me_injector import MEInjector
@@ -134,6 +136,12 @@ class MERegionPage(QWidget):
         self.output.appendPlainText("\n".join(lines))
         self.output.appendPlainText("")
 
+    def _for_image(self, path: str, lines) -> list:
+        """A result that finished after another image was loaded says so, and names its image."""
+        if self._image() == path:
+            return list(lines)
+        return [f"(for {os.path.basename(path)}; a different image is loaded now)", *lines]
+
     # -- actions ----------------------------------------------------------------
     def show_info(self):
         path = self._current()
@@ -141,7 +149,7 @@ class MERegionPage(QWidget):
             return
 
         def done(info):
-            self._report("ME info", _format_me_info(info))
+            self._report("ME info", self._for_image(path, _format_me_info(info)))
 
         self._run_task(lambda: self.cleaner.get_me_info(path), done, button=self.info_btn)
 
@@ -151,7 +159,9 @@ class MERegionPage(QWidget):
             return
         self._run_task(
             lambda: check_tools(path),
-            lambda report: self._report("Tools for this image", report.lines()),
+            lambda report: self._report(
+                "Tools for this image", self._for_image(path, report.lines())
+            ),
             button=self.check_btn,
         )
 
@@ -159,7 +169,9 @@ class MERegionPage(QWidget):
         path = self._current()
         if not path:
             return
-        output = path.rsplit(".", 1)[0] + "_cleaned.bin"
+        output = derived_path(path, "_cleaned.bin")
+        if not confirm_overwrite(self, output):
+            return
         options = (
             self.soft_disable.isChecked(),
             self.truncate.isChecked(),
@@ -168,7 +180,7 @@ class MERegionPage(QWidget):
         )
 
         def done(report):
-            self._report("Clean ME", _format_clean(report))
+            self._report("Clean ME", self._for_image(path, _format_clean(report)))
 
         self._run_task(
             lambda: self.cleaner.clean(path, output, *options),
@@ -193,7 +205,21 @@ class MERegionPage(QWidget):
             return
         if info["matches"]:
             source = info["matches"][0]
-            self._inject_from(path, source, f"from the library: {os.path.basename(source)}")
+            if len(info["matches"]) > 1:
+                names = [f"{os.path.basename(m)}  ({m})" for m in info["matches"]]
+                choice, ok = QInputDialog.getItem(
+                    self,
+                    "Choose clean ME",
+                    f"{len(names)} library images match ME {version}. Use which one?",
+                    names,
+                    0,
+                    False,
+                )
+                if not ok:
+                    self._report("Inject clean ME", ["Cancelled; nothing done."])
+                    return
+                source = info["matches"][names.index(choice)]
+            self._inject_from(path, source, f"from the library: {source}")
             return
         chosen, _ = QFileDialog.getOpenFileName(
             self,
@@ -226,11 +252,16 @@ class MERegionPage(QWidget):
         self._inject_from(path, result.copied_to, "added to the library and used")
 
     def _inject_from(self, path: str, source: str, note: str):
-        output = path.rsplit(".", 1)[0] + "_mefixed.bin"
+        output = derived_path(path, "_mefixed.bin")
+        if not confirm_overwrite(self, output):
+            return
 
         def done(result):
             if result["success"]:
-                self._report("Inject clean ME", [result["message"], f"Source: {note}"])
+                self._report(
+                    "Inject clean ME",
+                    self._for_image(path, [result["message"], f"Source: {note}"]),
+                )
             else:
                 QMessageBox.warning(self, "Inject Failed", result["message"])
 
@@ -250,7 +281,7 @@ class MERegionPage(QWidget):
             return
 
         def done(result):
-            self._report("Verify", describe(result))
+            self._report("Verify", self._for_image(path, describe(result)))
             if on_done:
                 on_done(result)
 

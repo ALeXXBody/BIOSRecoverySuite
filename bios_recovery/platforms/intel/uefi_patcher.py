@@ -24,7 +24,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 from bios_recovery.core.verified_write import write_verified
 
 FV_SIGNATURE = b"_FVH"
@@ -729,8 +729,21 @@ class UEFIPatcher:
             os.path.dirname(os.path.dirname(here)), "patches", "dxe_replacements.json"
         )
 
-    def load_dxe_replacements(self, registry_path: Optional[str] = None) -> list[dict]:
-        path = registry_path or self._default_dxe_registry_path()
+    def user_dxe_registry_path(self) -> str:
+        """Entries the user derived from a dump pair. Kept outside the program folder."""
+        from bios_recovery.core import user_library
+
+        return os.path.join(user_library.config_dir(), "dxe_replacements.json")
+
+    def dxe_binary_path(self, entry_file: str) -> str:
+        """Where a registry entry's binary is. Packaged entries sit in patches/dxe;
+        derived entries record the absolute path they were written to."""
+        if os.path.isabs(entry_file):
+            return entry_file
+        return os.path.join(os.path.dirname(self.patches_path), "dxe", entry_file)
+
+    @staticmethod
+    def _read_dxe_registry(path: str) -> list[dict]:
         if not os.path.exists(path):
             return []
         try:
@@ -753,11 +766,33 @@ class UEFIPatcher:
             )
         return out
 
+    def load_dxe_replacements(self, registry_path: Optional[str] = None) -> list[dict]:
+        """Packaged entries, then the user's derived entries. A key appears once."""
+        if registry_path:
+            return self._read_dxe_registry(registry_path)
+        seen = set()
+        out = []
+        for path in (self._default_dxe_registry_path(), self.user_dxe_registry_path()):
+            for entry in self._read_dxe_registry(path):
+                if entry["key"] and entry["key"] not in seen:
+                    seen.add(entry["key"])
+                    out.append(entry)
+        return out
+
+    def add_user_dxe_replacements(self, entries: list[dict]) -> list[dict]:
+        """Add derived entries to the user's registry; returns the entries actually added."""
+        known = {e["key"] for e in self.load_dxe_replacements()}
+        added = [e for e in entries if e["key"] and e["key"] not in known]
+        path = self.user_dxe_registry_path()
+        stored = self._read_dxe_registry(path) + added
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        write_file_atomic(path, json.dumps({"replacements": stored}, indent=2).encode("utf-8"))
+        return added
+
     def save_dxe_replacements(self, entries: list[dict], registry_path: Optional[str] = None):
         path = registry_path or self._default_dxe_registry_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            json.dump({"replacements": entries}, f, indent=2)
+        write_file_atomic(path, json.dumps({"replacements": entries}, indent=2).encode("utf-8"))
 
     @staticmethod
     def _looks_like_ffs(blob: bytes, guid: str) -> bool:
@@ -952,12 +987,12 @@ class UEFIPatcher:
             ):
                 continue
             fname = f"{guid}.ffs"
-            with open(os.path.join(out_dir, fname), "wb") as f:
-                f.write(bytes(patched[pnode.off : pnode.off + pnode.size]))
+            fpath = os.path.abspath(os.path.join(out_dir, fname))
+            write_file_atomic(fpath, bytes(patched[pnode.off : pnode.off + pnode.size]))
             derived.append(
                 {
                     "key": f"derived_{guid.lower()[:8]}",
-                    "file": fname,
+                    "file": fpath,
                     "target_guid": guid,
                     "description": f"auto-derived replacement for {guid} "
                     f"({'.'.join(str(seg) for seg in [pnode.ftype])})",
@@ -1062,7 +1097,7 @@ class UEFIPatcher:
         patches_dir = os.path.dirname(self.patches_path)
 
         for entry in self.load_dxe_replacements():
-            bin_path = os.path.join(patches_dir, "dxe", entry["file"])
+            bin_path = self.dxe_binary_path(entry["file"])
             if not os.path.exists(bin_path):
                 report["steps"].append(
                     {
@@ -1105,11 +1140,17 @@ class UEFIPatcher:
                     }
                 )
 
-        report["output_path"] = output_path
         required = [s for s in report["steps"] if not s.get("skipped")]
         report["success"] = any(s["ok"] for s in report["steps"]) and all(
             s["ok"] for s in required
         )
+        if any(s["ok"] for s in report["steps"]):
+            report["output_path"] = output_path
+        else:
+            # No step changed the image: do not leave an unchanged copy behind.
+            report["output_path"] = ""
+            if os.path.exists(output_path):
+                os.remove(output_path)
         return report
 
     # ------------------------------------------------------------------ #

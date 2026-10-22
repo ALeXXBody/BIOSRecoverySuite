@@ -14,6 +14,7 @@ def window(qapp, monkeypatch, tmp_path):  # noqa: F811
     monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     win = MainWindow()
     sample = tmp_path / "dump.bin"
     sample.write_bytes(b"\xff" * 0x20000)
@@ -46,7 +47,10 @@ def test_remove_button_recovers_after_failure(window, monkeypatch):
     assert window.remove_btn.isEnabled()
 
 
-def test_extract_button_recovers_after_failure(window, monkeypatch):
+def test_extract_button_recovers_after_failure(window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
     monkeypatch.setattr(window.bios_extractor, "extract", _boom)
     window.extract_bios()
     _wait_threads(window)
@@ -90,3 +94,16 @@ def test_capsule_merge_reads_the_file_it_was_started_on(window, monkeypatch, tmp
     window.current_file = str(tmp_path / "changed_later.bin")
     _wait_threads(window)
     assert seen and seen[0] == first
+
+
+def test_extract_cancel_writes_nothing_next_to_input(window, monkeypatch, tmp_path):
+    """Cancelling the picker starts no extraction and creates no folder beside the input (M7)."""
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: "")
+    called = []
+    monkeypatch.setattr(window.bios_extractor, "extract", lambda *a, **k: called.append(a))
+    window.extract_bios()
+    _wait_threads(window)
+    assert called == []
+    assert not any(p.name.endswith("_extracted") for p in tmp_path.iterdir())

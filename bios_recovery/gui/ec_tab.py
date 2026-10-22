@@ -1,6 +1,5 @@
 """Embedded Controller firmware analysis and patching tab."""
 
-import os
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,14 +19,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bios_recovery.gui.outputs import confirm_overwrite, derived_path
 from bios_recovery.platforms.ec.ec_patcher import ECPatcher, ECStatus
+
+
+def _run_inline(task, on_done, button=None):
+    on_done(task())
 
 
 class ECTab(QWidget):
     """Analyze, extract and (carefully) patch EC firmware."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, run_task=None):
         super().__init__(parent)
+        self._run_task = run_task or _run_inline
         self.patcher = ECPatcher()
         self.current_dump = None
         self.last_extracted = None
@@ -191,6 +196,9 @@ class ECTab(QWidget):
             wrong but the chip capacity is known -- e.g. a 256KB IT8218VG that
             the heuristics keep reporting as 128KB.
           * box checked, offset filled -> (offset, size), used verbatim.
+
+        A typed offset that is not hex raises ValueError. It never falls back to
+        auto-detection: the user asked for a specific region.
         """
         if not self.override_check.isChecked():
             return None, None
@@ -202,24 +210,41 @@ class ECTab(QWidget):
         try:
             offset = int(raw, 16)
         except ValueError:
-            QMessageBox.warning(
-                self,
-                "Bad offset",
+            raise ValueError(
                 f"'{raw}' is not a valid hex offset. Example: 1FC0000\n\n"
                 "Leave the offset blank to anchor the region at its detected "
-                "end using the selected chip size.",
-            )
-            return None, None
+                "end using the selected chip size."
+            ) from None
         return offset, size
+
+    def _region_or_warn(self):
+        """(offset, size) from the manual controls, or None after telling the user why not."""
+        try:
+            return self._override_region()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Bad offset", str(exc))
+            return None
 
     def analyze(self):
         if not self.current_dump:
             QMessageBox.warning(self, "No File", "Open a BIOS/SPI dump first.")
             return
-        with open(self.current_dump, "rb") as f:
-            data = f.read()
-        off_override, size_override = self._override_region()
-        analysis = self.patcher.analyze_ec(data, off_override, size_override)
+        region = self._region_or_warn()
+        if region is None:
+            return
+        off_override, size_override = region
+        path = self.current_dump
+
+        def task():
+            with open(path, "rb") as f:
+                return self.patcher.analyze_ec(f.read(), off_override, size_override)
+
+        self._run_task(
+            task,
+            lambda analysis: self._analysis_done(analysis, off_override, size_override),
+        )
+
+    def _analysis_done(self, analysis, off_override, size_override):
         if not analysis.found:
             self.analysis_text.setPlainText(
                 "No EC firmware found at that region. Tried known controller "
@@ -262,17 +287,27 @@ class ECTab(QWidget):
             return
         out = self.extract_path.text().strip()
         if not out:
-            out = self.current_dump.rsplit(".", 1)[0] + "_ec.bin"
+            out = derived_path(self.current_dump, "_ec.bin")
             self.extract_path.setText(out)
-        if os.path.exists(out):
-            answer = QMessageBox.question(self, "Overwrite?", f"{out} already exists. Replace it?")
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-        off_override, size_override = self._override_region()
-        result = self.patcher.extract_ec(self.current_dump, out, off_override, size_override)
+        if not confirm_overwrite(self, out):
+            return
+        region = self._region_or_warn()
+        if region is None:
+            return
+        off_override, size_override = region
+        path = self.current_dump
+        manual = off_override is not None or size_override is not None
+        self._run_task(
+            lambda: self.patcher.extract_ec(
+                path, out, off_override, size_override, overwrite=True
+            ),
+            lambda result: self._extract_done(result, manual),
+        )
+
+    def _extract_done(self, result, manual):
         self._log(result.message)
         if result.status == ECStatus.SUCCESS:
-            if off_override is not None or size_override is not None:
+            if manual:
                 QMessageBox.information(
                     self,
                     "Extract",
@@ -308,15 +343,26 @@ class ECTab(QWidget):
                 return
             require_verified = False
 
-        result = self.patcher.apply_patch(self.current_dump, key, require_verified=require_verified)
+        output = derived_path(self.current_dump, "_ecpatched.bin")
+        if not confirm_overwrite(self, output):
+            return
+        path = self.current_dump
+        self._run_task(
+            lambda: self.patcher.apply_patch(
+                path,
+                key,
+                output_path=output,
+                require_verified=require_verified,
+                overwrite=True,
+            ),
+            self._patch_done,
+        )
+
+    def _patch_done(self, result):
         self._log(result.message)
         if result.status == ECStatus.SUCCESS:
             QMessageBox.information(
                 self, "Applied", f"{result.message}\n\nOutput saved to: {result.output_path}"
             )
         elif result.status != ECStatus.UNVERIFIED:
-            QMessageBox.warning(
-                self,
-                "Patch Not Applied",
-                result.message + " (output written to existing file only if changed)",
-            )
+            QMessageBox.warning(self, "Patch Not Applied", result.message)

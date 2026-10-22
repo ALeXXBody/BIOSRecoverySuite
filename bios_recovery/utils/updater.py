@@ -94,6 +94,7 @@ def fetch_latest_release() -> ReleaseInfo:
         },
     )
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        _require_https_response(resp)
         data = json.load(resp)
 
     urls = _pick_assets(data.get("assets", []))
@@ -105,6 +106,12 @@ def fetch_latest_release() -> ReleaseInfo:
         portable_url=urls["portable"],
         installer_sha256=urls["installer_sha256"],
     )
+
+
+def _require_https_response(resp) -> None:
+    """urllib follows redirects; the final address must still be HTTPS."""
+    if not resp.geturl().startswith("https://"):
+        raise UpdateIntegrityError("refusing a redirect to a non-HTTPS address")
 
 
 def download(
@@ -123,6 +130,7 @@ def download(
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp, open(dest_path, "wb") as out:
+            _require_https_response(resp)
             length = resp.getheader("Content-Length")
             total = int(length) if length else None
             if total is not None and total > MAX_INSTALLER_BYTES:
@@ -180,8 +188,15 @@ def apply_installer_update(installer_path: str) -> None:
         raise OSError("Silent self-update is only supported on Windows")
     if not os.path.isfile(installer_path):
         raise OSError("installer is missing")
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [installer_path, "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
         close_fds=True,
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
+    # A real installer keeps running. One that exits at once did not start the update,
+    # so the caller must keep the application open.
+    try:
+        code = proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        return
+    raise OSError(f"the installer exited straight away (code {code}); the update did not start")

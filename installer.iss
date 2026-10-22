@@ -2,7 +2,11 @@
 ; Compiled on CI with ISCC.exe after the PyInstaller build.
 
 #define MyAppName "BIOS Recovery Suite"
-#define MyAppVersion "0.4.18"
+; The version is not written here. CI passes bios_recovery.__version__ on the command line:
+;   ISCC /DMyAppVersion=<version> installer.iss
+#ifndef MyAppVersion
+#error "Pass the version on the command line: ISCC /DMyAppVersion=<version> installer.iss"
+#endif
 #define MyAppPublisher "ALeXXBody"
 #define MyAppExeName "BIOSRecoverySuite.exe"
 

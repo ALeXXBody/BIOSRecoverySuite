@@ -132,7 +132,10 @@ def test_password_scan_remove_and_hp(window, intel_ifd, monkeypatch):
     assert "Output" in window.password_text.toPlainText()
 
 
-def test_extract_bios_flow(window, intel_ifd, monkeypatch):
+def test_extract_bios_flow(window, intel_ifd, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
     open_via_dialog(monkeypatch, window, intel_ifd)
     window.extract_bios()
     _wait_threads(window)
@@ -173,34 +176,42 @@ def test_ec_tab_full_flow(window, ec_dump, tmp_path, monkeypatch):
     tab = window.ec_tab
     tab.set_file(ec_dump)
     tab.analyze()
+    _wait_threads(window)
     assert "EC firmware found" in tab.analysis_text.toPlainText()
 
     tab.extract_path.setText(str(tmp_path / "ec_out.bin"))
     tab.extract_ec()
+    _wait_threads(window)
     assert os.path.exists(str(tmp_path / "ec_out.bin"))
 
     # every registry patch can be force-applied or safely refused
     for i in range(tab.patch_combo.count()):
         tab.patch_combo.setCurrentIndex(i)
         tab.apply_patch()
+        _wait_threads(window)
 
 
 def test_lenovo_tab_full_flow(window, uefi_patch_image, tmp_path):
     tab = window.lenovo_tab
     tab.set_file(uefi_patch_image)
     tab.run_detect()
+    _wait_threads(window)
     tab.run_scan()
+    _wait_threads(window)
     from PySide6.QtCore import Qt
 
     for i in range(tab.groups_table.rowCount()):
         tab.groups_table.item(i, 0).setCheckState(Qt.Checked)
     tab.apply_patches()
+    _wait_threads(window)
     assert os.path.exists(uefi_patch_image.rsplit(".", 1)[0] + "_patched.bin")
 
     # DXE apply with empty registry must not crash
     tab.dxe_consent.setChecked(True)
     tab.apply_dxe()
+    _wait_threads(window)
     tab.run_full_autopatch()
+    _wait_threads(window)
 
 
 def test_spi_tab_paths(window, tmp_path, monkeypatch):
