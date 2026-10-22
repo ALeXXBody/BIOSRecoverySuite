@@ -29,12 +29,11 @@ def test_main_window_constructs(qapp):
     for expected in [
         "Overview",
         "Repair",
-        "ME Cleaner",
+        "ME Region",
         "DMI",
         "Security",
         "Extract",
-        "Hex Viewer",
-        "SPI Flasher",
+        "Flash & Hex",
         "EC Patching",
         "Lenovo Unlock",
     ]:

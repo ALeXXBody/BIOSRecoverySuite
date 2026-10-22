@@ -100,13 +100,13 @@ def test_repair_flow(window, intel_ifd, monkeypatch):
 
 def test_me_info_and_clean(window, intel_ifd, tmp_path, monkeypatch):
     open_via_dialog(monkeypatch, window, intel_ifd)
-    window.show_me_info()
+    window.me_page.show_info()
     _wait_threads(window)
-    window.clean_me()
+    window.me_page.clean()
     _wait_threads(window)
     out = intel_ifd.rsplit(".", 1)[0] + "_cleaned.bin"
     assert os.path.exists(out), "ME cleaner produced no output"
-    assert "Status:" in window.me_text.toPlainText()
+    assert "Status:" in window.me_page.output.toPlainText()
 
 
 def test_me_inject_with_valid_clean_image(window, intel_ifd, tmp_path, monkeypatch):
@@ -119,8 +119,8 @@ def test_me_inject_with_valid_clean_image(window, intel_ifd, tmp_path, monkeypat
     blob[0x5000:0x5004] = b"$MN2"
     struct.pack_into("<HH", blob, 0x5004, 9, 5)
     clean.write_bytes(bytes(blob))
-    window.me_clean_file.setText(str(clean))
-    window.inject_me()
+    window.me_page.clean_edit.setText(str(clean))
+    window.me_page.inject()
     _wait_threads(window)
     assert os.path.exists(str(intel_ifd).rsplit(".", 1)[0] + "_mefixed.bin")
 
@@ -156,10 +156,10 @@ def test_extract_bios_flow(window, intel_ifd, monkeypatch):
 
 def test_hex_view(window, intel_ifd, monkeypatch):
     open_via_dialog(monkeypatch, window, intel_ifd)
-    window.hex_offset.setText("0")
-    window.hex_length.setText("64")
-    window.view_hex()
-    assert window.hex_text.toPlainText().strip() != ""
+    window.spi_tab.hex_offset.setText("0")
+    window.spi_tab.hex_length.setText("64")
+    window.spi_tab.view_hex()
+    assert "Hex view" in window.spi_tab.log_text.toPlainText()
 
 
 def test_generate_passwords_every_generator(window):

@@ -1,4 +1,9 @@
-"""SPI flash programmer tab - flashrom / CH341A based."""
+"""Flash & Hex page: SPI programmer (flashrom / CH341A) and a hex view of the image.
+
+One image field serves both: the write source and the hex view. A completed backup
+read becomes that image, so its contents can be viewed without a browse step.
+Results of every action go to one output pane.
+"""
 
 import os
 
@@ -36,6 +41,31 @@ class SPITab(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
+
+        image_row = QHBoxLayout()
+        image_row.addWidget(QLabel("Image:"))
+        self.image_edit = QLineEdit()
+        self.image_edit.setPlaceholderText("BIOS image to write, or to view in hex")
+        image_row.addWidget(self.image_edit, 1)
+        image_browse = QPushButton("Browse...")
+        image_browse.clicked.connect(self._browse_open)
+        image_row.addWidget(image_browse)
+        layout.addLayout(image_row)
+
+        hex_row = QHBoxLayout()
+        hex_row.addWidget(QLabel("Hex view  Offset:"))
+        self.hex_offset = QLineEdit("0x0")
+        self.hex_offset.setMaximumWidth(120)
+        hex_row.addWidget(self.hex_offset)
+        hex_row.addWidget(QLabel("Length:"))
+        self.hex_length = QLineEdit("256")
+        self.hex_length.setMaximumWidth(120)
+        hex_row.addWidget(self.hex_length)
+        self.hex_btn = QPushButton("View Image in Hex")
+        self.hex_btn.clicked.connect(self.view_hex)
+        hex_row.addWidget(self.hex_btn)
+        hex_row.addStretch(1)
+        layout.addLayout(hex_row)
 
         prog_row = QHBoxLayout()
         prog_row.addWidget(QLabel("Programmer:"))
@@ -76,16 +106,6 @@ class SPITab(QWidget):
 
         write_group = QGroupBox("Write Image (DANGER - requires consent)")
         write_layout = QVBoxLayout(write_group)
-        write_row = QHBoxLayout()
-        write_row.addWidget(QLabel("Image:"))
-        self.write_path = QLineEdit()
-        self.write_path.setPlaceholderText("Path to the BIOS image to write")
-        write_row.addWidget(self.write_path, 1)
-        write_browse = QPushButton("Browse...")
-        write_browse.clicked.connect(self._browse_open)
-        write_row.addWidget(write_browse)
-        write_layout.addLayout(write_row)
-
         self.write_auto_backup = QCheckBox("Read full backup first (recommended)")
         self.write_auto_backup.setChecked(True)
         write_layout.addWidget(self.write_auto_backup)
@@ -120,6 +140,37 @@ class SPITab(QWidget):
         self.log_text.setReadOnly(True)
         layout.addWidget(self.log_text, 1)
 
+    def set_image(self, path: str) -> None:
+        """Make path the image used for writing and for the hex view."""
+        self.image_edit.setText(path)
+
+    def view_hex(self):
+        path = self.image_edit.text().strip()
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "No Image", "Choose an image first.")
+            return
+        try:
+            offset = int(self.hex_offset.text().strip(), 16)
+            length = int(self.hex_length.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Range", "Offset and length must be numbers.")
+            return
+        if offset < 0 or length <= 0:
+            QMessageBox.warning(
+                self, "Invalid Range", "Offset must be zero or more, and length at least 1."
+            )
+            return
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer
+
+        data = BiosAnalyzer().get_hex_view(path, offset, min(length, 0x10000))
+        lines = [f"Hex view: {os.path.basename(path)} @ {offset:#x}, {len(data)} bytes"]
+        for i in range(0, len(data), 16):
+            chunk = data[i : i + 16]
+            hex_str = " ".join(f"{b:02X}" for b in chunk)
+            ascii_str = "".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in chunk)
+            lines.append(f"{offset + i:08X}  {hex_str:<48}  {ascii_str}")
+        self._log("\n".join(lines))
+
     def _current_programmer(self) -> str:
         return self.prog_combo.currentText()
 
@@ -135,7 +186,7 @@ class SPITab(QWidget):
             self, "Open BIOS image", "", "Binary (*.bin *.rom);;All Files (*)"
         )
         if path:
-            self.write_path.setText(path)
+            self.image_edit.setText(path)
 
     def _log(self, text: str):
         self.log_text.appendPlainText(text)
@@ -206,6 +257,7 @@ class SPITab(QWidget):
                 self._log(result.output.strip())
             if result.status == SPIStatus.SUCCESS:
                 self.current_image = path
+                self.set_image(path)
                 self._log(f"Backup saved to {path} ({result.flash_size:,} bytes)")
 
         self._start_job(
@@ -218,7 +270,7 @@ class SPITab(QWidget):
         if not self.write_consent.isChecked():
             QMessageBox.warning(self, "Consent Required", "Check the write consent box first.")
             return
-        image = self.write_path.text().strip()
+        image = self.image_edit.text().strip()
         if not image:
             QMessageBox.warning(self, "No Image", "Select the BIOS image to write.")
             return

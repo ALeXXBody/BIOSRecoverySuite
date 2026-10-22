@@ -34,7 +34,7 @@ from bios_recovery.core.dmi_extractor import DMIExtractor
 from bios_recovery.core.password_remover import PasswordRemover
 from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
-from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
+from bios_recovery.gui.me_region_page import MERegionPage
 from bios_recovery.gui.settings_page import SettingsPage
 from bios_recovery.gui.sidebar_tabs import SidebarTabs
 from bios_recovery.gui.spi_tab import SPITab
@@ -44,12 +44,10 @@ from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
 from bios_recovery.manufacturers.hp.hp_unlocker import HPUnlocker
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles
 from bios_recovery.platforms.intel.me import mea_bridge
-from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
-from bios_recovery.platforms.intel.me.me_injector import MEInjector
 from bios_recovery.utils import master_passwords
 
 # Tab titles whose tool name in core/traits_matrix.py differs from the title.
-_TAB_TOOL_NAMES = {"Security": "Passwords"}
+_TAB_TOOL_NAMES = {"Security": "Passwords", "ME Region": "ME Cleaner", "Flash & Hex": "SPI Flasher"}
 
 
 class WorkerThread(QThread):
@@ -81,13 +79,11 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
 
         self.bios_analyzer = BiosAnalyzer()
-        self.me_cleaner = IntelMECleaner()
         self.dmi_extractor = DMIExtractor()
         self.password_remover = PasswordRemover()
         self.repair_engine = BiosRepairEngine()
         self.bios_extractor = BiosExtractor()
         self.hp_unlocker = HPUnlocker()
-        self.me_injector = MEInjector()
         self.dmi_clone = DMIClone()
         self.manufacturer_profiles = ManufacturerProfiles()
 
@@ -168,29 +164,29 @@ class MainWindow(QMainWindow):
 
         self.main_tab = self._build_main_tab()
         self.repair_tab = self._build_repair_tab()
-        self.me_tab = self._build_me_tab()
         self.dmi_tab = self._build_dmi_tab()
         self.password_tab = self._build_password_tab()
         self.extract_tab = self._build_extract_tab()
-        self.hex_tab = self._build_hex_tab()
         self.spi_tab = SPITab(self)
         self.ec_tab = ECTab(self)
         self.lenovo_tab = LenovoTab(self)
 
+        self.me_page = MERegionPage(
+            image_provider=lambda: self.current_file,
+            run_task=lambda task, done, button=None: self._run_in_thread(
+                task, done, button=button
+            ),
+        )
+
         self.tabs.addTab(self.main_tab, "Overview")
         self.tabs.addTab(self.repair_tab, "Repair")
         self.tabs.addTab(self.ec_tab, "EC Patching")
-        self.tabs.addTab(self.me_tab, "ME Cleaner")
+        self.tabs.addTab(self.me_page, "ME Region")
         self.tabs.addTab(self.dmi_tab, "DMI")
         self.tabs.addTab(self.password_tab, "Security")
         self.tabs.addTab(self.extract_tab, "Extract")
-        self.tabs.addTab(self.spi_tab, "SPI Flasher")
-        self.tabs.addTab(self.hex_tab, "Hex Viewer")
+        self.tabs.addTab(self.spi_tab, "Flash & Hex")
         self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock")
-        self.rebuild_page = RebuildCheckPage(
-            self, run_task=lambda task, done: self._run_in_thread(task, done)
-        )
-        self.tabs.addTab(self.rebuild_page, "Rebuild Check")
         self.settings_page = SettingsPage(
             self, run_task=lambda task, done: self._run_in_thread(task, done)
         )
@@ -208,7 +204,7 @@ class MainWindow(QMainWindow):
         tool_menu = menubar.addMenu("&Tools")
         tool_menu.addAction("Run &Analysis", self.run_analysis)
         tool_menu.addAction("&Repair BIOS", lambda: self.tabs.setCurrentWidget(self.repair_tab))
-        tool_menu.addAction("&Clean ME", lambda: self.tabs.setCurrentWidget(self.me_tab))
+        tool_menu.addAction("&Clean ME", lambda: self.tabs.setCurrentWidget(self.me_page))
         tool_menu.addAction("&Extract DMI", lambda: self.tabs.setCurrentWidget(self.dmi_tab))
         tool_menu.addAction(
             "Remove &Passwords", lambda: self.tabs.setCurrentWidget(self.password_tab)
@@ -427,99 +423,6 @@ class MainWindow(QMainWindow):
 
         return widget
 
-    def _build_me_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("File:"))
-        self.me_file = QLineEdit()
-        self.me_file.setReadOnly(True)
-        file_row.addWidget(self.me_file, 1)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.open_file)
-        file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
-
-        me_options = QGroupBox("ME Cleaning Options")
-        me_options_layout = QVBoxLayout(me_options)
-        self.me_soft_disable = QCheckBox("Set HAP/AltMeDisable bit (soft disable)")
-        self.me_soft_disable.setChecked(True)
-        self.me_remove_modules = QCheckBox("Remove non-essential modules")
-        self.me_remove_modules.setChecked(True)
-        self.me_lock_descriptor = QCheckBox("Lock descriptor (remove ME write access)")
-        self.me_truncate = QCheckBox("Truncate empty ME space")
-        me_options_layout.addWidget(self.me_soft_disable)
-        me_options_layout.addWidget(self.me_remove_modules)
-        me_options_layout.addWidget(self.me_lock_descriptor)
-        me_options_layout.addWidget(self.me_truncate)
-        layout.addWidget(me_options)
-
-        self.me_info_btn = QPushButton("Show ME Info")
-        self.me_info_btn.clicked.connect(self.show_me_info)
-        layout.addWidget(self.me_info_btn)
-
-        self.me_clean_btn = QPushButton("Clean ME Region")
-        self.me_clean_btn.clicked.connect(self.clean_me)
-        layout.addWidget(self.me_clean_btn)
-
-        inject_group = QGroupBox("Inject Clean ME/TXE Region (repair corrupted ME)")
-        inject_layout = QVBoxLayout(inject_group)
-        inject_layout.addWidget(
-            QLabel(
-                "Replaces the whole ME region with a clean firmware image of the\n"
-                "same version (drag the clean .bin from your ME repository)."
-            )
-        )
-        inject_row = QHBoxLayout()
-        self.me_clean_file = QLineEdit()
-        self.me_clean_file.setPlaceholderText("Path to clean ME region image (.bin)")
-        inject_row.addWidget(self.me_clean_file, 1)
-        me_browse = QPushButton("Browse...")
-        me_browse.clicked.connect(self.browse_clean_me)
-        inject_row.addWidget(me_browse)
-        inject_layout.addLayout(inject_row)
-        self.me_inject_btn = QPushButton("Inject Clean ME")
-        self.me_inject_btn.clicked.connect(self.inject_me)
-        inject_layout.addWidget(self.me_inject_btn)
-        layout.addWidget(inject_group)
-
-        self.me_text = QPlainTextEdit()
-        self.me_text.setReadOnly(True)
-        layout.addWidget(self.me_text, 1)
-
-        return widget
-
-    def browse_clean_me(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open clean ME image", "", "Binary (*.bin);;All Files (*)"
-        )
-        if path:
-            self.me_clean_file.setText(path)
-
-    def inject_me(self):
-        if not self.current_file:
-            return
-        clean_path = self.me_clean_file.text().strip()
-        if not clean_path or not os.path.exists(clean_path):
-            QMessageBox.warning(self, "No Clean Image", "Select a clean ME region image first.")
-            return
-        self._run_in_thread(
-            self.me_injector.inject,
-            self._me_inject_done,
-            self.current_file,
-            clean_path,
-            self.current_file.rsplit(".", 1)[0] + "_mefixed.bin",
-            button=self.me_inject_btn,
-        )
-
-    def _me_inject_done(self, result):
-        if result["success"]:
-            self.me_text.setPlainText(result["message"])
-            self.statusBar().showMessage("ME region injected")
-        else:
-            QMessageBox.warning(self, "Inject Failed", result["message"])
-
     def _build_dmi_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -732,30 +635,6 @@ class MainWindow(QMainWindow):
 
         return widget
 
-    def _build_hex_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("Offset (hex):"))
-        self.hex_offset = QLineEdit("0x0")
-        controls.addWidget(self.hex_offset)
-        controls.addWidget(QLabel("Length:"))
-        self.hex_length = QLineEdit("256")
-        controls.addWidget(self.hex_length)
-        self.hex_btn = QPushButton("View")
-        self.hex_btn.clicked.connect(self.view_hex)
-        controls.addWidget(self.hex_btn)
-        controls.addStretch(1)
-        layout.addLayout(controls)
-
-        self.hex_text = QPlainTextEdit()
-        self.hex_text.setReadOnly(True)
-        self.hex_text.setFont("Courier New" if hasattr(self.hex_text, "setFont") else None)
-        layout.addWidget(self.hex_text, 1)
-
-        return widget
-
     def _build_passgen_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -812,7 +691,8 @@ class MainWindow(QMainWindow):
             self.current_file = path
             self.file_label.setText(os.path.basename(path))
             self.repair_file.setText(path)
-            self.me_file.setText(path)
+            self.me_page.refresh()
+            self.spi_tab.set_image(path)
             self.dmi_file.setText(path)
             self.password_file.setText(path)
             self.extract_file.setText(path)
@@ -827,7 +707,7 @@ class MainWindow(QMainWindow):
     def _clear_results(self):
         """Results shown for the previous file must not stay on screen for the new one."""
         self.current_bios_info = None
-        for name in ("info_text", "me_text", "dmi_text", "password_text"):
+        for name in ("info_text", "dmi_text", "password_text"):
             widget = getattr(self, name, None)
             if widget is not None:
                 widget.clear()
@@ -1144,64 +1024,6 @@ class MainWindow(QMainWindow):
         self.info_text.setPlainText("\n".join(lines))
         self.statusBar().showMessage(f"Merged image written: {info.output_path}")
 
-    def show_me_info(self):
-        if not self.current_file:
-            return
-        self._run_in_thread(self.me_cleaner.get_me_info, self._me_info_done, self.current_file)
-
-    def _me_info_done(self, info):
-        if not info.get("found"):
-            reason = info.get("reason")
-            if reason:
-                self.me_text.setPlainText(reason)
-            else:
-                self.me_text.setPlainText("No Intel ME region found in this image.")
-            return
-        lines = [
-            f"ME Version: {info.get('version', 'Unknown')}",
-            f"ME Type: {info.get('type', 'Unknown')}",
-            f"Generation: {info.get('generation', 'Unknown')}",
-            f"Offset: {info.get('offset', '0x0')}",
-            f"Size: {info.get('size', '0x0')}",
-            "",
-            "Partitions:",
-        ]
-        for p in info.get("partitions", []):
-            lines.append(f"  {p['name']}: offset {p['offset']}, size {p['size']}")
-        self.me_text.setPlainText("\n".join(lines))
-
-    def clean_me(self):
-        if not self.current_file:
-            return
-        output = self.current_file.rsplit(".", 1)[0] + "_cleaned.bin"
-        self._run_in_thread(
-            self.me_cleaner.clean,
-            self._me_clean_done,
-            self.current_file,
-            output,
-            self.me_soft_disable.isChecked(),
-            self.me_truncate.isChecked(),
-            self.me_remove_modules.isChecked(),
-            self.me_lock_descriptor.isChecked(),
-            button=self.me_clean_btn,
-        )
-
-    def _me_clean_done(self, report):
-        self.me_clean_btn.setEnabled(True)
-        lines = [
-            f"Status: {report.status.name}",
-            f"ME Version: {report.me_version}",
-            f"ME Type: {report.me_type}",
-            f"Original Size: {report.original_size:#x}",
-            f"Cleaned Size: {report.cleaned_size:#x}",
-            f"Partitions Removed: {report.partitions_removed}",
-            f"HAP Bit Set: {report.hap_bit_set}",
-            f"Output: {report.output_path}",
-        ]
-        for msg in report.messages:
-            lines.append(f"  - {msg}")
-        self.me_text.setPlainText("\n".join(lines))
-
     def hp_unlock(self):
         if not self.current_file:
             return
@@ -1453,27 +1275,6 @@ class MainWindow(QMainWindow):
         for f in result.files:
             lines.append(f"  {f['type']}: {f['name']} ({f['size']:,} bytes @ {f['offset']})")
         self.extract_text.setPlainText("\n".join(lines))
-
-    def view_hex(self):
-        if not self.current_file:
-            return
-        try:
-            offset = int(self.hex_offset.text().strip(), 16)
-            length = int(self.hex_length.text().strip())
-        except ValueError:
-            self._show_error("Invalid offset or length")
-            return
-        if offset < 0 or length <= 0:
-            self._show_error("Offset must be zero or more, and length must be at least 1")
-            return
-        data = self.bios_analyzer.get_hex_view(self.current_file, offset, min(length, 0x10000))
-        lines = []
-        for i in range(0, len(data), 16):
-            chunk = data[i : i + 16]
-            hex_str = " ".join(f"{b:02X}" for b in chunk)
-            ascii_str = "".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in chunk)
-            lines.append(f"{offset + i:08X}  {hex_str:<48}  {ascii_str}")
-        self.hex_text.setPlainText("\n".join(lines))
 
     def generate_passwords(self):
         key = self.gen_generator.currentData()
