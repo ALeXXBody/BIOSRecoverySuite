@@ -63,8 +63,9 @@ def test_scan_identifies_user_supplied_tool(tmp_path):
     tool.write_text("#!/bin/sh\necho 'Intel (R) Modular Flash Image Tool. Version: 16.50.0.1120'\n")
     tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     lib.add_folder(str(folder))
-    result = lib.scan()
-    assert [(t.family, t.version) for t in result.tools] == [("MFIT", "16.50.0.1120")]
+    assert [(t.family, t.identified) for t in lib.scan().tools] == [("unidentified", False)]
+    lib.identify_tool(str(tool))
+    assert [(t.family, t.version) for t in lib.scan().tools] == [("MFIT", "16.50.0.1120")]
 
 
 @POSIX_ONLY
@@ -78,6 +79,7 @@ def test_fit_info_uses_library_tool_when_compatible(tmp_path, capsys):
     img = tmp_path / "img.bin"
     img.write_bytes(build_intel_ifd_image())
     lib.add_folder(str(folder))
+    lib.identify_tool(str(tool))
     rc = _cli_main(["fit-info", str(img)])
     out = capsys.readouterr().out
     assert rc == 0
@@ -159,6 +161,7 @@ def test_tool_with_spaces_in_name_is_found(tmp_path):
     tool.write_text("#!/bin/sh\necho 'Intel (R) Flash Image Tool. Version: 15.40.16.2534'\n")
     tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     lib.add_folder(str(folder), "tools")
+    lib.identify_tool(str(tool))
     assert [t.version for t in lib.scan().tools] == ["15.40.16.2534"]
 
 
@@ -173,6 +176,8 @@ def test_identity_comes_from_content_not_name(tmp_path):
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
     lib.add_folder(str(tmp_path / "a"), "tools")
     lib.add_folder(str(tmp_path / "b"), "tools")
+    lib.identify_tool(str(a))
+    lib.identify_tool(str(b))
     tools = {t.version: t for t in lib.scan().tools}
     assert tools["15.0.35.1951"].release == "v15.0 r15"
     assert tools["15.40.16.2534"].release == "v15.40 r3"
@@ -195,3 +200,51 @@ def test_import_names_tool_by_its_banner(tmp_path):
     src.write_text("#!/bin/sh\necho 'Intel (R) Flash Image Tool. Version: 14.1.60.1790'\n")
     res = lib.import_files([str(src)], "tools")
     assert os.path.basename(res[0].copied_to) == "FIT_14.1.60.1790_unknown"
+
+
+@POSIX_ONLY
+def test_scan_never_runs_a_tool(tmp_path):
+    marker = tmp_path / "ran.marker"
+    folder = tmp_path / "tools"
+    folder.mkdir()
+    tool = folder / "fit"
+    tool.write_text(f"#!/bin/sh\necho ran >> '{marker}'\necho 'Flash Image Tool. Version: 15.0.35.1951'\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    lib.add_folder(str(folder), "tools")
+    lib.scan()
+    lib.scan()
+    assert not marker.exists()
+
+
+@POSIX_ONLY
+def test_identify_runs_once_and_caches_by_hash(tmp_path):
+    marker = tmp_path / "runs.marker"
+    folder = tmp_path / "tools"
+    folder.mkdir()
+    tool = folder / "fit"
+    tool.write_text(f"#!/bin/sh\necho x >> '{marker}'\necho 'Flash Image Tool. Version: 14.1.60.1790'\n")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    lib.add_folder(str(folder), "tools")
+    assert lib.identify_tool(str(tool)).identified
+    lib.scan()
+    lib.scan()
+    assert marker.read_text().count("x") == 1  # identify ran it once; scans did not
+    assert lib.scan().tools[0].identified
+
+
+def test_identify_refuses_a_non_tool(tmp_path):
+    other = tmp_path / "notes"
+    other.write_text("hello")
+    probe = lib.identify_tool(str(other))
+    assert not probe.identified
+    assert lib.load_library().identified == {}
+
+
+def test_damaged_config_is_kept_aside_not_overwritten(tmp_path):
+    os.makedirs(lib.config_dir(), exist_ok=True)
+    with open(lib.config_path(), "w") as f:
+        f.write("{ not json")
+    cfg = lib.load_library()
+    assert cfg.tools_folders == []
+    assert os.path.exists(lib.config_path() + ".damaged")
+    assert open(lib.config_path() + ".damaged").read() == "{ not json"

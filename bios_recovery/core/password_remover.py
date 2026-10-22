@@ -2,7 +2,6 @@
 
 import struct
 import os
-import hashlib
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional

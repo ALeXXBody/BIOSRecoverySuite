@@ -24,7 +24,6 @@ device-static data plus that first character.
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass, field
 from typing import Optional
 

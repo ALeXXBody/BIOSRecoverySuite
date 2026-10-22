@@ -2,15 +2,12 @@
 
 import os
 import sys
-import threading
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QTabWidget,
     QFrame,
     QGridLayout,
     QToolButton,
@@ -18,25 +15,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QFileDialog,
     QMessageBox,
-    QProgressBar,
-    QTextEdit,
-    QStatusBar,
     QLineEdit,
     QComboBox,
     QCheckBox,
     QTableWidget,
     QTableWidgetItem,
     QGroupBox,
-    QListWidget,
-    QListWidgetItem,
     QPlainTextEdit,
-    QSplitter,
-    QToolBar,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QIcon
 
-from bios_recovery.core.bios_analyzer import BiosAnalyzer, BiosType
+from bios_recovery.core.bios_analyzer import BiosAnalyzer
 from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
 from bios_recovery.core.dmi_extractor import DMIExtractor
 from bios_recovery.core.password_remover import PasswordRemover
@@ -46,7 +36,7 @@ from bios_recovery.manufacturers.hp.hp_unlocker import HPUnlocker
 from bios_recovery.platforms.intel.me.me_injector import MEInjector
 from bios_recovery.core.dmi_clone import DMIClone
 from bios_recovery.utils import master_passwords
-from bios_recovery.manufacturers.profiles import ManufacturerProfiles, Manufacturer
+from bios_recovery.manufacturers.profiles import ManufacturerProfiles
 from bios_recovery.gui.sidebar_tabs import SidebarTabs
 from bios_recovery.gui.settings_page import SettingsPage
 from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
@@ -59,6 +49,10 @@ from bios_recovery.platforms.intel.me import mea_bridge
 
 
 from bios_recovery.gui.workers import track, wait_for_workers
+
+
+# Tab titles whose tool name in core/traits_matrix.py differs from the title.
+_TAB_TOOL_NAMES = {"Security": "Passwords"}
 
 
 class WorkerThread(QThread):
@@ -444,13 +438,11 @@ class MainWindow(QMainWindow):
         me_options_layout = QVBoxLayout(me_options)
         self.me_soft_disable = QCheckBox("Set HAP/AltMeDisable bit (soft disable)")
         self.me_soft_disable.setChecked(True)
-        self.me_relocate = QCheckBox("Relocate FTPR partition")
         self.me_remove_modules = QCheckBox("Remove non-essential modules")
         self.me_remove_modules.setChecked(True)
         self.me_lock_descriptor = QCheckBox("Lock descriptor (remove ME write access)")
         self.me_truncate = QCheckBox("Truncate empty ME space")
         me_options_layout.addWidget(self.me_soft_disable)
-        me_options_layout.addWidget(self.me_relocate)
         me_options_layout.addWidget(self.me_remove_modules)
         me_options_layout.addWidget(self.me_lock_descriptor)
         me_options_layout.addWidget(self.me_truncate)
@@ -501,12 +493,12 @@ class MainWindow(QMainWindow):
         if not clean_path or not os.path.exists(clean_path):
             QMessageBox.warning(self, "No Clean Image", "Select a clean ME region image first.")
             return
-        self.me_inject_btn.setEnabled(False)
-        try:
-            result = self.me_injector.inject(self.current_file, clean_path,
-                                             self.current_file.rsplit(".", 1)[0] + "_mefixed.bin")
-        finally:
-            self.me_inject_btn.setEnabled(True)
+        self._run_in_thread(self.me_injector.inject, self._me_inject_done,
+                            self.current_file, clean_path,
+                            self.current_file.rsplit(".", 1)[0] + "_mefixed.bin",
+                            button=self.me_inject_btn)
+
+    def _me_inject_done(self, result):
         if result["success"]:
             self.me_text.setPlainText(result["message"])
             self.statusBar().showMessage("ME region injected")
@@ -600,12 +592,11 @@ class MainWindow(QMainWindow):
         if not new_path or not os.path.exists(new_path):
             QMessageBox.warning(self, "No New Dump", "Select the new/clean BIOS image.")
             return
-        self.dmi_clone_btn.setEnabled(False)
-        try:
-            result = self.dmi_clone.clone(old_path, new_path,
-                                          new_path.rsplit(".", 1)[0] + "_dmiclone.bin")
-        finally:
-            self.dmi_clone_btn.setEnabled(True)
+        self._run_in_thread(self.dmi_clone.clone, self._dmi_clone_done, old_path, new_path,
+                            new_path.rsplit(".", 1)[0] + "_dmiclone.bin",
+                            button=self.dmi_clone_btn)
+
+    def _dmi_clone_done(self, result):
         if result["success"]:
             self.dmi_text.setPlainText(result["message"])
             self.statusBar().showMessage("DMI identity cloned")
@@ -798,13 +789,44 @@ class MainWindow(QMainWindow):
             self.ec_tab.ec_file.setText(path)
             self.lenovo_tab.set_file(path)
             self.clone_old_edit.setText(path)
+            self._clear_results()
             self.statusBar().showMessage(f"Loaded: {path}")
             self.run_analysis()
 
-    def _run_in_thread(self, task, on_done, *args):
+    def _clear_results(self):
+        """Results shown for the previous file must not stay on screen for the new one."""
+        self.current_bios_info = None
+        for name in ("info_text", "me_text", "dmi_text", "password_text"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.clear()
+        table = getattr(self, "regions_table", None)
+        if table is not None:
+            table.setRowCount(0)
+
+    def _run_in_thread(self, task, on_done, *args, button=None):
+        """Run task off the UI thread. button is disabled while it runs and re-enabled on
+        success and on error alike, so a failed job never leaves its control stuck."""
+        if button is not None:
+            button.setEnabled(False)
+
+        def restore():
+            if button is not None:
+                button.setEnabled(True)
+
+        def succeeded(result):
+            try:
+                on_done(result)
+            finally:
+                restore()
+
+        def failed(message):
+            restore()
+            self._show_error(message)
+
         thread = WorkerThread(task, *args)
-        thread.finished.connect(on_done)
-        thread.error.connect(lambda e: self._show_error(e))
+        thread.finished.connect(succeeded)
+        thread.error.connect(failed)
         self._threads.append(thread)
         thread.start()
         # prune finished workers so the list does not grow unboundedly
@@ -821,9 +843,16 @@ class MainWindow(QMainWindow):
     def run_analysis(self):
         if not self.current_file:
             return
-        if hasattr(self, "analyze_btn"):
-            self.analyze_btn.setEnabled(False)
-        self._run_in_thread(self.bios_analyzer.analyze, self._analysis_done, self.current_file)
+        path = self.current_file
+        button = getattr(self, "analyze_btn", None)
+        self._run_in_thread(self.bios_analyzer.analyze,
+                            lambda result: self._analysis_done_for(path, result), path,
+                            button=button)
+
+    def _analysis_done_for(self, path, result):
+        # A result for a file the user has since switched away from must not be shown.
+        if path == self.current_file:
+            self._analysis_done(result)
 
     def _analysis_done(self, result):
         self.current_bios_info = result
@@ -850,35 +879,22 @@ class MainWindow(QMainWindow):
 
     def _apply_traits(self, traits):
         """Grey-out platform/vendor-bound tabs with an explicit reason in the tooltip."""
-        from bios_recovery.core.traits import ARCH_AMD, ARCH_INTEL, ARCH_APPLE_INTEL
         from bios_recovery.core.traits_matrix import tool_matrix
 
-        rules = {
-            "ME Cleaner": (
-                traits.architecture in (ARCH_INTEL, ARCH_APPLE_INTEL),
-                "Not applicable: AMD platform (no Intel ME)" if traits.architecture == ARCH_AMD
-                else "Not applicable on this platform type",
-            ),
-            "Lenovo Unlock": (
-                traits.vendor == "lenovo",
-                "Not applicable: manufacturer-specific tool (Lenovo)",
-            ),
-            "EC Patching": (True, ""),
-        }
+        # One decision table (tool_matrix) drives both the tabs and the Platform table.
+        matrix = tool_matrix(traits)
         self.platform_badge.setText(f"{traits.architecture.upper()} · {traits.vendor}")
         self.platform_badge.setVisible(True)
         for idx in range(self.tabs.count()):
             title = self.tabs.tabText(idx)
-            rule = rules.get(title)
-            if rule is None:
+            row = matrix.get(_TAB_TOOL_NAMES.get(title, title))
+            if row is None:
                 self.tabs.setTabToolTip(idx, "")
                 continue
-            applies, reason = rule
-            self.tabs.setTabEnabled(idx, applies)
-            self.tabs.setTabToolTip(idx, "" if applies else reason)
+            self.tabs.setTabEnabled(idx, row.applies)
+            self.tabs.setTabToolTip(idx, "" if row.applies else row.reason)
 
         # Populate the Platform tab table + info panel
-        matrix = tool_matrix(traits)
         if hasattr(self, "traits_table"):
             self.traits_table.setRowCount(0)
             for i, (tool, row) in enumerate(matrix.items()):
@@ -907,8 +923,9 @@ class MainWindow(QMainWindow):
                  ]
         if traits.me_family:
             lines.append(f"  ME family: {traits.me_family} (version {traits.me_version or '?'})")
-        for init_idx, title in (("ME Cleaner", "ME Cleaner"), ("Lenovo Unlock", "Lenovo Unlock")):
-            applies, reason = rules.get(title, (True, ""))
+        for title in ("ME Cleaner", "Lenovo Unlock"):
+            row = matrix.get(title)
+            applies, reason = (row.applies, row.reason) if row else (True, "")
             lines.append(f"  tool[{title}]: {'available' if applies else 'disabled — ' + reason}")
         cur = self.info_text.toPlainText()
         self.info_text.setPlainText(cur + "\n" + "\n".join(lines))
@@ -1081,7 +1098,9 @@ class MainWindow(QMainWindow):
     def show_me_info(self):
         if not self.current_file:
             return
-        info = self.me_cleaner.get_me_info(self.current_file)
+        self._run_in_thread(self.me_cleaner.get_me_info, self._me_info_done, self.current_file)
+
+    def _me_info_done(self, info):
         if not info.get("found"):
             reason = info.get("reason")
             if reason:
@@ -1105,7 +1124,6 @@ class MainWindow(QMainWindow):
     def clean_me(self):
         if not self.current_file:
             return
-        self.me_clean_btn.setEnabled(False)
         output = self.current_file.rsplit(".", 1)[0] + "_cleaned.bin"
         self._run_in_thread(
             self.me_cleaner.clean,
@@ -1113,10 +1131,10 @@ class MainWindow(QMainWindow):
             self.current_file,
             output,
             self.me_soft_disable.isChecked(),
-            self.me_relocate.isChecked(),
             self.me_truncate.isChecked(),
             self.me_remove_modules.isChecked(),
             self.me_lock_descriptor.isChecked(),
+            button=self.me_clean_btn,
         )
 
     def _me_clean_done(self, report):
@@ -1138,12 +1156,11 @@ class MainWindow(QMainWindow):
     def hp_unlock(self):
         if not self.current_file:
             return
-        self.hp_unlock_btn.setEnabled(False)
-        try:
-            report = self.hp_unlocker.unlock(self.current_file,
-                                             self.current_file.rsplit(".", 1)[0] + "_unlocked.bin")
-        finally:
-            self.hp_unlock_btn.setEnabled(True)
+        self._run_in_thread(self.hp_unlocker.unlock, self._hp_unlock_done, self.current_file,
+                            self.current_file.rsplit(".", 1)[0] + "_unlocked.bin",
+                            button=self.hp_unlock_btn)
+
+    def _hp_unlock_done(self, report):
         lines = [f"Style: {report['style'] or 'unknown'}",
                  f"Success: {report['success']}",
                  f"Output: {report['output_path']}"]
@@ -1254,7 +1271,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Identity edit written: {rep.output_path}")
 
     def run_apple_fsys(self):
-        from bios_recovery.manufacturers.apple.apple_efi import fix_fsys_checksum, rom_info
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a flashed BIOS dump first.")
@@ -1378,6 +1394,9 @@ class MainWindow(QMainWindow):
         except ValueError:
             self._show_error("Invalid offset or length")
             return
+        if offset < 0 or length <= 0:
+            self._show_error("Offset must be zero or more, and length must be at least 1")
+            return
         data = self.bios_analyzer.get_hex_view(self.current_file, offset, min(length, 0x10000))
         lines = []
         for i in range(0, len(data), 16):
@@ -1412,12 +1431,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No File", "Open a BIOS file first.")
             return
         self.statusBar().showMessage("Running ME Analyzer...")
-        try:
-            res = mea_bridge.run_mea_analyzer(self.current_file)
-        except Exception as e:
-            QMessageBox.critical(self, "ME Analyzer Error", str(e))
-            self.statusBar().showMessage("ME Analyzer failed")
-            return
+        self._run_in_thread(mea_bridge.run_mea_analyzer, self._mea_done, self.current_file)
+
+    def _mea_done(self, res):
         lines = ["ME Analyzer Result:"]
         if res.success:
             lines.append("Success")

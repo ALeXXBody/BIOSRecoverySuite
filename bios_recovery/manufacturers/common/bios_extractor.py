@@ -121,10 +121,10 @@ class BiosExtractor:
             if detect_capsule(data).success:
                 return ExtractionMethod.AMI_CAPSULE
 
-        if self.DELL_PFS_SIGNATURE in data[:0x1000]:
+        if self._has_pfs_header(data):
             return ExtractionMethod.DELL_PFS
 
-        if b"HP" in data[:0x1000] or b"Insyde" in data[:0x1000]:
+        if re.search(rb"\bHP\b|\bInsyde\b", data[:0x1000]):
             return ExtractionMethod.HP_INSIDE
 
         if b"Lenovo" in data[:0x1000] or b"FL1" in data[:0x1000]:
@@ -167,11 +167,19 @@ class BiosExtractor:
             return ExtractionMethod.DELL_PFS
         if "lenovo" in text.lower():
             return ExtractionMethod.LENOVO_EXE
-        if "hp" in text.lower() or "insyde" in text.lower():
+        if re.search(r"\b(hp|insyde)\b", text, re.IGNORECASE):
             return ExtractionMethod.HP_INSIDE
         if "asus" in text.lower():
             return ExtractionMethod.ASUS_EXE
         return ExtractionMethod.UNIVERSAL
+
+    def _has_pfs_header(self, data: bytes) -> bool:
+        """A PFS signature whose size field fits inside the file, not any stray 'PFS' text."""
+        idx = data.find(self.DELL_PFS_SIGNATURE, 0, 0x1000)
+        if idx < 0 or idx + 0x08 > len(data):
+            return False
+        size = struct.unpack_from("<I", data, idx + 0x04)[0]
+        return 0x10 <= size and idx + size <= len(data)
 
     def _extract_dell_pfs(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
         result = ExtractionResult(success=False)
@@ -276,13 +284,12 @@ class BiosExtractor:
         return self._extract_universal(data, output_dir, original_path)
 
     def _extract_toshiba(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+        result = ExtractionResult(success=False)
         com_offset = data.find(b".COM")
         if com_offset >= 0:
-            result = ExtractionResult(success=False)
             result.messages.append(f"Found Toshiba COM reference at {com_offset:#x}")
 
         bios_regions = self._find_bios_regions(data)
-        result = ExtractionResult(success=False)
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
@@ -414,22 +421,10 @@ class BiosExtractor:
         return [(r.offset, r.size) for r in regions if r.region_type == RegionType.INTEL_ME]
 
     def _find_firmware_volumes(self, data: bytes) -> list[tuple[int, int]]:
-        regions = []
-        idx = 0
-        while True:
-            idx = data.find(self.FV_SIGNATURE, idx)
-            if idx < 0:
-                break
-            fv_start = max(0, idx - 0x28)
-            if fv_start + 0x30 <= len(data):
-                try:
-                    fv_size = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
-                    if 0 < fv_size < len(data):
-                        regions.append((fv_start, min(fv_size, len(data) - fv_start)))
-                except struct.error:
-                    pass
-            idx += 4
-        return regions
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionInfo
+        found: list = []
+        BiosAnalyzer()._search_firmware_volumes(bytes(data), found)
+        return [(r.offset, r.size) for r in found if isinstance(r, RegionInfo)]
 
     def _find_intel_fd(self, data: bytes) -> int:
         if data[:4] == self.INTEL_FD_SIGNATURE:
@@ -438,6 +433,17 @@ class BiosExtractor:
             return 0x10
         return -1
 
+    MAX_LZMA_OUTPUT = 64 * 1024 * 1024
+
+    @staticmethod
+    def _valid_lzma_dictionary(size: int) -> bool:
+        """LZMA dictionary sizes are 2^n, or 2^n + 2^(n-1), between 4 KB and 64 MB."""
+        if not 0x1000 <= size <= 0x4000000:
+            return False
+        if size & (size - 1) == 0:
+            return True
+        return size % 3 == 0 and (size // 3) & (size // 3 - 1) == 0
+
     def _find_compressed_sections(self, data: bytes) -> list[int]:
         offsets = []
         idx = 0
@@ -445,27 +451,32 @@ class BiosExtractor:
             idx = data.find(self.LZMA_SIGNATURE, idx)
             if idx < 0:
                 break
-            offsets.append(idx)
+            if idx + 5 <= len(data) and self._valid_lzma_dictionary(
+                    struct.unpack_from("<I", data, idx + 1)[0]):
+                offsets.append(idx)
             idx += 1
         return offsets
 
     def _try_decompress_lzma(self, data: bytes, offset: int, output_dir: str, result: ExtractionResult) -> None:
+        """Decode one LZMA stream. The stream must end cleanly within MAX_LZMA_OUTPUT."""
+        import lzma
+        decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
         try:
-            import lzma
-            decompressed = lzma.decompress(data[offset:offset + 0x100000])
-            if decompressed:
-                output_file = os.path.join(output_dir, f"decompressed_{offset:#x}.bin")
-                with open(output_file, "wb") as f:
-                    f.write(decompressed)
-                result.files.append({
-                    "name": os.path.basename(output_file),
-                    "size": len(decompressed),
-                    "offset": f"{offset:#x}",
-                    "type": "Decompressed",
-                })
-                result.success = True
-        except Exception:
-            pass
+            decompressed = decomp.decompress(data[offset:], max_length=self.MAX_LZMA_OUTPUT)
+        except lzma.LZMAError:
+            return
+        if not decomp.eof or not decompressed:
+            return
+        output_file = os.path.join(output_dir, f"decompressed_{offset:#x}.bin")
+        with open(output_file, "wb") as f:
+            f.write(decompressed)
+        result.files.append({
+            "name": os.path.basename(output_file),
+            "size": len(decompressed),
+            "offset": f"{offset:#x}",
+            "type": "Decompressed",
+        })
+        result.success = True
 
     def _extract_ascii_strings(self, data: bytes, min_length: int = 4) -> list[str]:
         strings = []

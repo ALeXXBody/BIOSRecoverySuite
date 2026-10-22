@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import struct
-from typing import Optional
 
 from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionInfo, RegionType
 
@@ -135,6 +134,16 @@ def bpdt_blocks(data: bytes, bios_spans: list) -> list[tuple[int, int]]:
     return found
 
 
+def _split_at_boundaries(start: int, end: int, regions) -> list[tuple[int, int]]:
+    cuts = {start, end}
+    for r in regions:
+        for x in (r.offset, r.offset + r.size):
+            if start < x < end:
+                cuts.add(x)
+    ordered = sorted(cuts)
+    return [(ordered[i], ordered[i + 1]) for i in range(len(ordered) - 1)]
+
+
 def _kind_at(offset: int, regions) -> tuple[str, str]:
     for r in regions:
         if r.offset <= offset < r.offset + r.size:
@@ -173,15 +182,19 @@ def verify_rebuild(original_path: str, candidate_path: str,
         result.reasons.append(f"size changed: {len(a):#x} -> {len(b):#x}")
 
     for start, end in changed_spans(a, b):
-        kind, region = _kind_at(start, analysis.regions)
-        last_kind, last_region = _kind_at(end - 1, analysis.regions)
-        if last_kind != kind:
-            kind, region = "mixed", f"{region} / {last_region}"
-        span = ChangedSpan(start, end, kind, region)
-        result.spans.append(span)
-        result.changed_bytes += span.size
-        if kind not in allow:
-            result.refused_spans.append(span)
+        # Judge every piece of a changed run on its own: a run that crosses a region
+        # boundary is split there, so no byte inherits another region's classification.
+        for seg_start, seg_end in _split_at_boundaries(start, end, analysis.regions):
+            kind, region = _kind_at(seg_start, analysis.regions)
+            if kind == "unclaimed":
+                allowed = False
+            else:
+                allowed = kind in allow
+            span = ChangedSpan(seg_start, seg_end, kind, region)
+            result.spans.append(span)
+            result.changed_bytes += span.size
+            if not allowed:
+                result.refused_spans.append(span)
 
     if result.refused_spans:
         kinds = sorted({s.kind for s in result.refused_spans})

@@ -115,6 +115,7 @@ def test_me_inject_with_valid_clean_image(window, intel_ifd, tmp_path, monkeypat
     clean.write_bytes(bytes(blob))
     window.me_clean_file.setText(str(clean))
     window.inject_me()
+    _wait_threads(window)
     assert os.path.exists(str(intel_ifd).rsplit(".", 1)[0] + "_mefixed.bin")
 
 
@@ -126,6 +127,7 @@ def test_dmi_extract_and_clone(window, intel_ifd, tmp_path, monkeypatch):
     other.write_bytes(open(intel_ifd, "rb").read())
     window.clone_new_edit.setText(str(other))
     window.clone_dmi()
+    _wait_threads(window)
     assert os.path.exists(str(other).rsplit(".", 1)[0] + "_dmiclone.bin")
 
 
@@ -136,6 +138,7 @@ def test_password_scan_remove_and_hp(window, intel_ifd, monkeypatch):
     window.remove_passwords()
     _wait_threads(window)
     window.hp_unlock()
+    _wait_threads(window)
     assert "Output" in window.password_text.toPlainText()
 
 

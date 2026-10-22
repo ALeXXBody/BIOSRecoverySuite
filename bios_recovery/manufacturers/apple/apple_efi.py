@@ -19,7 +19,6 @@ write. Anything else is refused with an explicit message.
 from __future__ import annotations
 
 import binascii
-import os
 import struct
 from dataclasses import dataclass, field
 from typing import Optional

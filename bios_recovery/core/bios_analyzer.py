@@ -5,7 +5,6 @@ import hashlib
 import os
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
 
 
 class BiosType(Enum):
@@ -223,8 +222,10 @@ class BiosAnalyzer:
             if off + 4 > len(data):
                 break
             flreg = struct.unpack_from("<I", data, off)[0]
-            base = (flreg & 0x7FFF) << 12
-            limit = ((flreg >> 16) & 0x7FFF) << 12 | 0xFFF
+            # FLREG values are 4 KB pages relative to the descriptor, so a descriptor
+            # that starts at 0x10 (16-byte header) shifts every region by that amount.
+            base = fd_offset + ((flreg & 0x7FFF) << 12)
+            limit = fd_offset + (((flreg >> 16) & 0x7FFF) << 12 | 0xFFF)
             if base < limit and limit < len(data):
                 regions.append(RegionInfo(
                     region_type=rtype,
@@ -308,8 +309,9 @@ class BiosAnalyzer:
         ))
 
     def _search_me_region(self, data: bytes, regions: list[RegionInfo]) -> None:
-        fpt_pos = data.find(self.FPT_SIGNATURE)
-        if fpt_pos >= 0:
+        positions = self._fpt_positions(data)
+        if positions:
+            fpt_pos = positions[0]
             has_me = any(r.region_type == RegionType.INTEL_ME for r in regions)
             if not has_me:
                 regions.append(RegionInfo(
@@ -464,6 +466,8 @@ class BiosAnalyzer:
         return warnings
 
     def get_hex_view(self, file_path: str, offset: int = 0, length: int = 256) -> bytes:
+        if offset < 0 or length <= 0:
+            raise ValueError("offset must be >= 0 and length must be > 0")
         with open(file_path, "rb") as f:
             f.seek(offset)
             return f.read(length)

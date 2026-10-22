@@ -109,3 +109,25 @@ def test_bpdt_header_block_is_me_layer(tmp_path):
     r = verify_rebuild(str(src), str(out))
     assert r.accepted, r.reasons
     assert r.spans[0].kind == "me"
+
+
+def test_run_across_unclaimed_gap_is_refused(tmp_path):
+    # Two ME (BPDT) blocks with an unclaimed gap between them. A rewrite that starts in
+    # one block and ends in the other must not be accepted just because its first and last
+    # bytes are in ME space.
+    import struct as _s
+    data = bytearray(b"\xFF" * 0x10000)
+    for off in (0x1000, 0x3000):
+        data[off:off + 4] = b"\xaa\x55\x00\x00"
+        _s.pack_into("<HH", data, off + 4, 13, 0x0201)
+    data[0x2000:0x3000] = b"\x00" * 0x1000
+    src = tmp_path / "gap.bin"
+    src.write_bytes(bytes(data))
+    cand = bytearray(data)
+    for i in range(0x1FF0, 0x3010):
+        cand[i] ^= 0x5A
+    out = tmp_path / "gap_cand.bin"
+    out.write_bytes(bytes(cand))
+    r = verify_rebuild(str(src), str(out))
+    assert not r.accepted
+    assert any(s.kind == "unclaimed" for s in r.refused_spans)

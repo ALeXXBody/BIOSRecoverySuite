@@ -33,11 +33,80 @@ def test_pick_assets_prefers_installer_and_portable():
 
 
 def test_pick_assets_empty():
-    assert _pick_assets([]) == {"installer": None, "portable": None}
-    assert _pick_assets([{"name": "no-url"}]) == {"installer": None, "portable": None}
+    assert _pick_assets([]) == {"installer": None, "installer_sha256": None, "portable": None}
+    assert _pick_assets([{"name": "no-url"}]) == {"installer": None, "installer_sha256": None, "portable": None}
 
 
 def test_release_info_defaults():
     info = ReleaseInfo(version="1.2.0", notes="n", html_url="u")
     assert info.installer_url is None
     assert info.portable_url is None
+
+
+import hashlib as _hashlib
+import io as _io
+import os as _os
+
+import pytest as _pytest
+
+from bios_recovery.utils import updater as _up
+
+
+def test_tag_with_extra_text_is_rejected():
+    assert _parse_tag("v1.2.3/../../x") == ()
+    assert _parse_tag("v1.2.3-rc1") == ()
+    assert not is_newer("v1.2.3/../x", "1.0.0")
+
+
+def test_installer_digest_is_taken_from_the_release():
+    assets = [{"name": "BIOSRecoverySuite-Setup-1.2.0.exe", "browser_download_url": "https://x/s.exe",
+               "digest": "sha256:ABCDEF"}]
+    assert _pick_assets(assets)["installer_sha256"] == "abcdef"
+
+
+def test_plain_http_assets_are_ignored():
+    assets = [{"name": "BIOSRecoverySuite-Setup-1.2.0.exe", "browser_download_url": "http://x/s.exe"}]
+    assert _pick_assets(assets)["installer"] is None
+
+
+def test_verify_fails_closed_without_digest(tmp_path):
+    f = tmp_path / "setup.exe"
+    f.write_bytes(b"MZ")
+    with _pytest.raises(_up.UpdateIntegrityError, match="publishes no SHA-256"):
+        _up.verify_sha256(str(f), None)
+
+
+def test_verify_rejects_wrong_digest(tmp_path):
+    f = tmp_path / "setup.exe"
+    f.write_bytes(b"MZ")
+    with _pytest.raises(_up.UpdateIntegrityError, match="does not match"):
+        _up.verify_sha256(str(f), "0" * 64)
+    _up.verify_sha256(str(f), _hashlib.sha256(b"MZ").hexdigest())  # correct digest passes
+
+
+class _Resp(_io.BytesIO):
+    def __init__(self, body, length):
+        super().__init__(body)
+        self._length = length
+
+    def getheader(self, name):
+        return str(self._length) if name == "Content-Length" else None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_truncated_download_is_refused_and_removed(tmp_path, monkeypatch):
+    dest = tmp_path / "setup.exe"
+    monkeypatch.setattr(_up.urllib.request, "urlopen", lambda *a, **k: _Resp(b"MZ" * 10, 100))
+    with _pytest.raises(_up.UpdateIntegrityError, match="ended early"):
+        _up.download("https://example.invalid/setup.exe", str(dest))
+    assert not _os.path.exists(dest)
+
+
+def test_download_refuses_plain_http(tmp_path):
+    with _pytest.raises(_up.UpdateIntegrityError, match="non-HTTPS"):
+        _up.download("http://example.invalid/setup.exe", str(tmp_path / "x.exe"))

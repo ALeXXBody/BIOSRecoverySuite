@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
+from bios_recovery.core.safety import SameFileError, ensure_distinct
+
 
 class MeGeneration(Enum):
     GEN1 = auto()
@@ -64,7 +66,6 @@ class IntelMECleaner:
         input_path: str,
         output_path: Optional[str] = None,
         soft_disable: bool = True,
-        relocate: bool = False,
         truncate: bool = False,
         remove_modules: bool = True,
         descriptor_lock: bool = False,
@@ -74,6 +75,10 @@ class IntelMECleaner:
                 status=MeCleanResult.ERROR,
                 messages=[f"File not found: {input_path}"],
             )
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            return MeCleanReport(status=MeCleanResult.ERROR, messages=[str(exc)])
 
         with open(input_path, "rb") as f:
             data = bytearray(f.read())
@@ -85,9 +90,22 @@ class IntelMECleaner:
                 messages=["No Intel ME region found in the image"],
             )
 
-        me_version = self._get_me_version(data, me_start, me_end)
+        # The manifest may sit in the 4 KB block just before the partition base (CSME 15 layouts).
+        me_version = self._get_me_version(data, max(0, me_start - 0x1000), me_end)
+        if not me_version:
+            # Same reader the analyzer uses, so the two tools cannot disagree on the version.
+            from bios_recovery.core.bios_analyzer import BiosAnalyzer
+            me_version = BiosAnalyzer().analyze(input_path).me_version
         me_type = self._get_me_type(me_version)
         original_size = me_end - me_start
+
+        if not me_version:
+            return MeCleanReport(
+                status=MeCleanResult.UNSUPPORTED_VERSION,
+                me_type=me_type,
+                generation=me_gen,
+                messages=["ME version could not be read; refusing to modify this region"],
+            )
 
         if self._is_already_clean(data, me_start, me_end):
             return MeCleanReport(
@@ -136,7 +154,8 @@ class IntelMECleaner:
             # manifest structure instead of an FPT-listed FTPR. Partition-level
             # cleaning is not meaningful there; HAP soft-disable still applies.
             exp_end = min(me_end, len(data))
-            if b"$CPD" in data[me_start:exp_end]:
+            # The $CPD manifest of a CSE LT layout may sit in the block before the partition base.
+            if b"$CPD" in data[max(0, me_start - 0x1000):exp_end]:
                 if soft_disable:
                     self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major)
                     report.hap_bit_set = True
@@ -177,10 +196,12 @@ class IntelMECleaner:
             self._lock_me_descriptor(data, me_gen)
             report.messages.append("ME descriptor write access removed")
 
-        if truncate and me_gen in (MeGeneration.GEN2, MeGeneration.GEN3):
-            self._truncate_me(data, me_start, ftpr_entry)
+        if truncate and me_gen in (MeGeneration.GEN2, MeGeneration.GEN3) and ftpr_entry is not None:
+            self._truncate_me(data, me_start, entries, ftpr_entry)
             report.cleaned_size = len(data) - me_start
             report.messages.append(f"ME region truncated from {original_size:#x} to {report.cleaned_size:#x}")
+        elif truncate:
+            report.messages.append("Truncation skipped: no FTPR partition to bound the region")
 
         report.partitions_removed = report.partitions_removed or 0
         report.messages.append(f"ME version: {me_version} ({me_type})")
@@ -217,15 +238,12 @@ class IntelMECleaner:
             result = self._me_region_from_flreg(data, fd)
             if result is not None:
                 return result
-            result = self._me_region_from_legacy_flmap(data, fd)
-            if result is not None:
-                return result
 
         # (d) Descriptor present but FLREG unusable: fall back to the FPT scan
         fpt = self._scan_fpt_first(data)
         if fpt >= 0:
-            me_start = max(0, fpt - 0x10)
-            me_end = self._fpt_region_end(data, fpt)
+            me_start = max(0, fpt & ~0xFFF)
+            me_end = self._partition_extent(data, fpt, me_start)
             if me_end > me_start:
                 gen = self._detect_generation(data, me_start, me_end)
                 return me_start, me_end, gen
@@ -234,42 +252,19 @@ class IntelMECleaner:
         return -1, -1, MeGeneration.UNKNOWN
 
     def _me_region_from_flreg(self, data: bytes, fd: int) -> Optional[tuple[int, int, MeGeneration]]:
-        """Modern 0x5AA5F00F descriptor: FLREG table at fd+0x30, ME FLREG at fd+0x38.
+        """ME region from the descriptor's FLREG2 entry.
 
-        Layout per Intel PCH spec / MEAnalyzer: FLREG base = region start in 4KB pages
-        relative to the descriptor magic; limit = (region_end_page - 1) in the same units.
+        FLMAP0 (fd+0x04) gives FRBA in 16-byte units from the descriptor start; the FLREG
+        table is at FRBA and ME is its third entry (FRBA+8). Base and limit are 4 KB pages.
         """
         N = len(data)
-        if fd + 0x3C > N:
+        if fd + 0x08 > N:
             return None
-        me_flreg = struct.unpack_from("<I", data, fd + 0x38)[0]
-        base = me_flreg & 0x7FFF
-        limit = (me_flreg >> 16) & 0x7FFF
-        if limit == 0 or base > limit:
-            return None
-        me_start = fd + base * 0x1000
-        me_end = min(fd + (limit + 1) * 0x1000, N)
-        if me_start >= me_end:
-            return None
-        if not self._has_region_content(data, me_start, me_end):
-            return None
-        gen = self._detect_generation(data, me_start, me_end)
-        return me_start, me_end, gen
-
-    def _me_region_from_legacy_flmap(
-        self, data: bytes, fd: int
-    ) -> Optional[tuple[int, int, MeGeneration]]:
-        """Legacy/alternate descriptor layout (FLMAP0 at fd+0x10, ME FLREG at frba+0x10)."""
-        N = len(data)
-        if fd + 0x14 > N:
-            return None
-        flmap0 = struct.unpack_from("<I", data, fd + 0x10)[0]
-        if flmap0 in (0, 0xFFFFFFFF):
-            return None
+        flmap0 = struct.unpack_from("<I", data, fd + 0x04)[0]
         frba_abs = fd + ((flmap0 >> 16) & 0xFF) * 0x10
-        if frba_abs + 0x14 > N:
+        if frba_abs + 0x0C > N:
             return None
-        me_flreg = struct.unpack_from("<I", data, frba_abs + 0x10)[0]
+        me_flreg = struct.unpack_from("<I", data, frba_abs + 0x08)[0]
         base = me_flreg & 0x7FFF
         limit = (me_flreg >> 16) & 0x7FFF
         if limit == 0 or base > limit:
@@ -320,6 +315,26 @@ class IntelMECleaner:
                 nxt = data.find(self.FPT_SIGNATURE, pos + 4)
                 pos = nxt if nxt >= 0 else N
         return -1
+
+    def _partition_extent(self, data: bytes, fpt_off: int, base: int) -> int:
+        """End of the ME region: the furthest end of any partition the table lists.
+
+        Partition offsets are relative to the ME base (the 4 KB boundary at or below
+        the table). Falls back to the table's own end when no partition is usable.
+        """
+        end = 0
+        n = min(struct.unpack_from("<I", data, fpt_off + 0x04)[0], 32) if fpt_off + 8 <= len(data) else 0
+        for i in range(n):
+            e = fpt_off + 0x20 + i * 0x20
+            if e + 0x10 > len(data):
+                break
+            off, size = struct.unpack_from("<II", data, e + 0x08)
+            if off in (0, 0xFFFFFFFF) or size in (0, 0xFFFFFFFF):
+                continue
+            end = max(end, base + off + size)
+        if end and end <= len(data):
+            return end
+        return self._fpt_region_end(data, fpt_off)
 
     def _fpt_region_end(self, data: bytes, fpt_off: int) -> int:
         """Best-effort end of the region that owns the FPT at fpt_off."""
@@ -401,28 +416,18 @@ class IntelMECleaner:
         ftpr_entry: tuple,
     ) -> int:
         removed = 0
+        ftpr_name, ftpr_off, ftpr_size = ftpr_entry
+        ftpr_end = ftpr_off + ftpr_size
         for name, offset, size in entries:
-            if name == b"FTPR" or name == b"EFFS":
+            if name in (b"FTPR", b"EFFS"):
                 continue
-            if name == b"FTPR":
+            # A partition that overlaps FTPR is never touched.
+            if offset < ftpr_end and offset + size > ftpr_off:
                 continue
-            for i in range(min(offset, offset + size)):
-                if offset + i < len(data):
-                    data[offset + i] = 0xFF
+            end = min(offset + size, len(data))
+            data[offset:end] = b"\xFF" * (end - offset)
             removed += 1
         return removed
-
-    def _set_hap_bit(
-        self,
-        data: bytearray,
-        me_start: int,
-        me_end: int,
-        gen: MeGeneration,
-        me_version: int,
-    ) -> None:
-        fd_offset = self._find_fd_in_data(data)
-        if fd_offset < 0:
-            return
 
     def _set_hap_bit(
         self,
@@ -502,12 +507,13 @@ class IntelMECleaner:
                     pass
 
     def _truncate_me(
-        self, data: bytearray, me_start: int, ftpr_entry: tuple
+        self, data: bytearray, me_start: int, entries: list, ftpr_entry: tuple
     ) -> None:
-        _, _, size = ftpr_entry
-        truncate_at = me_start + size + 0x1000
-        truncate_at = (truncate_at // 0x1000) * 0x1000
-        if truncate_at < len(data):
+        """Cut the image after the last partition that is kept (FTPR and EFFS)."""
+        kept = [ftpr_entry] + [e for e in entries if e[0] == b"EFFS"]
+        end = max(off + size for _name, off, size in kept)
+        truncate_at = -(-end // 0x1000) * 0x1000
+        if me_start < truncate_at < len(data):
             del data[truncate_at:]
 
     def _is_already_clean(self, data: bytes, me_start: int, me_end: int) -> bool:
@@ -523,13 +529,16 @@ class IntelMECleaner:
         return non_ff_count < 0x100
 
     def _get_me_version(self, data: bytes, me_start: int, me_end: int) -> str:
-        """Read the ME version from a `$MN2`/`$MAN` partition manifest.
+        """Engine version: the most common valid `$MN2`/`$MAN` manifest version in the region.
 
         Manifest layout (gen1-3): tag at manifest+0x1C, version fields (u16 major,
-        minor, hotfix, build) at manifest+0x24 — i.e. tag+0x08.
+        minor, hotfix, build) at manifest+0x24 — i.e. tag+0x08. Auxiliary modules carry
+        their own manifests, so the first match is not necessarily the engine.
         """
+        from collections import Counter
         n = len(data)
-        exp_end = min(me_end, me_start + 0x1000000)
+        exp_end = min(me_start + 0x1000000, n)  # manifests of auxiliary modules sit past the table
+        counts: Counter = Counter()
         for tag in (b"$MN2", b"$MAN"):
             pos = me_start
             while pos < exp_end:
@@ -538,13 +547,11 @@ class IntelMECleaner:
                     break
                 base = idx - 0x1C
                 if base >= 0 and base + 0x2C <= n:
-                    major, minor, hotfix, build = struct.unpack_from(
-                        "<HHHH", data, base + 0x24
-                    )
+                    major, minor, hotfix, build = struct.unpack_from("<HHHH", data, base + 0x24)
                     if 0 < major < 100 and minor < 200 and build < 100000:
-                        return f"{major}.{minor}.{hotfix}.{build}"
+                        counts[f"{major}.{minor}.{hotfix}.{build}"] += 1
                 pos = idx + 4
-        return ""
+        return counts.most_common(1)[0][0] if counts else ""
 
     def _get_me_type(self, version: str) -> str:
         if not version:

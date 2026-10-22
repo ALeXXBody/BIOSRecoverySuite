@@ -36,6 +36,13 @@ def test_ambiguous_range_is_flagged_not_guessed():
     assert m.confidence == "ambiguous"
 
 
+def test_ambiguous_range_refuses_compatibility():
+    from bios_recovery.platforms.intel.me.fit_bridge import ToolProbe, compatible_with_me
+    probe = ToolProbe(path="x", identified=True, family="FIT", version="14.0.11.1002")
+    ok, why = compatible_with_me(probe, "14.0.11.1002")
+    assert not ok and "ambiguous" in why
+
+
 def test_unknown_or_missing_version():
     assert tool_for_me_version("").release is None
     assert tool_for_me_version("garbage").release is None

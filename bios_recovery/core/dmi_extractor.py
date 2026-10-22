@@ -1,8 +1,6 @@
 """DMI/SMBIOS extraction and editing engine."""
 
 import struct
-import os
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -99,12 +97,8 @@ class DMIExtractor:
 
     def _parse_smbios_entry(self, data: bytes, offset: int) -> Optional[bytes]:
         if data[offset:offset + 4] == b"_SM_":
-            major = data[offset + 6]
-            minor = data[offset + 7]
             table_length = struct.unpack_from("<H", data, offset + 22)[0]
             table_addr = struct.unpack_from("<I", data, offset + 24)[0]
-
-            num_structures = struct.unpack_from("<H", data, offset + 28)[0]
 
             if table_addr > 0 and table_length > 0:
                 if table_addr + table_length <= len(data):
@@ -139,10 +133,8 @@ class DMIExtractor:
         i = 0
         while i < min(len(data), 0x100000):
             if data[i] in self.SMBIOS_TYPES and i + 4 < len(data):
-                struct_type = data[i]
                 struct_length = data[i + 1]
                 if 4 <= struct_length <= 256 and i + struct_length <= len(data):
-                    handle = struct.unpack_from("<H", data, i + 2)[0]
                     dmi_data.extend(data[i:i + struct_length])
                     i += struct_length
                     while i < len(data) and i < i + 0x100:

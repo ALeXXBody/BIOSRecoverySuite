@@ -12,7 +12,6 @@ This engine:
   * rewrites the region in place, leaving the descriptor untouched.
 """
 
-import struct
 
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
 from bios_recovery.core.me_manifest import detect_me_version_best as detect_me_version_in_blob

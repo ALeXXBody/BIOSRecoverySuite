@@ -14,6 +14,8 @@ import io
 import json
 import os
 import re
+import shutil
+import tempfile
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ USER_AGENT = "BIOSRecoverySuite-MEA-Updater"
 REQUEST_TIMEOUT = 20
 ALLOWED_SUFFIXES = (".py", ".dat")
 MAX_ZIP_BYTES = 64 * 1024 * 1024
+MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 
 
 @dataclass
@@ -148,19 +151,35 @@ def stage_mea_update(release: MEAReleaseInfo, staging_dir: str) -> list[str]:
     if hashlib.sha256(blob).hexdigest() != release.zip_sha256:
         raise ValueError("SHA-256 mismatch on the downloaded zip; refusing to stage")
 
-    staged = []
     os.makedirs(staging_dir, exist_ok=True)
-    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            base = os.path.basename(info.filename)
-            if not base.lower().endswith(ALLOWED_SUFFIXES):
-                continue
-            dest = os.path.join(staging_dir, base)
-            with zf.open(info) as src, open(dest, "wb") as out:
-                out.write(src.read())
-            staged.append(base)
-    if "MEA.py" not in staged:
-        raise ValueError("zip does not contain MEA.py; nothing staged")
-    return staged
+    work = tempfile.mkdtemp(prefix="mea_stage_", dir=staging_dir)
+    try:
+        staged = []
+        total = 0
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            members = [i for i in zf.infolist() if not i.is_dir()]
+            if sum(i.file_size for i in members) > MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("archive expands beyond the allowed size; refusing to stage")
+            for info in members:
+                base = os.path.basename(info.filename)
+                if not base.lower().endswith(ALLOWED_SUFFIXES):
+                    continue
+                with zf.open(info) as src:
+                    data = src.read(MAX_UNCOMPRESSED_BYTES + 1)
+                total += len(data)
+                if total > MAX_UNCOMPRESSED_BYTES:
+                    raise ValueError("archive expands beyond the allowed size; refusing to stage")
+                with open(os.path.join(work, base), "wb") as out:
+                    out.write(data)
+                staged.append(base)
+        if "MEA.py" not in staged:
+            raise ValueError("zip does not contain MEA.py; nothing staged")
+        # Only now replace the previous files, and never through a symlink.
+        for name in staged:
+            target = os.path.join(staging_dir, name)
+            if os.path.islink(target):
+                raise ValueError(f"refusing to write through a symlink: {target}")
+            os.replace(os.path.join(work, name), target)
+        return staged
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

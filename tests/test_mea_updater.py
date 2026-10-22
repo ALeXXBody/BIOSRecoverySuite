@@ -77,3 +77,31 @@ def test_same_release_line_is_not_reported_newer(monkeypatch):
     assert result["newer"] is False or result["local_version"] != "1.312.0"
     if result["local_version"] == "1.312.0":
         assert result["status"] == "same version (revision unknown)"
+
+
+def test_stage_refuses_archive_that_expands_too_far(tmp_path, monkeypatch):
+    monkeypatch.setattr(up, "MAX_UNCOMPRESSED_BYTES", 1024)
+    blob = _zip({"MEA.py": b"x" * 4096})
+    rel = up.MEAReleaseInfo(tag="v9", name="", html_url="",
+                            zip_url="https://example.invalid/a.zip",
+                            zip_sha256=hashlib.sha256(blob).hexdigest())
+    monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp(blob))
+    with pytest.raises(ValueError, match="expands beyond"):
+        up.stage_mea_update(rel, str(tmp_path / "stage"))
+    assert not (tmp_path / "stage" / "MEA.py").exists()
+
+
+def test_stage_refuses_to_write_through_a_symlink(tmp_path, monkeypatch):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep")
+    os.symlink(victim, stage / "MEA.py")
+    blob = _zip({"MEA.py": b"title = 'ME Analyzer v9.9.9'\n"})
+    rel = up.MEAReleaseInfo(tag="v9", name="", html_url="",
+                            zip_url="https://example.invalid/a.zip",
+                            zip_sha256=hashlib.sha256(blob).hexdigest())
+    monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp(blob))
+    with pytest.raises(ValueError, match="symlink"):
+        up.stage_mea_update(rel, str(stage))
+    assert victim.read_text() == "keep"

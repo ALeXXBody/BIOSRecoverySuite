@@ -490,7 +490,6 @@ class UEFIPatcher:
 
     def _recompress_into_image(self, image: bytearray, node: SectionNode, fnode: FileNode):
         new_section = self._lzma_section_bytes(node)
-        old_file_size = fnode.size
 
         new_body = b""
         for sec in fnode.sections:          # top-level sections only

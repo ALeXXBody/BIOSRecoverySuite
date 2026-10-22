@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
+from bios_recovery.core.safety import SameFileError, ensure_distinct
+
 
 class ECController(Enum):
     UNKNOWN = auto()
@@ -502,7 +504,6 @@ class ECPatcher:
         """
         if start <= 0 or start > len(data):
             return False
-        total = len(data)
         lo = max(1, start - 0x1000)
         window = data[lo:start + 1]
         for i in range(1, len(window)):
@@ -579,6 +580,10 @@ class ECPatcher:
           * neither                 -> auto-detection.
         """
         size = int(size) if size else None
+        if offset is not None and offset < 0:
+            return -1, -1, "The manual offset must be zero or more."
+        if offset is not None and not size:
+            return -1, -1, "A manual offset needs a region size as well."
 
         if offset is not None and offset >= 0 and size:
             offset = int(offset)
@@ -799,6 +804,10 @@ class ECPatcher:
         ALWAYS exactly ``size`` bytes, so it can be flashed straight onto a chip
         of that capacity.
         """
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            return ECPatchResult(status=ECStatus.ERROR, message=str(exc))
         with open(input_path, "rb") as f:
             data = f.read()
 

@@ -2,7 +2,7 @@
 ; Compiled on CI with ISCC.exe after the PyInstaller build.
 
 #define MyAppName "BIOS Recovery Suite"
-#define MyAppVersion "0.4.3"
+#define MyAppVersion "0.4.4"
 #define MyAppPublisher "ALeXXBody"
 #define MyAppExeName "BIOSRecoverySuite.exe"
 
@@ -31,13 +31,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [InstallDelete]
-; Wipe the previous install before unpacking. Qt resolves DLLs from the app
-; folder FIRST, so a single stale DLL left behind by an older build (a
-; hand-injected ICU, an old Qt, a leftover runtime) shadows the correct
-; system one and QtWidgets fails with "The specified procedure could not be
-; found" even though the new build is perfectly good. The app stores no user
-; data here, so a clean wipe on every install is safe.
-Type: filesandordirs; Name: "{app}\*"
+; Remove the previous build before unpacking. Qt resolves DLLs from the app
+; folder FIRST, so a stale DLL left behind by an older build shadows the correct
+; one. Only this application's own files are removed, never the whole folder:
+; the folder itself is checked in [Code] before installation starts.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: files; Name: "{app}\{#MyAppExeName}"
 
 [Files]
 Source: "dist\BIOSRecoverySuite\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -49,3 +48,54 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function IsDriveRoot(Dir: string): Boolean;
+begin
+  Result := Length(RemoveBackslash(Dir)) <= 2;
+end;
+
+function FolderHasForeignFiles(Dir: string): Boolean;
+var
+  FindRec: TFindRec;
+  Found: Boolean;
+begin
+  Result := False;
+  if not DirExists(Dir) then
+    Exit;
+  { A folder this application installed before has its uninstaller or its runtime folder. }
+  if FileExists(AddBackslash(Dir) + 'unins000.exe') then
+    Exit;
+  if DirExists(AddBackslash(Dir) + '_internal') then
+    Exit;
+  Found := FindFirst(AddBackslash(Dir) + '*', FindRec);
+  while Found do
+  begin
+    if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+    begin
+      Result := True;
+      Found := False;
+    end
+    else
+      Found := FindNext(FindRec);
+  end;
+  FindClose(FindRec);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = wpSelectDir then
+  begin
+    if IsDriveRoot(WizardDirValue) then
+    begin
+      MsgBox('Choose a folder for the application, not the root of a drive.', mbError, MB_OK);
+      Result := False;
+    end
+    else if FolderHasForeignFiles(WizardDirValue) then
+    begin
+      MsgBox('That folder already contains files that BIOS Recovery Suite did not install. Choose a different folder.', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;

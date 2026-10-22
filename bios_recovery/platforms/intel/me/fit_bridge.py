@@ -19,7 +19,6 @@ import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from typing import Optional
 
 from bios_recovery.platforms.intel.me.fit_versions import rule_for_version
 
@@ -52,7 +51,11 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
         # "-h" prints the banner and exits. With no arguments the Linux build opens a
         # Qt window and waits, so it must not be run bare. The Qt variables keep it
         # headless and out of the user's runtime directory.
-        env = dict(os.environ, QT_QPA_PLATFORM="offscreen", XDG_RUNTIME_DIR=work)
+        # Minimal environment: only what the loader needs, and every writable location
+        # points at the probe's private folder, not the user's profile.
+        env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "WINDIR") if k in os.environ}
+        env.update(QT_QPA_PLATFORM="offscreen", XDG_RUNTIME_DIR=work, HOME=work,
+                   TMPDIR=work, TEMP=work, TMP=work)
         try:
             done = subprocess.run(
                 [os.path.abspath(path), "-h"], cwd=work, env=env, stdin=subprocess.DEVNULL,
@@ -89,8 +92,9 @@ def compatible_with_me(probe: ToolProbe, me_version: str) -> tuple[bool, str]:
     """A tool must belong to the same System Tools release line as the ME version.
 
     The tool's own version is mapped through the same rule table as the ME version.
-    Different release lines are refused. A range the table marks ambiguous is
-    accepted with a warning, because the table cannot decide it.
+    Different release lines are refused. A range the table marks ambiguous is refused
+    too: the table cannot decide which release the image was built with, and a wrong
+    tool produces a build that fails, so nothing is guessed.
     """
     if not probe.identified or not probe.version:
         return False, "tool is not identified"
@@ -103,7 +107,7 @@ def compatible_with_me(probe: ToolProbe, me_version: str) -> tuple[bool, str]:
     if tool_rule is not me_rule:
         return False, (f"tool {probe.version} belongs to {tool_rule.release}, ME {me_version} "
                        f"needs {me_rule.release}; a mismatched FIT fails the build")
-    if me_rule.confidence == "ambiguous":
-        return True, (f"same range ({me_rule.release}), but the table cannot tell these apart; "
-                      "check the tool against the firmware before building")
+    if me_rule.confidence == "ambiguous" or tool_rule.confidence == "ambiguous":
+        return False, (f"{me_rule.release} is ambiguous in the release table; "
+                       "the tool cannot be confirmed for this ME version")
     return True, f"tool {probe.version} and ME {me_version} are both {me_rule.release}"

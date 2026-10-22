@@ -26,6 +26,9 @@ def _mk_fv(body):
     fv = bytearray(b"\xff" * FV_LEN)
     struct.pack_into("<Q", fv, 0x20, FV_LEN)
     fv[0x28:0x2C] = b"_FVH"
+    struct.pack_into("<H", fv, 0x30, 0x48)
+    struct.pack_into("<H", fv, 0x32, 0)
+    struct.pack_into("<H", fv, 0x32, (-sum(struct.unpack_from("<36H", fv, 0))) & 0xFFFF)
     blob = bytes(body)
     fv[0x48:0x48 + len(blob)] = blob[:FV_LEN - 0x48]
     return bytes(fv)

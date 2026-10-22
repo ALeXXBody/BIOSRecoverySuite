@@ -10,9 +10,14 @@ FV_LEN = 0x20000
 
 
 def _mk_fv(body: bytes) -> bytes:
+    """A firmware volume with a valid EFI_FIRMWARE_VOLUME_HEADER (checksum over the header words is 0)."""
     fv = bytearray(b"\xff" * FV_LEN)
     struct.pack_into("<Q", fv, 0x20, FV_LEN)
     fv[0x28:0x2C] = b"_FVH"
+    struct.pack_into("<H", fv, 0x30, 0x48)          # HeaderLength
+    struct.pack_into("<H", fv, 0x32, 0)             # Checksum placeholder
+    words_sum = sum(struct.unpack_from("<36H", fv, 0))  # the 0x48-byte header
+    struct.pack_into("<H", fv, 0x32, (-words_sum) & 0xFFFF)
     fv[0x48:0x48 + len(body)] = body[:FV_LEN - 0x48]
     return bytes(fv)
 
@@ -41,13 +46,13 @@ def _valid_ffs(blob_len: int, marker: bytes) -> bytes:
 
 def test_graft_replaces_damaged_fv(tmp_path):
     # donor: healthy NV FV with valid FFS content
-    donor = bytearray(b"\xff" * NV_BASE)
+    donor = bytearray(b"\xff" * (NV_BASE + FV_LEN))
     donor[NV_BASE:NV_BASE + FV_LEN] = _mk_fv(_valid_ffs(0x40, b"DONOR-DATA"))
     donor_path = str(tmp_path / "donor.bin")
     open(donor_path, "wb").write(bytes(donor))
 
     # target: same bounds, but the FV is fully erased + a FF-hole style region
-    target = bytearray(b"\xff" * NV_BASE)
+    target = bytearray(b"\xff" * (NV_BASE + FV_LEN))
     target[NV_BASE:NV_BASE + FV_LEN] = b"\xff" * FV_LEN  # erased
     target_path = str(tmp_path / "damaged.bin")
     open(target_path, "wb").write(bytes(target))
@@ -63,7 +68,7 @@ def test_graft_replaces_damaged_fv(tmp_path):
 
 
 def test_graft_accepts_capsule_donor(tmp_path):
-    donor_image = bytearray(b"\xff" * NV_BASE)
+    donor_image = bytearray(b"\xff" * (NV_BASE + FV_LEN))
     donor_image[NV_BASE:NV_BASE + FV_LEN] = _mk_fv(_valid_ffs(0x40, b"CAP-DATA"))
     hdr = bytearray(b"\x00" * 0x800)
     hdr[0:16] = APTIO_CAPSULE_GUID_LE
@@ -72,7 +77,7 @@ def test_graft_accepts_capsule_donor(tmp_path):
     cap = tmp_path / "donor.308"
     cap.write_bytes(bytes(hdr) + bytes(donor_image))
 
-    target = bytearray(b"\xff" * NV_BASE)
+    target = bytearray(b"\xff" * (NV_BASE + FV_LEN))
     target[NV_BASE:NV_BASE + FV_LEN] = b"\xff" * FV_LEN
     target_path = str(tmp_path / "damaged.bin")
     open(target_path, "wb").write(bytes(target))
@@ -101,12 +106,12 @@ def test_graft_refuses_size_mismatch(tmp_path):
 def test_graft_leaves_different_content_alone(tmp_path):
     """Same bounds, both sides internally valid, merely different content:
     must NOT be grafted (different versioned content is not corruption)."""
-    donor = bytearray(b"\xff" * NV_BASE)
+    donor = bytearray(b"\xff" * (NV_BASE + FV_LEN))
     donor[NV_BASE:NV_BASE + FV_LEN] = _mk_fv(_valid_ffs(0x40, b"NEW-VERSION"))
     donor_path = str(tmp_path / "donor.bin")
     open(donor_path, "wb").write(bytes(donor))
 
-    target = bytearray(b"\xff" * NV_BASE)
+    target = bytearray(b"\xff" * (NV_BASE + FV_LEN))
     target[NV_BASE:NV_BASE + FV_LEN] = _mk_fv(_valid_ffs(0x40, b"OLD-VERSION"))
     target_path = str(tmp_path / "old.bin")
     open(target_path, "wb").write(bytes(target))

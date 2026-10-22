@@ -118,6 +118,21 @@ def _hits(data: bytes, markers) -> list[bytes]:
     return hits
 
 
+def me_family_label(version: str) -> str:
+    """Same labels as the analyzer and the ME cleaner (BiosAnalyzer._get_me_type)."""
+    try:
+        major = int(version.split(".")[0])
+    except (ValueError, IndexError, AttributeError):
+        return ""
+    if major <= 5:
+        return "ME (Legacy)"
+    if major <= 10:
+        return "ME"
+    if major <= 12:
+        return "CSME"
+    return f"CSME {major}"
+
+
 def classify(data: bytes) -> Traits:
     """Classify an image's architecture + vendor by evidenced markers."""
     t = Traits()
@@ -154,7 +169,10 @@ def classify(data: bytes) -> Traits:
                 scored.append((len(hits), vendor, hits))
         scored.sort(key=lambda x: -x[0])
         if scored:
-            t.vendor = scored[0][1]
+            top = scored[0][0]
+            leaders = [v for n, v, _ in scored if n == top]
+            # A tie is not evidence for either brand: tools for a specific vendor must refuse.
+            t.vendor = leaders[0] if len(leaders) == 1 else "ambiguous"
             t.evidence = {v: [h.decode('ascii', 'replace') for h in hs[:6]] for ln, v, hs in scored[:3]}
         elif t.architecture == ARCH_APPLE_INTEL:
             t.vendor = "apple"
@@ -164,13 +182,13 @@ def classify(data: bytes) -> Traits:
         # light-weight manifest probe (no heavy per-region detection here)
         fam = ""
         try:
+            from collections import Counter
             from bios_recovery.core.me_manifest import iter_manifest_versions
             mvs = iter_manifest_versions(data)
             if mvs:
-                maj = mvs[0][0].split(".")[0]
-                major = int(maj or 0)
-                fam = f"CSME {major}" if major > 11 else ("ME" if major >= 6 else "ME/TXE")
-                t.me_version = mvs[0][0]
+                # The engine version is the most common manifest version, as in the analyzer.
+                t.me_version = Counter(v for v, _base in mvs).most_common(1)[0][0]
+                fam = me_family_label(t.me_version)
         except Exception:
             fam = ""
         t.me_family = fam

@@ -73,17 +73,18 @@ class SPIFlasher:
         self.programmer = ""
         self._chip = ""
 
-    def _resolve_shim(self) -> str | None:
-        """Return the command (may be a list) used to run a fake-flashrom test double."""
-        here = os.path.dirname(os.path.abspath(__file__))
-        candidates = [
-            os.path.join(here, "..", "..", "tests", "fake_flashrom.py"),
-            os.path.join(r"C:\Users\public\Videos\flashrom-intercepts", "flashrom.exe"),
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                return str(os.path.abspath(c))
-        return None
+    def _resolve_tool(self) -> str | None:
+        """The flashrom to run: the configured path, else `flashrom` on Linux's PATH.
+
+        No fixed or user-writable locations are searched, and on Windows nothing is
+        searched at all (PATH lookup there can start in the current folder). Configure
+        the path explicitly.
+        """
+        if self.value:
+            return self.value
+        if os.name == "nt":
+            return None
+        return shutil.which("flashrom")
 
     def _cmd(self, args: list[str]) -> list[str]:
         """Return the argv used to invoke flashrom, honoring python shims."""
@@ -93,8 +94,7 @@ class SPIFlasher:
 
     def discover_programmers(self) -> list[str]:
         if not self.value:
-            shim = self._resolve_shim()
-            self.value = shim
+            self.value = self._resolve_tool()
         if not self.value or not os.path.exists(self.value):
             return []
         try:
@@ -112,7 +112,7 @@ class SPIFlasher:
 
     def identify_chip(self, programmer: str = "ch341a_spi") -> ChipInfo:
         if not self.value:
-            self.value = self._resolve_shim() or shutil.which("flashrom")
+            self.value = self._resolve_tool()
         if not self.value:
             return ChipInfo(vendor="", name="", size=0)
         try:
@@ -132,7 +132,7 @@ class SPIFlasher:
 
     def read_chip(self, output_path: str, programmer: str = "ch341a_spi") -> FlasherResult:
         if not self.value:
-            self.value = self._resolve_shim() or shutil.which("flashrom")
+            self.value = self._resolve_tool()
         if not self.value:
             return FlasherResult(status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer)
         try:
@@ -159,7 +159,7 @@ class SPIFlasher:
         if not consent:
             return FlasherResult(status=SPIStatus.DENIED, message="Write requires explicit consent")
         if not self.value:
-            self.value = self._resolve_shim() or shutil.which("flashrom")
+            self.value = self._resolve_tool()
         if not self.value:
             return FlasherResult(status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer)
         cmd = self._cmd(["-p", programmer, "-w", image_path])
@@ -179,7 +179,7 @@ class SPIFlasher:
         if not consent:
             return FlasherResult(status=SPIStatus.DENIED, message="Erase requires explicit consent")
         if not self.value:
-            self.value = self._resolve_shim() or shutil.which("flashrom")
+            self.value = self._resolve_tool()
         if not self.value:
             return FlasherResult(status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer)
         try:

@@ -1,3 +1,4 @@
+import os
 """Check-for-updates dialog with download + silent installer hand-off."""
 
 import sys
@@ -35,10 +36,11 @@ class CheckWorker(QThread):
     def run(self):
         try:
             info = updater.fetch_latest_release()
+            newer = updater.is_newer(info.version, __version__)
         except Exception as e:
             self.failed.emit(str(e))
             return
-        if updater.is_newer(info.version, __version__):
+        if newer:
             self.found.emit(info)
         else:
             self.not_found.emit()
@@ -50,17 +52,22 @@ class DownloadWorker(QThread):
     done = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, url: str, dest: str):
+    def __init__(self, url: str, dest: str, sha256):
         super().__init__()
         self.url = url
         self.dest = dest
+        self.sha256 = sha256
         track(self)
 
     def run(self):
         try:
             updater.download(self.url, self.dest, progress_cb=lambda p: self.progress.emit(p))
+            updater.verify_sha256(self.dest, self.sha256)
             self.done.emit(self.dest)
         except Exception as e:
+            # Never leave an unverified installer where it could be run later.
+            if os.path.exists(self.dest):
+                os.remove(self.dest)
             self.failed.emit(str(e))
 
 
@@ -168,7 +175,7 @@ class UpdateDialog(QDialog):
         self.status_label.setText(f"Downloading v{self.release.version}...")
 
         dest = updater.default_installer_destination(self.release.version)
-        self._downloader = DownloadWorker(self.release.installer_url, dest)
+        self._downloader = DownloadWorker(self.release.installer_url, dest, self.release.installer_sha256)
         self._downloader.progress.connect(self.progress.setValue)
         self._downloader.done.connect(self._on_download_done)
         self._downloader.failed.connect(self._on_download_failed)

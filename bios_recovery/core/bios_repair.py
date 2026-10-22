@@ -1,14 +1,13 @@
 """BIOS repair engine - repairs common BIOS issues."""
 
-import struct
 import os
-import hashlib
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
 from bios_recovery.core.bios_analyzer import BiosAnalyzer, BiosType
+from bios_recovery.core.safety import SameFileError, ensure_distinct
 from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
 
 
@@ -42,6 +41,14 @@ class RepairReport:
 
     def add(self, text: str) -> None:
         self.operations.append(text)
+
+
+def _version_family(version) -> tuple:
+    """(major, minor) as integers, or () when the version is missing or unreadable."""
+    parts = str(version or "").split(".")
+    if len(parts) < 2 or not all(p.isdigit() for p in parts[:2]):
+        return ()
+    return int(parts[0]), int(parts[1])
 
 
 class BiosRepairEngine:
@@ -97,20 +104,23 @@ class BiosRepairEngine:
         output_path: Optional[str] = None,
         fix_checksums: bool = True,
         normalize_size: bool = True,
-        clear_passwords: bool = True,
+        clear_passwords: bool = False,
     ) -> RepairReport:
         if not os.path.exists(input_path):
             return RepairReport(success=False, issues_found=[])
 
+        output = output_path or input_path.rsplit(".", 1)[0] + "_repaired.bin"
+        try:
+            ensure_distinct(input_path, output)
+        except SameFileError as exc:
+            return RepairReport(success=False, output_path=output, warnings=[str(exc)])
+
         with open(input_path, "rb") as f:
-            data = bytearray(f.read())
+            original = bytes(f.read())
+        data = bytearray(original)
 
         issues = self.analyze(input_path)
-        report = RepairReport(
-            success=True,
-            issues_found=issues,
-            output_path=output_path or input_path.rsplit(".", 1)[0] + "_repaired.bin",
-        )
+        report = RepairReport(success=True, issues_found=issues, output_path=output)
 
         if fix_checksums:
             self._fix_fpt_checksum(data, report)
@@ -122,18 +132,24 @@ class BiosRepairEngine:
         if normalize_size:
             self._normalize_size(data, report)
 
-        if report.operations:
+        # Only real byte changes count as repairs; the report lists only those.
+        if bytes(data) != original:
             with open(report.output_path, "wb") as f:
                 f.write(data)
         else:
             report.success = False
-            report.warnings.append("No repair operations were applicable")
+            report.operations = []
+            report.warnings.append("Nothing needed repair; no file was written")
 
         return report
 
     def _fix_fpt_checksum(self, data: bytearray, report: RepairReport) -> None:
-        fpt_offset = data.find(self.FPT_SIGNATURE)
-        if fpt_offset < 0 or fpt_offset + 0x20 > len(data):
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer
+        positions = BiosAnalyzer()._fpt_positions(bytes(data))
+        if not positions:
+            return
+        fpt_offset = positions[0]
+        if fpt_offset + 0x20 > len(data):
             return
 
         checksum_offset = fpt_offset + 0x1B
@@ -185,8 +201,6 @@ class BiosRepairEngine:
     def _verify_alignment(self, data: bytearray, report: RepairReport) -> None:
         if len(data) % 0x1000 != 0:
             report.warnings.append(f"Image size {len(data)} not 4KB aligned")
-        else:
-            report.operations.append("Image size is 4KB aligned")
 
     def _normalize_size(self, data: bytearray, report: RepairReport) -> None:
         target_sizes = [0x400000, 0x800000, 0x1000000, 0x2000000]
@@ -194,15 +208,21 @@ class BiosRepairEngine:
 
         for target in target_sizes:
             if current % target == 0:
-                report.operations.append(f"Image size {current:#x} is valid ({target >> 20} MB)")
                 return
 
         closest = min(target_sizes, key=lambda t: abs(t - current))
         report.warnings.append(f"Image size {current:#x} is not a standard size; nearest is {closest:#x}")
 
     def fix_size(self, input_path: str, target_size: int, output_path: str) -> RepairReport:
+        if target_size <= 0:
+            return RepairReport(success=False, warnings=["target size must be positive"])
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            return RepairReport(success=False, output_path=output_path, warnings=[str(exc)])
         with open(input_path, "rb") as f:
             data = f.read()
+        before = len(data)
 
         if len(data) < target_size:
             padded = bytearray(target_size)
@@ -216,10 +236,13 @@ class BiosRepairEngine:
         with open(output_path, "wb") as f:
             f.write(data)
 
+        if before == target_size:
+            return RepairReport(success=True, output_path=output_path,
+                                warnings=[f"Already {before} bytes; no change"])
         return RepairReport(
             success=True,
             output_path=output_path,
-            operations=[f"Resized from {len(data)} to {target_size} bytes"],
+            operations=[f"Resized from {before} to {target_size} bytes"],
         )
 
     def doctor(self, input_path: str) -> RepairReport:
@@ -239,11 +262,8 @@ class BiosRepairEngine:
         report.operations.append(f"file: {input_path} ({len(data):,} bytes)")
         if len(data) < 0x40000:
             report.warnings.append("image smaller than 256KB - not a flash dump?")
-        for power in (16, 17, 18, 19, 20, 21, 22, 23, 24, 25):
-            if len(data) == (1 << power):
-                break
-        else:
-            report.warnings.append(f"size {len(data):#x} is not a power of two (2^16..2^25)")
+        if len(data) and (len(data) & (len(data) - 1)) != 0:
+            report.warnings.append(f"size {len(data):#x} is not a power of two")
 
         # Intel descriptor side
         fd = self._find_fd_offset_of(data)
@@ -278,13 +298,11 @@ class BiosRepairEngine:
 
         # FV chain integrity (FFS header checksums across all volumes)
         bad_files = 0
-        total_files = 0
         fvs = self._fv_bounds(data)
         report.operations.append(f"firmware volumes: {len(fvs)}")
         for base, flen in fvs:
             chunk = bytes(data[base:base + flen])
             reason = self._damaged_reason(chunk)
-            total_files += chunk.count(0xFF) >= 0 and 1 or 1  # volume audited
             if reason:
                 bad_files += 1
                 report.warnings.append(f"FV @0x{base:x}: {reason}")
@@ -412,6 +430,29 @@ class BiosRepairEngine:
         report.operations.append(f"Target FVs: {len(fvs_t)}, donor FVs: {len(fvs_d)}, "
                                  f"identically bounded: {len(common)}")
 
+        # ME gate, decided before any write. A graft that touches the ME region needs the
+        # same ME version family and identical bounds in target and donor; without a
+        # readable version on either side, nothing in the ME region is grafted.
+        target_me = self.me_cleaner.get_me_info(input_path)
+        donor_me = self.me_cleaner.get_me_info(donor_file) if donor_file else {}
+        me_found = bool(target_me.get("found"))
+        me_block_allowed = True
+        if me_found:
+            t_version = _version_family(target_me.get("version"))
+            d_version = _version_family(donor_me.get("version"))
+            same_bounds = (
+                int(target_me.get("offset", "0"), 16) == int(donor_me.get("offset", "0"), 16)
+                and int(target_me.get("size", "0"), 16) == int(donor_me.get("size", "0"), 16)
+            ) if donor_me.get("found") else False
+            me_block_allowed = bool(t_version and d_version and t_version == d_version and same_bounds)
+            if not me_block_allowed:
+                report.warnings.append(
+                    f"ME region not grafted: target {target_me.get('version') or 'unknown'} vs "
+                    f"donor {donor_me.get('version') or 'unknown'} (version family and bounds must match)"
+                )
+        t_me_off = int(target_me.get("offset", "0"), 16) if me_found else 0
+        t_me_size = int(target_me.get("size", "0"), 16) if me_found else 0
+
         grafts = 0
         graft_bytes = 0
         for base, flen in fvs_d:
@@ -420,6 +461,11 @@ class BiosRepairEngine:
             if d_damaged:
                 report.warnings.append(
                     f"Donor FV @0x{base:x} fails its own integrity ({d_damaged}) - not grafted"
+                )
+                continue
+            if me_found and not me_block_allowed and base < t_me_off + t_me_size and base + flen > t_me_off:
+                report.warnings.append(
+                    f"Donor FV @0x{base:x} overlaps the ME region, which is not graftable - refused"
                 )
                 continue
             chunk_t = bytes(target[base:base + flen])
@@ -458,91 +504,31 @@ class BiosRepairEngine:
                     "target area is not erased - refused (would overwrite unknown data)"
                 )
 
-        # Regions outside any FV (pre-BIOS half etc.) are never grafted.
-        # ME-region grafts additionally require a version-matched donor
-        # (the FITC-style rebuild rule: a lost ME region must come back with
-        # the SAME manifest version family, or boot bricks).
-        target_me = self.me_cleaner.get_me_info(input_path)
-        donor_me = self.me_cleaner.get_me_info(donor_file) if donor_file else {}
-        if target_me.get("found") and donor_me.get("found"):
-            t_off = int(target_me.get("offset", "0"), 16)
-            t_size = int(target_me.get("size", "0"), 16)
-            d_off = int(donor_me.get("offset", "0"), 16)
-            d_size = int(donor_me.get("size", "0"), 16)
-            same_bounds = (t_off, t_size) == (d_off, d_size)
-            same_version = (
-                (target_me.get("version") or "").split(".")[:2] ==
-                (donor_me.get("version") or "").split(".")[:2]
-            )
-            if same_bounds and same_version:
-                # the donor's ME looks graftable for this target: keep the
-                # standard FV gating above for the FV that touches it.
-                pass
-            elif not same_version:
-                report.warnings.append(
-                    f"ME version mismatch: target {target_me.get('version')} vs "
-                    f"donor {donor_me.get('version')} - ME region will NOT be "
-                    "grafted (version-matched rebuild only)"
-                )
-                # exclude region from further grafting: skip it from FV checks
-            elif not same_bounds:
-                report.warnings.append(
-                    f"ME bounds differ between target ({target_me.get('offset')}/{(target_me.get('size'))}) "
-                    f"and donor ({donor_me.get('offset')}/{donor_me.get('size')}) - "
-                    "ME region excluded from grafting (layout mismatch)"
-                )
-
-        ma_graft = (target_me.get("found"), donor_me.get("found"))
-        me_block_allowed = (
-            not target_me.get("found")
-            or (
-                (target_me.get("version") or "").split(".")[:2]
-                == (donor_me.get("version") or "").split(".")[:2]
-                and int(target_me.get("offset", "0"), 16) == int(donor_me.get("offset", "0"), 16)
-                and int(target_me.get("size", "0"), 16) == int(donor_me.get("size", "0"), 16)
-            )
-        )
-        for base, flen in fvs_d:
-            chunk_span = (base, base + flen)
-            t_off = int(target_me.get("offset", "0"), 16)
-            t_size = int(target_me.get("size", "0"), 16)
-            hits_me = target_me.get("found") and base < t_off + t_size and base + flen > t_off
-            if hits_me and not me_block_allowed:
-                report.warnings.append(
-                    f"Donor FV @0x{base:x} overlaps a non-matching ME region - refused"
-                )
-                continue
-            report.warnings.append(
-                "No region was identified as damaged-and-graftable; "
-                "no bytes were modified"
-            )
-
-        report.success = True
-        report.operations.append(f"Total grafts: {grafts} ({graft_bytes:#x} bytes written)")
-
         if output_path is None:
             output_path = input_path.rsplit(".", 1)[0] + "_grafted.bin"
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            report.warnings.append(str(exc))
+            report.success = False
+            return report
+        report.operations.append(f"Total grafts: {grafts} ({graft_bytes:#x} bytes written)")
         with open(output_path, "wb") as f:
             f.write(bytes(target))
         report.output_path = output_path
+        if not grafts:
+            report.warnings.append("No region was graftable; the output is an unchanged copy of the input")
+        report.success = grafts > 0
         return report
 
     @staticmethod
     def _fv_bounds(blob: bytes) -> list[tuple[int, int]]:
-        """Firmware volumes as (base, length) from _FVH occurrences."""
-        import re
-        out = []
-        for m in re.finditer(rb"_FVH", blob):
-            base = m.start() - 0x28
-            if base < 0:
-                continue
-            try:
-                flen = struct.unpack_from("<Q", blob, base + 0x20)[0]
-            except struct.error:
-                continue
-            if 0x1000 <= flen <= len(blob) and base + flen <= len(blob):
-                out.append((base, flen))
-        return out
+        """Firmware volumes as (base, length), validated the same way the analyzer does
+        (header checksum and length), with nested matches inside a volume dropped."""
+        from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionInfo
+        found: list = []
+        BiosAnalyzer()._search_firmware_volumes(bytes(blob), found)
+        return [(r.offset, r.size) for r in found if isinstance(r, RegionInfo)]
 
     @staticmethod
     def _damaged_reason(chunk: bytes) -> str:
@@ -556,6 +542,9 @@ class BiosRepairEngine:
         while pos + 0x18 <= len(chunk):
             isize = chunk[pos + 0x14] | chunk[pos + 0x15] << 8 | chunk[pos + 0x16] << 16
             if isize < 0x18 or pos + isize > len(chunk):
+                # A corrupt size field is damage, unless only erased space follows.
+                if set(chunk[pos:]) != {0xFF}:
+                    bad += 1
                 break
             hd = bytearray(chunk[pos:pos + 0x18])
             hd[0x10] = hd[0x11] = hd[0x17] = 0
@@ -567,10 +556,14 @@ class BiosRepairEngine:
         return ""
 
     def extract_region(self, input_path: str, offset: int, size: int, output_path: str) -> RepairReport:
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            return RepairReport(success=False, output_path=output_path, warnings=[str(exc)])
         with open(input_path, "rb") as f:
             data = f.read()
 
-        if offset + size > len(data):
+        if offset < 0 or size <= 0 or offset + size > len(data):
             return RepairReport(
                 success=False,
                 issues_found=[RepairIssue(
@@ -598,13 +591,17 @@ class BiosRepairEngine:
         region_size: int,
         replacement_path: str,
     ) -> RepairReport:
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            return RepairReport(success=False, output_path=output_path, warnings=[str(exc)])
         with open(input_path, "rb") as f:
             data = bytearray(f.read())
 
         with open(replacement_path, "rb") as f:
             replacement = f.read()
 
-        if region_offset + region_size > len(data):
+        if region_offset < 0 or region_size <= 0 or region_offset + region_size > len(data):
             return RepairReport(
                 success=False,
                 issues_found=[RepairIssue(

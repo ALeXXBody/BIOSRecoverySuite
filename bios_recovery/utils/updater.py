@@ -8,6 +8,7 @@ is unreachable (e.g. private repository without a token).
 Stdlib only: urllib + json. No third-party dependencies.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -23,11 +24,17 @@ LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 USER_AGENT = "BIOSRecoverySuite-Updater"
 REQUEST_TIMEOUT = 20
+MAX_INSTALLER_BYTES = 256 * 1024 * 1024
+_STRICT_TAG = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
+class UpdateIntegrityError(Exception):
+    """The download is not the file the release published; it is never run."""
 
 
 def _parse_tag(tag: str) -> tuple:
-    """'v1.2.3' -> (1, 2, 3); non-numeric parts are ignored."""
-    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", (tag or "").strip())
+    """'v1.2.3' -> (1, 2, 3); anything else (extra text, path parts) is rejected."""
+    m = _STRICT_TAG.match((tag or "").strip())
     if not m:
         return ()
     return tuple(int(p) for p in m.groups())
@@ -44,19 +51,23 @@ def is_newer(remote_tag: str, current_version: str) -> bool:
 
 
 def _pick_assets(assets: list) -> dict:
-    """Select installer/portable download URLs from a release assets list."""
+    """Select installer/portable download URLs and the installer's published SHA-256."""
     installer = None
+    installer_sha = None
     portable = None
     for a in assets:
         name = (a.get("name") or "").lower()
         url = a.get("browser_download_url")
-        if not url:
+        if not url or not url.startswith("https://"):
             continue
         if installer is None and name.startswith("biosrecoverysuite-setup-") and name.endswith(".exe"):
             installer = url
+            digest = a.get("digest") or ""
+            if digest.startswith("sha256:"):
+                installer_sha = digest.split(":", 1)[1].lower()
         if portable is None and "portable" in name and name.endswith(".zip"):
             portable = url
-    return {"installer": installer, "portable": portable}
+    return {"installer": installer, "installer_sha256": installer_sha, "portable": portable}
 
 
 @dataclass
@@ -66,6 +77,7 @@ class ReleaseInfo:
     html_url: str
     installer_url: Optional[str] = None
     portable_url: Optional[str] = None
+    installer_sha256: Optional[str] = None
 
 
 def fetch_latest_release() -> ReleaseInfo:
@@ -84,32 +96,67 @@ def fetch_latest_release() -> ReleaseInfo:
         html_url=data.get("html_url") or RELEASES_PAGE,
         installer_url=urls["installer"],
         portable_url=urls["portable"],
+        installer_sha256=urls["installer_sha256"],
     )
 
 
 def download(url: str, dest_path: str, progress_cb: Optional[Callable[[int], None]] = None,
              chunk_size: int = 256 * 1024) -> str:
-    """Stream a file to dest_path, reporting 0-100 progress via progress_cb."""
+    """Stream a file to dest_path. A download that ends early is an error.
+
+    Refuses non-HTTPS URLs and files over MAX_INSTALLER_BYTES. On any failure the
+    partial file is removed.
+    """
+    if not url.startswith("https://"):
+        raise UpdateIntegrityError("refusing a non-HTTPS download")
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=60) as resp, open(dest_path, "wb") as out:
-        total = resp.getheader("Content-Length")
-        total = int(total) if total else None
-        done = 0
-        while True:
-            chunk = resp.read(chunk_size)
-            if not chunk:
-                break
-            out.write(chunk)
-            done += len(chunk)
-            if progress_cb and total:
-                progress_cb(min(100, int(done * 100 / total)))
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp, open(dest_path, "wb") as out:
+            length = resp.getheader("Content-Length")
+            total = int(length) if length else None
+            if total is not None and total > MAX_INSTALLER_BYTES:
+                raise UpdateIntegrityError("download is larger than the allowed size")
+            done = 0
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                done += len(chunk)
+                if done > MAX_INSTALLER_BYTES:
+                    raise UpdateIntegrityError("download is larger than the allowed size")
+                out.write(chunk)
+                if progress_cb and total:
+                    progress_cb(min(100, int(done * 100 / total)))
+            if total is not None and done != total:
+                raise UpdateIntegrityError(f"download ended early ({done} of {total} bytes)")
+    except BaseException:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        raise
     if progress_cb:
         progress_cb(100)
     return dest_path
 
 
+def verify_sha256(path: str, expected: Optional[str]) -> None:
+    """Fail closed: no published digest, or a different digest, means the file is not run."""
+    if not expected:
+        raise UpdateIntegrityError("the release publishes no SHA-256 for this installer")
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(block)
+    if digest.hexdigest() != expected.lower():
+        raise UpdateIntegrityError("SHA-256 of the download does not match the release")
+
+
+def make_private_download_dir() -> str:
+    """A fresh directory only this process writes to, so the file cannot be swapped out."""
+    return tempfile.mkdtemp(prefix="bsr_update_")
+
+
 def default_installer_destination(version: str) -> str:
-    return os.path.join(tempfile.gettempdir(), f"BIOSRecoverySuite-Setup-{version}.exe")
+    return os.path.join(make_private_download_dir(), f"BIOSRecoverySuite-Setup-{version}.exe")
 
 
 def apply_installer_update(installer_path: str) -> None:
@@ -120,6 +167,8 @@ def apply_installer_update(installer_path: str) -> None:
     """
     if sys.platform != "win32":
         raise OSError("Silent self-update is only supported on Windows")
+    if not os.path.isfile(installer_path):
+        raise OSError("installer is missing")
     subprocess.Popen(
         [installer_path, "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
         close_fds=True,

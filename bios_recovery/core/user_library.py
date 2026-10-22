@@ -1,8 +1,12 @@
 """User-chosen folders for Intel tools and ME firmware.
 
 The app ships no Intel tools and no ME firmware, and it never downloads them.
-The user adds the folders where they keep their own copies; this module stores
-those folders in a per-user config file and scans them on request.
+The user adds the folders where they keep their own copies.
+
+Scanning never runs anything. A tool's identity (family and version) is only
+known by running it with -h, so that happens only when the user asks to identify
+a specific file. The result is cached by the file's SHA-256, so a later scan does
+not run the file again unless its contents change.
 
 Config location:
   Windows:  %APPDATA%\\BIOSRecoverySuite\\library.json
@@ -17,12 +21,14 @@ import json
 import os
 import shutil
 import stat
-from dataclasses import asdict, dataclass, field
+import tempfile
+from dataclasses import dataclass, field
 from typing import Optional
 
 MAX_DEPTH = 6
 MAX_FIRMWARE_BYTES = 64 * 1024 * 1024
-TOOL_NAMES = ("fit", "fit.exe", "fitc.exe", "mfit", "mfit.exe")
+MAX_TOOL_BYTES = 256 * 1024 * 1024
+KINDS = ("tools", "firmware")
 
 
 def config_dir() -> str:
@@ -39,9 +45,6 @@ def config_path() -> str:
     return os.path.join(config_dir(), "library.json")
 
 
-KINDS = ("tools", "firmware")
-
-
 def app_library_dir() -> str:
     """Folder the app owns for imported copies (scanned automatically)."""
     if os.environ.get("BIOS_RECOVERY_DATA_DIR"):
@@ -52,40 +55,78 @@ def app_library_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".local", "share", "bios-recovery", "library")
 
 
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 @dataclass
 class Library:
     tools_folders: list = field(default_factory=list)
     firmware_folders: list = field(default_factory=list)
+    identified: dict = field(default_factory=dict)   # sha256 -> {"family", "version"}
 
     def folders(self, kind: str) -> list:
         return self.tools_folders if kind == "tools" else self.firmware_folders
 
 
+def _strings(values) -> list:
+    return [v for v in values if isinstance(v, str) and v]
+
+
 def load_library() -> Library:
+    """Read the config. A missing file is an empty library; a damaged file is kept aside."""
+    path = config_path()
+    if not os.path.exists(path):
+        return Library()
     try:
-        with open(config_path(), encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("config is not an object")
     except (OSError, ValueError):
+        shutil.copyfile(path, path + ".damaged")
         return Library()
     lib = Library(
-        tools_folders=[p for p in data.get("tools_folders", []) if isinstance(p, str)],
-        firmware_folders=[p for p in data.get("firmware_folders", []) if isinstance(p, str)],
+        tools_folders=_strings(data.get("tools_folders", [])) if isinstance(data.get("tools_folders"), list) else [],
+        firmware_folders=_strings(data.get("firmware_folders", [])) if isinstance(data.get("firmware_folders"), list) else [],
     )
     # Version 1 stored one flat list; it applies to both kinds.
-    for p in data.get("folders", []) if isinstance(data.get("folders"), list) else []:
-        if isinstance(p, str):
+    if isinstance(data.get("folders"), list):
+        for p in _strings(data["folders"]):
             if p not in lib.tools_folders:
                 lib.tools_folders.append(p)
             if p not in lib.firmware_folders:
                 lib.firmware_folders.append(p)
+    ident = data.get("identified")
+    if isinstance(ident, dict):
+        for digest, value in ident.items():
+            if isinstance(value, dict) and isinstance(value.get("family"), str) \
+                    and isinstance(value.get("version"), str):
+                lib.identified[str(digest)] = {"family": value["family"], "version": value["version"]}
     return lib
 
 
 def save_library(lib: Library) -> None:
+    """Write atomically: a temporary file in the same folder, then replace."""
     os.makedirs(config_dir(), exist_ok=True)
-    with open(config_path(), "w", encoding="utf-8") as f:
-        json.dump({"tools_folders": lib.tools_folders,
-                   "firmware_folders": lib.firmware_folders}, f, indent=2)
+    payload = {
+        "tools_folders": lib.tools_folders,
+        "firmware_folders": lib.firmware_folders,
+        "identified": lib.identified,
+    }
+    fd, tmp = tempfile.mkstemp(prefix="library_", suffix=".json", dir=config_dir())
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, config_path())
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def _kinds(kind: str) -> tuple:
@@ -112,83 +153,9 @@ def remove_folder(path: str, kind: str = "both") -> Library:
     absolute = os.path.abspath(path)
     lib = load_library()
     for k in _kinds(kind):
-        remaining = [p for p in lib.folders(k) if p != absolute]
-        lib.folders(k)[:] = remaining
+        lib.folders(k)[:] = [p for p in lib.folders(k) if p != absolute]
     save_library(lib)
     return lib
-
-
-@dataclass
-class ImportResult:
-    source: str
-    kind: str
-    copied_to: str = ""
-    refused: str = ""
-
-
-def _probe_import(path: str):
-    """Probe a temporary executable copy, so the original is never changed."""
-    import tempfile
-    from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
-    with tempfile.TemporaryDirectory(prefix="fitimport_") as work:
-        probe_copy = os.path.join(work, os.path.basename(path))
-        shutil.copyfile(path, probe_copy)
-        if os.name != "nt":
-            os.chmod(probe_copy, os.stat(probe_copy).st_mode | stat.S_IXUSR)
-        return probe_tool(probe_copy)
-
-
-def _looks_like_me_image(path: str) -> bool:
-    from bios_recovery.core.bios_analyzer import BiosAnalyzer
-    with open(path, "rb") as f:
-        return bool(BiosAnalyzer()._fpt_positions(f.read()))
-
-
-def import_files(paths: list, kind: str) -> list:
-    """Copy user-chosen files into the app's own library folder.
-
-    A tool is copied only if it identifies as a Flash Image Tool; firmware only if it
-    has a full ME partition table. Originals are never moved or changed.
-    """
-    if kind not in KINDS:
-        raise ValueError(f"unknown kind: {kind}")
-    target_dir = os.path.join(app_library_dir(), kind)
-    os.makedirs(target_dir, exist_ok=True)
-    results = []
-    for src in paths:
-        result = ImportResult(source=src, kind=kind)
-        if not os.path.isfile(src):
-            result.refused = "not a file"
-            results.append(result)
-            continue
-        probe = _probe_import(src) if kind == "tools" else None
-        ok = probe.identified if probe is not None else _looks_like_me_image(src)
-        if not ok:
-            result.refused = ("not a Flash Image Tool banner" if kind == "tools"
-                              else "no full ME partition table")
-            results.append(result)
-            continue
-        if kind == "tools":
-            name = tool_file_name(probe.family, probe.version, file_platform(src),
-                                  os.path.splitext(src)[1] if os.name == "nt" else "")
-        else:
-            from bios_recovery.core.me_manifest import iter_manifest_versions
-            with open(src, "rb") as f:
-                versions = iter_manifest_versions(f.read())
-            me = max(set(v for v, _ in versions), key=[v for v, _ in versions].count) if versions else "unknown"
-            name = f"ME_{me}_{os.path.basename(src)}"
-        dest = os.path.join(target_dir, name)
-        base, ext = os.path.splitext(dest)
-        n = 1
-        while os.path.exists(dest):
-            dest = f"{base}_{n}{ext}"
-            n += 1
-        shutil.copy2(src, dest)
-        if kind == "tools" and os.name != "nt":
-            os.chmod(dest, os.stat(dest).st_mode | stat.S_IXUSR)
-        result.copied_to = dest
-        results.append(result)
-    return results
 
 
 def file_platform(path: str) -> str:
@@ -216,10 +183,12 @@ def tool_file_name(family: str, version: str, platform: str, ext: str = "") -> s
 @dataclass
 class ToolEntry:
     path: str
-    family: str
+    family: str          # "unidentified" until the user identifies the file
     version: str
     platform: str = "unknown"
     release: str = "unknown"
+    sha256: str = ""
+    identified: bool = False
 
 
 @dataclass
@@ -246,24 +215,53 @@ def _walk(folder: str):
             yield os.path.join(dirpath, name)
 
 
-def scan(folders: Optional[list] = None) -> ScanResult:
-    """Identify Intel tools and ME firmware in the user's folders.
+_NON_TOOL_SUFFIXES = (".log", ".txt", ".md", ".ini", ".json", ".xml", ".html", ".cfg",
+                      ".zip", ".7z", ".tar", ".gz", ".pdf", ".bin", ".rom")
 
-    Tools are identified by running them with -h (see fit_bridge.probe_tool).
-    Firmware is identified by its ME/CSME manifest version. Nothing is written.
+
+def _looks_like_tool_name(name: str) -> bool:
+    """fit / mfit by name, excluding logs, notes and archives. Identity is still checked by running -h."""
+    lower = name.lower()
+    return lower.startswith(("fit", "mfit")) and not lower.endswith(_NON_TOOL_SUFFIXES)
+
+
+def identify_tool(path: str, timeout: int = 20):
+    """Run a user-chosen tool once with -h and cache its identity by SHA-256.
+
+    Runs a private copy, so the file in the library is never changed.
     """
+    from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
+    if not os.path.isfile(path):
+        raise ValueError(f"not a file: {path}")
+    if os.path.getsize(path) > MAX_TOOL_BYTES:
+        raise ValueError("file is too large to be a flash image tool")
+    digest = _sha256_file(path)
+    lib = load_library()
+    with tempfile.TemporaryDirectory(prefix="fitid_") as work:
+        copy = os.path.join(work, os.path.basename(path))
+        shutil.copyfile(path, copy)
+        if os.name != "nt":
+            os.chmod(copy, os.stat(copy).st_mode | stat.S_IXUSR)
+        probe = probe_tool(copy, timeout=timeout)
+    if probe.identified:
+        lib.identified[digest] = {"family": probe.family, "version": probe.version}
+        save_library(lib)
+    return probe
+
+
+def scan(folders: Optional[list] = None) -> ScanResult:
+    """List Intel tools and ME firmware in the user's folders. Nothing is executed."""
     from bios_recovery.core.bios_analyzer import BiosAnalyzer
     from bios_recovery.core.me_manifest import iter_manifest_versions
-    from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
 
+    lib = load_library()
     if folders is None:
-        lib = load_library()
         folders = list(dict.fromkeys(lib.tools_folders + lib.firmware_folders))
         app_dir = app_library_dir()
         if os.path.isdir(app_dir):
             folders.append(app_dir)
     result = ScanResult(folders=list(folders))
-    seen = set()
+    seen_paths: set = set()
     seen_content: set = set()
     for folder in folders:
         if not os.path.isdir(folder):
@@ -271,19 +269,26 @@ def scan(folders: Optional[list] = None) -> ScanResult:
             continue
         for path in _walk(folder):
             real = os.path.realpath(path)
-            if real in seen:
+            if real in seen_paths:
                 continue
-            seen.add(real)
+            seen_paths.add(real)
             name = os.path.basename(path).lower()
-            if name in TOOL_NAMES or name.startswith(("fit", "mfit")):
-                probe = probe_tool(path)
-                if probe.identified:
-                    result.tools.append(ToolEntry(
-                        path, probe.family, probe.version,
-                        platform=file_platform(path),
-                        release=release_line(probe.version)))
-                continue
             size = os.path.getsize(path)
+            if _looks_like_tool_name(name):
+                if size > MAX_TOOL_BYTES:
+                    continue
+                digest = _sha256_file(path)
+                known = lib.identified.get(digest)
+                result.tools.append(ToolEntry(
+                    path=path,
+                    family=known["family"] if known else "unidentified",
+                    version=known["version"] if known else "",
+                    platform=file_platform(path),
+                    release=release_line(known["version"]) if known else "unknown",
+                    sha256=digest,
+                    identified=bool(known),
+                ))
+                continue
             if 0 < size <= MAX_FIRMWARE_BYTES and name.endswith((".bin", ".rom", ".fd", ".cap")):
                 with open(path, "rb") as f:
                     data = f.read()
@@ -303,3 +308,79 @@ def scan(folders: Optional[list] = None) -> ScanResult:
                     best = max(counts, key=counts.get)
                     result.firmware.append(FirmwareEntry(path, best, size))
     return result
+
+
+@dataclass
+class ImportResult:
+    source: str
+    kind: str
+    copied_to: str = ""
+    refused: str = ""
+
+
+def _looks_like_me_image(data: bytes) -> bool:
+    from bios_recovery.core.bios_analyzer import BiosAnalyzer
+    return bool(BiosAnalyzer()._fpt_positions(data))
+
+
+def import_files(paths: list, kind: str) -> list:
+    """Copy user-chosen files into the app's own library folder.
+
+    Each file is read once. For a tool, that same copy is identified and then saved,
+    so the file that was identified is the file that is kept. A firmware image is
+    accepted only with a full ME partition table. Originals are never changed.
+    """
+    from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind: {kind}")
+    target_dir = os.path.join(app_library_dir(), kind)
+    os.makedirs(target_dir, exist_ok=True)
+    results = []
+    for src in paths:
+        result = ImportResult(source=src, kind=kind)
+        results.append(result)
+        if not os.path.isfile(src):
+            result.refused = "not a file"
+            continue
+        if os.path.getsize(src) > (MAX_TOOL_BYTES if kind == "tools" else MAX_FIRMWARE_BYTES):
+            result.refused = "file is too large"
+            continue
+        with open(src, "rb") as f:
+            blob = f.read()
+        digest = hashlib.sha256(blob).hexdigest()
+        ext = os.path.splitext(src)[1] if os.name == "nt" else ""
+        if kind == "tools":
+            with tempfile.TemporaryDirectory(prefix="fitimport_") as work:
+                staged = os.path.join(work, os.path.basename(src))
+                with open(staged, "wb") as f:
+                    f.write(blob)
+                if os.name != "nt":
+                    os.chmod(staged, os.stat(staged).st_mode | stat.S_IXUSR)
+                probe = probe_tool(staged)
+            if not probe.identified:
+                result.refused = "not a Flash Image Tool banner"
+                continue
+            name = tool_file_name(probe.family, probe.version, file_platform(src), ext)
+            lib = load_library()
+            lib.identified[digest] = {"family": probe.family, "version": probe.version}
+            save_library(lib)
+        else:
+            if not _looks_like_me_image(blob):
+                result.refused = "no full ME partition table"
+                continue
+            from bios_recovery.core.me_manifest import iter_manifest_versions
+            versions = [v for v, _ in iter_manifest_versions(blob)]
+            me = max(set(versions), key=versions.count) if versions else "unknown"
+            name = f"ME_{me}_{os.path.basename(src)}"
+        dest = os.path.join(target_dir, name)
+        base, ext2 = os.path.splitext(dest)
+        n = 1
+        while os.path.exists(dest):
+            dest = f"{base}_{n}{ext2}"
+            n += 1
+        with open(dest, "wb") as f:
+            f.write(blob)
+        if kind == "tools" and os.name != "nt":
+            os.chmod(dest, os.stat(dest).st_mode | stat.S_IXUSR)
+        result.copied_to = dest
+    return results

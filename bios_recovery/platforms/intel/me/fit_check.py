@@ -50,6 +50,8 @@ def check_image(image_path: str) -> FitCheck:
     report = FitCheck(image=image_path, me_version=me, release=match.release or "",
                       confidence=match.confidence, note=match.note)
     for entry in lib.scan().tools:
+        if not entry.identified:
+            continue  # listed but never run: its version is unknown, so it cannot be matched
         probe = ToolProbe(path=entry.path, identified=True, family=entry.family, version=entry.version)
         ok, why = compatible_with_me(probe, me)
         report.tools.append(ToolRow(entry.family, entry.version, entry.platform, entry.release,

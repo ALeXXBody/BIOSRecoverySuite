@@ -137,7 +137,13 @@ class LenovoTab(QWidget):
     def set_file(self, path: str):
         self.current_dump = path
         self.file_edit.setText(path)
+        self._clear_scan()
         self._log(f"Loaded {path}")
+
+    def _clear_scan(self):
+        """Results belong to one file. A new file, or a failed scan, must not leave old ones."""
+        self._scan_results = {}
+        self.groups_table.setRowCount(0)
 
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -185,6 +191,7 @@ class LenovoTab(QWidget):
     def run_scan(self):
         if not self._require_file():
             return
+        self._clear_scan()
         self.scan_btn.setEnabled(False)
         try:
             self._scan_results = self.patcher.scan(self.current_dump)
@@ -193,7 +200,6 @@ class LenovoTab(QWidget):
             return
         finally:
             self.scan_btn.setEnabled(True)
-        self.groups_table.setRowCount(0)
         for i, g in enumerate(self.patcher.groups):
             self.groups_table.insertRow(i)
             chk = QTableWidgetItem()
@@ -310,7 +316,7 @@ class LenovoTab(QWidget):
             QMessageBox.warning(self, "Consent Required",
                                 "Tick the consent box before running the autopatch.")
             return
-        out = self.current_dump.rsplit(".", 1)[0] + "_PATCHED.bin"
+        out = self.current_dump.rsplit(".", 1)[0] + "_autopatched.bin"
         try:
             report = self.patcher.run_autopatch(self.current_dump, out)
         except Exception as e:

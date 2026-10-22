@@ -1,5 +1,7 @@
 """Embedded Controller firmware analysis and patching tab."""
 
+import os
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -264,6 +266,11 @@ class ECTab(QWidget):
         if not out:
             out = self.current_dump.rsplit(".", 1)[0] + "_ec.bin"
             self.extract_path.setText(out)
+        if os.path.exists(out):
+            answer = QMessageBox.question(
+                self, "Overwrite?", f"{out} already exists. Replace it?")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         off_override, size_override = self._override_region()
         result = self.patcher.extract_ec(self.current_dump, out, off_override, size_override)
         self._log(result.message)

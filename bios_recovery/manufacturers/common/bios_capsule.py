@@ -52,14 +52,18 @@ def detect_capsule(data: bytes) -> CapsuleInfo:
     image_size = len(image)
     image_sha256 = hashlib.sha256(image).hexdigest()
 
-    if header_size == 0 or header_size > 0x10000 or header_size >= len(data):
-        messages.append(f"Implausible capsule header size ({header_size:#x})")
+    # The documented layout is a fixed 0x800-byte header. Anything else is refused,
+    # because the image boundary would be a guess.
+    if header_size != 0x800:
+        messages.append(f"Capsule header size {header_size:#x} is not the documented 0x800")
         return CapsuleInfo(success=False, header_size=header_size, messages=messages)
 
-    if size_field not in (len(data), image_size):
+    if size_field != len(data):
         messages.append(
-            f"Capsule size field {size_field:#x} does not match file size {len(data):#x}"
+            f"Capsule size field {size_field:#x} does not match file size {len(data):#x}; refusing"
         )
+        return CapsuleInfo(success=False, header_size=header_size, size_field=size_field,
+                           messages=messages)
     if image_size % 0x1000 != 0:
         messages.append(f"Capsule image size {image_size:#x} not page-aligned")
 
@@ -115,7 +119,8 @@ def extract_flashable_image(
 
 
 def _fv_list(blob: bytes) -> list[tuple[int, int]]:
-    """Firmware volumes as (base, length), from _FVH occurrences (magic at +0x28)."""
+    """Firmware volumes as (base, length), each with a verified header checksum."""
+    from bios_recovery.core.bios_analyzer import BiosAnalyzer
     found = []
     pos = 0
     while True:
@@ -126,13 +131,9 @@ def _fv_list(blob: bytes) -> list[tuple[int, int]]:
         base = i - 0x28
         if base < 0:
             continue
-        try:
-            flen = struct.unpack_from("<Q", blob, base + 0x20)[0]
-        except struct.error:
-            continue
-        if not (0x1000 <= flen <= len(blob) and base + flen <= len(blob)):
-            continue
-        found.append((base, flen))
+        flen = BiosAnalyzer._valid_fv_length(blob, base)
+        if flen:
+            found.append((base, flen))
     return found
 
 
@@ -154,6 +155,12 @@ def restore_nvar_from_dump(
       3. replaces capsule NVAR records whose identity key also exists in the
          dump (byte-identical record swap when sizes match).
     """
+    from bios_recovery.core.safety import SameFileError, ensure_distinct
+    try:
+        ensure_distinct(capsule_image_path, output_path)
+        ensure_distinct(dump_path, output_path)
+    except SameFileError as exc:
+        return CapsuleInfo(success=False, messages=[str(exc)])
     with open(capsule_image_path, "rb") as f:
         image = bytearray(f.read())
     with open(dump_path, "rb") as f:
@@ -164,16 +171,26 @@ def restore_nvar_from_dump(
     # --- 1) Region-level restore of NVRAM / machine FVs ---------------------
     dump_fvs = _fv_list(dump)
     cap_set = set(_fv_list(bytes(image)))
+    written: list[tuple[int, int]] = []
+
+    def _overlaps(base: int, flen: int) -> bool:
+        return any(base < b + n and b < base + flen for b, n in written)
+
     for base, flen in dump_fvs:
         if base < 0x1000000:
             continue  # never touch the pre-BIOS half from a merge
+        if _overlaps(base, flen):
+            info.messages.append(f"Skipped FV @0x{base:x}: overlaps a region already restored")
+            continue
         if (base, flen) in cap_set and base < 0x1040000:
             image[base:base + flen] = dump[base:base + flen]
+            written.append((base, flen))
             info.messages.append(
                 f"Restored NVRAM FV @0x{base:x} (0x{flen:x} bytes) from the dump"
             )
         elif (base, flen) not in cap_set and base + flen <= len(image):
             image[base:base + flen] = dump[base:base + flen]
+            written.append((base, flen))
             info.messages.append(
                 f"Restored machine FV @0x{base:x} (0x{flen:x} bytes; capsule omitted it)"
             )

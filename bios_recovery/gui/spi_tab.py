@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from bios_recovery.apps.spi_flasher import SPIFlasher, SPIStatus
+from bios_recovery.gui.workers import Job
 
 
 class SPITab(QWidget):
@@ -133,58 +134,67 @@ class SPITab(QWidget):
     def _log(self, text: str):
         self.log_text.appendPlainText(text)
 
+    def _start_job(self, button, task, on_result):
+        """Run a flashrom operation off the UI thread; the button is disabled while it runs."""
+        button.setEnabled(False)
+        job = Job(task)
+
+        def finished(result):
+            button.setEnabled(True)
+            on_result(result)
+
+        def failed(message):
+            button.setEnabled(True)
+            self._log(f"Operation failed: {message}")
+
+        job.done.connect(finished)
+        job.failed.connect(failed)
+        job.start()
+        return job
+
     def detect_programmers(self):
-        self.refresh_btn.setEnabled(False)
-        try:
-            programmers = self.flasher.discover_programmers()
-        except Exception as e:
-            self._log(f"Programming detection failed: {e}")
-            return
-        finally:
-            self.refresh_btn.setEnabled(True)
-        if not programmers:
-            self._log("No supported programmers found. Install flashrom and/or a CH341A driver.")
-            return
-        current = self._current_programmer()
-        self.prog_combo.blockSignals(True)
-        self.prog_combo.clear()
-        self.prog_combo.addItems(programmers)
-        if current in programmers:
-            self.prog_combo.setCurrentText(current)
-        self.prog_combo.blockSignals(False)
-        self._log("Detected programmers: " + ", ".join(programmers))
+        def on_result(programmers):
+            if not programmers:
+                self._log("No supported programmers found. Install flashrom and/or a CH341A driver.")
+                return
+            current = self._current_programmer()
+            self.prog_combo.blockSignals(True)
+            self.prog_combo.clear()
+            self.prog_combo.addItems(programmers)
+            if current in programmers:
+                self.prog_combo.setCurrentText(current)
+            self.prog_combo.blockSignals(False)
+            self._log("Detected programmers: " + ", ".join(programmers))
+
+        self._start_job(self.refresh_btn, self.flasher.discover_programmers, on_result)
 
     def identify_chip(self):
-        self.identify_btn.setEnabled(False)
-        try:
-            chip = self.flasher.identify_chip(self._current_programmer())
-        except Exception as e:
-            self._log(f"Identify failed: {e}")
-            return
-        finally:
-            self.identify_btn.setEnabled(True)
-        self.chip_label.setText(chip.name or "Unknown")
-        self._log(f"Identified chip: {chip.name or 'none'}")
+        def on_result(chip):
+            self.chip_label.setText(chip.name or "Unknown")
+            self._log(f"Identified chip: {chip.name or 'none'}")
+
+        self._start_job(self.identify_btn, lambda: self.flasher.identify_chip(self._current_programmer()),
+                        on_result)
 
     def read_chip(self):
         path = self.read_path.text().strip()
         if not path:
             QMessageBox.warning(self, "No Destination", "Set the path to save the chip dump.")
             return
-        self.read_btn.setEnabled(False)
         self.progress.setValue(0)
         self._log(f"Reading chip via {self._current_programmer()} ...")
-        try:
-            result = self.flasher.read_chip(path, self._current_programmer())
-        finally:
-            self.read_btn.setEnabled(True)
-        self.progress.setValue(100)
-        self._log(result.message)
-        if result.output:
-            self._log(result.output.strip())
-        if result.status == SPIStatus.SUCCESS:
-            self.current_image = path
-            self._log(f"Backup saved to {path} ({result.flash_size:,} bytes)")
+
+        def on_result(result):
+            self.progress.setValue(100)
+            self._log(result.message)
+            if result.output:
+                self._log(result.output.strip())
+            if result.status == SPIStatus.SUCCESS:
+                self.current_image = path
+                self._log(f"Backup saved to {path} ({result.flash_size:,} bytes)")
+
+        self._start_job(self.read_btn,
+                        lambda: self.flasher.read_chip(path, self._current_programmer()), on_result)
 
     def write_chip(self):
         if not self.write_consent.isChecked():
@@ -201,12 +211,21 @@ class SPITab(QWidget):
         if self.write_auto_backup.isChecked():
             backup = image.rsplit(".", 1)[0] + "_prewrite_backup.bin"
             self._log(f"Taking automatic backup to {backup} ...")
-            result = self.flasher.read_chip(backup, self._current_programmer())
-            if result.status != SPIStatus.SUCCESS:
-                QMessageBox.critical(self, "Backup Failed", f"Could not create backup: {result.message}")
-                return
-            self._log("Backup complete.")
 
+            def after_backup(result):
+                if result.status != SPIStatus.SUCCESS:
+                    QMessageBox.critical(self, "Backup Failed", f"Could not create backup: {result.message}")
+                    return
+                self._log("Backup complete.")
+                self._confirm_and_write(image)
+
+            self._start_job(self.write_btn,
+                            lambda: self.flasher.read_chip(backup, self._current_programmer()),
+                            after_backup)
+            return
+        self._confirm_and_write(image)
+
+    def _confirm_and_write(self, image: str):
         yes = QMessageBox.question(
             self,
             "Final Confirmation",
@@ -216,18 +235,20 @@ class SPITab(QWidget):
         if yes != QMessageBox.StandardButton.Yes:
             return
 
-        self.write_btn.setEnabled(False)
         self.progress.setValue(0)
         self._log(f"Writing image via {self._current_programmer()} ...")
-        try:
-            result = self.flasher.write_chip(image, self._current_programmer(),
-                                             consent=True, verify=self.write_verify.isChecked())
-        finally:
-            self.write_btn.setEnabled(True)
-        self.progress.setValue(100)
-        self._log(result.message)
-        if result.output:
-            self._log(result.output.strip())
+
+        def on_result(result):
+            self.progress.setValue(100)
+            self._log(result.message)
+            if result.output:
+                self._log(result.output.strip())
+
+        verify = self.write_verify.isChecked()
+        self._start_job(self.write_btn,
+                        lambda: self.flasher.write_chip(image, self._current_programmer(),
+                                                        consent=True, verify=verify),
+                        on_result)
 
     def erase_chip(self):
         if not self.erase_consent.isChecked():
@@ -240,12 +261,13 @@ class SPITab(QWidget):
         )
         if yes != QMessageBox.StandardButton.Yes:
             return
-        self.erase_btn.setEnabled(False)
         self._log(f"Erasing chip via {self._current_programmer()} ...")
-        try:
-            result = self.flasher.erase_chip(self._current_programmer(), consent=True)
-        finally:
-            self.erase_btn.setEnabled(True)
-        self._log(result.message)
-        if result.output:
-            self._log(result.output.strip())
+
+        def on_result(result):
+            self._log(result.message)
+            if result.output:
+                self._log(result.output.strip())
+
+        self._start_job(self.erase_btn,
+                        lambda: self.flasher.erase_chip(self._current_programmer(), consent=True),
+                        on_result)
