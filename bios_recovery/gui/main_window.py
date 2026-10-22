@@ -53,25 +53,24 @@ _TAB_TOOL_NAMES = {"Security": "Passwords"}
 
 
 class WorkerThread(QThread):
-    """Runs a task in a background thread."""
+    """Runs a task in a background thread. Results carry the token the window issued."""
 
-    finished = Signal(object)
-    error = Signal(str)
-    progress = Signal(int, str)
+    done = Signal(object, object)   # (token, result)
+    failed = Signal(object, str)    # (token, message)
 
-    def __init__(self, task, *args, **kwargs):
+    def __init__(self, token, task, *args):
         super().__init__()
+        self.token = token
         self.task = task
         self.args = args
-        self.kwargs = kwargs
         track(self)
 
     def run(self):
         try:
-            result = self.task(*self.args, **self.kwargs)
-            self.finished.emit(result)
+            result = self.task(*self.args)
+            self.done.emit(self.token, result)
         except Exception as e:
-            self.error.emit(str(e))
+            self.failed.emit(self.token, str(e))
 
 
 class MainWindow(QMainWindow):
@@ -95,6 +94,8 @@ class MainWindow(QMainWindow):
         self.current_file = None
         self.current_bios_info = None
         self._threads = []
+        self._thread_callbacks = {}
+        self._thread_seq = 0
 
         self._build_ui()
         self.setWindowIcon(self._app_icon())
@@ -839,29 +840,31 @@ class MainWindow(QMainWindow):
         success and on error alike, so a failed job never leaves its control stuck."""
         if button is not None:
             button.setEnabled(False)
-
-        def restore():
-            if button is not None:
-                button.setEnabled(True)
-
-        def succeeded(result):
-            try:
-                on_done(result)
-            finally:
-                restore()
-
-        def failed(message):
-            restore()
-            self._show_error(message)
-
-        thread = WorkerThread(task, *args)
-        thread.finished.connect(succeeded)
-        thread.error.connect(failed)
+        self._thread_seq += 1
+        token = self._thread_seq
+        self._thread_callbacks[token] = (on_done, button)
+        thread = WorkerThread(token, task, *args)
+        thread.done.connect(self._thread_done)
+        thread.failed.connect(self._thread_failed)
         self._threads.append(thread)
         thread.start()
         # prune finished workers so the list does not grow unboundedly
         self._threads = [t for t in self._threads if t.isRunning() or t is thread]
         return thread
+
+    def _thread_done(self, token, result):
+        on_done, button = self._thread_callbacks.pop(token)
+        try:
+            on_done(result)
+        finally:
+            if button is not None:
+                button.setEnabled(True)
+
+    def _thread_failed(self, token, message):
+        _on_done, button = self._thread_callbacks.pop(token)
+        if button is not None:
+            button.setEnabled(True)
+        self._show_error(message)
 
     def closeEvent(self, event):
         wait_for_workers()

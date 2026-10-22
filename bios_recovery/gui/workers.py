@@ -19,22 +19,28 @@ def track(thread) -> None:
 
 
 class Job(QThread):
-    """Runs one callable off the UI thread and reports its result or its error."""
+    """Runs one callable off the UI thread.
 
-    done = Signal(object)
-    failed = Signal(str)
+    Results carry a token. The owning widget keeps the callback under that token and
+    connects these signals to its own methods, so a result that arrives after the
+    widget is destroyed is dropped by Qt instead of reaching a deleted object.
+    """
 
-    def __init__(self, task, *args):
+    done = Signal(object, object)   # (token, result)
+    failed = Signal(object, str)    # (token, message)
+
+    def __init__(self, token, task, *args):
         super().__init__()
+        self._token = token
         self._task = task
         self._args = args
         track(self)
 
     def run(self):
         try:
-            self.done.emit(self._task(*self._args))
+            self.done.emit(self._token, self._task(*self._args))
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(self._token, str(exc))
 
 
 def wait_for_workers(timeout_ms: int = 30000) -> bool:

@@ -52,6 +52,25 @@ def autopatch_image(fixtures):
     return fixtures["autopatch.bin"]
 
 
+@pytest.fixture(autouse=True)
+def _no_leftover_workers():
+    """Each test's background jobs finish, and their results are delivered, inside that test.
+
+    A result that lands during a later test could reach a window from an earlier one.
+    """
+    yield
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        from bios_recovery.gui.workers import wait_for_workers
+
+        wait_for_workers()
+        if QApplication.instance() is not None:
+            QApplication.processEvents()
+    except ImportError:
+        pass
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _qt_teardown():
     """Close windows and wait for workers before the interpreter tears Qt down."""

@@ -28,6 +28,8 @@ class SPITab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.flasher = SPIFlasher()
+        self._jobs = {}
+        self._job_seq = 0
         self.parent_window = parent
         self.current_image = None
         self._build()
@@ -141,20 +143,24 @@ class SPITab(QWidget):
     def _start_job(self, button, task, on_result):
         """Run a flashrom operation off the UI thread; the button is disabled while it runs."""
         button.setEnabled(False)
-        job = Job(task)
-
-        def finished(result):
-            button.setEnabled(True)
-            on_result(result)
-
-        def failed(message):
-            button.setEnabled(True)
-            self._log(f"Operation failed: {message}")
-
-        job.done.connect(finished)
-        job.failed.connect(failed)
+        self._job_seq += 1
+        token = self._job_seq
+        self._jobs[token] = (button, on_result)
+        job = Job(token, task)
+        job.done.connect(self._job_done)
+        job.failed.connect(self._job_failed)
         job.start()
         return job
+
+    def _job_done(self, token, result):
+        button, on_result = self._jobs.pop(token)
+        button.setEnabled(True)
+        on_result(result)
+
+    def _job_failed(self, token, message):
+        button, _ = self._jobs.pop(token)
+        button.setEnabled(True)
+        self._log(f"Operation failed: {message}")
 
     def detect_programmers(self):
         def on_result(programmers):
