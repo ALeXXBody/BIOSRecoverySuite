@@ -8,6 +8,7 @@ is unreachable (e.g. private repository without a token).
 Stdlib only: urllib + json. No third-party dependencies.
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -18,6 +19,10 @@ import tempfile
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+# Ed25519 public key used to verify release signatures. The matching private key
+# is kept off the repository and is used to sign each installer at release time.
+_SIGNING_PUBLIC_KEY_B64 = "MCowBQYDK2VwAyEAFbI2NdizxS1Tta8QrVgz2n4gu348NyGoDuVlYMIyPXs="
 
 REPO = "ALeXXBody/BIOSRecoverySuite"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -51,10 +56,11 @@ def is_newer(remote_tag: str, current_version: str) -> bool:
 
 
 def _pick_assets(assets: list) -> dict:
-    """Select installer/portable download URLs and the installer's published SHA-256."""
+    """Select installer/portable/signature download URLs and the installer's published SHA-256."""
     installer = None
     installer_sha = None
     portable = None
+    signature = None
     for a in assets:
         name = (a.get("name") or "").lower()
         url = a.get("browser_download_url")
@@ -71,7 +77,14 @@ def _pick_assets(assets: list) -> dict:
                 installer_sha = digest.split(":", 1)[1].lower()
         if portable is None and "portable" in name and name.endswith(".zip"):
             portable = url
-    return {"installer": installer, "installer_sha256": installer_sha, "portable": portable}
+        if signature is None and name.endswith(".sig") and "setup" in name:
+            signature = url
+    return {
+        "installer": installer,
+        "installer_sha256": installer_sha,
+        "portable": portable,
+        "signature": signature,
+    }
 
 
 @dataclass
@@ -82,6 +95,7 @@ class ReleaseInfo:
     installer_url: Optional[str] = None
     portable_url: Optional[str] = None
     installer_sha256: Optional[str] = None
+    signature_url: Optional[str] = None
 
 
 def fetch_latest_release() -> ReleaseInfo:
@@ -105,6 +119,7 @@ def fetch_latest_release() -> ReleaseInfo:
         installer_url=urls["installer"],
         portable_url=urls["portable"],
         installer_sha256=urls["installer_sha256"],
+        signature_url=urls["signature"],
     )
 
 
@@ -167,6 +182,42 @@ def verify_sha256(path: str, expected: Optional[str]) -> None:
             digest.update(block)
     if digest.hexdigest() != expected.lower():
         raise UpdateIntegrityError("SHA-256 of the download does not match the release")
+
+
+def _load_signing_public_key():
+    """Return the Ed25519 public key, or None if cryptography is unavailable."""
+    try:
+        from cryptography.hazmat.primitives.serialization import load_der_public_key
+    except ImportError:
+        return None
+    try:
+        raw = base64.b64decode(_SIGNING_PUBLIC_KEY_B64)
+        return load_der_public_key(raw)
+    except Exception:
+        return None
+
+
+def verify_signature(path: str, signature_path: Optional[str]) -> None:
+    """Verify an Ed25519 signature over the installer, if a signature is published.
+
+    When cryptography is not installed the check is skipped (the SHA-256 check
+    still runs). When a signature file is published it must verify; a missing or
+    invalid signature raises UpdateIntegrityError.
+    """
+    key = _load_signing_public_key()
+    if key is None:
+        return
+    if not signature_path or not os.path.isfile(signature_path):
+        # No signature published yet: rely on SHA-256 alone.
+        return
+    with open(signature_path, "rb") as f:
+        signature = f.read()
+    with open(path, "rb") as f:
+        data = f.read()
+    try:
+        key.verify(signature, data)
+    except Exception as exc:
+        raise UpdateIntegrityError(f"installer signature does not verify: {exc}")
 
 
 def make_private_download_dir() -> str:

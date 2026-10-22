@@ -46,11 +46,17 @@ def test_pick_assets_prefers_installer_and_portable():
 
 
 def test_pick_assets_empty():
-    assert _pick_assets([]) == {"installer": None, "installer_sha256": None, "portable": None}
+    assert _pick_assets([]) == {
+        "installer": None,
+        "installer_sha256": None,
+        "portable": None,
+        "signature": None,
+    }
     assert _pick_assets([{"name": "no-url"}]) == {
         "installer": None,
         "installer_sha256": None,
         "portable": None,
+        "signature": None,
     }
 
 

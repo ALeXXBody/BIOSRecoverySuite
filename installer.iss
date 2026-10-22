@@ -39,7 +39,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; folder FIRST, so a stale DLL left behind by an older build shadows the correct
 ; one. Only this application's own files are removed, never the whole folder:
 ; the folder itself is checked in [Code] before installation starts.
-Type: filesandordirs; Name: "{app}\_internal"
+; A backup of _internal is kept until the new files are in place, so a failed
+; copy does not leave the installation without its runtime.
 Type: files; Name: "{app}\{#MyAppExeName}"
 
 [Files]
@@ -54,6 +55,32 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+var
+  BackupInternal: string;
+
+procedure BackupInternalFolder;
+begin
+  BackupInternal := ExpandConstant('{app}\_internal.bak');
+  if DirExists(ExpandConstant('{app}\_internal')) then
+  begin
+    if DirExists(BackupInternal) then
+      DelTree(BackupInternal, True, True, True);
+    RenameFile(ExpandConstant('{app}\_internal'), BackupInternal);
+  end;
+end;
+
+procedure RestoreInternalFolder;
+begin
+  if DirExists(BackupInternal) and not DirExists(ExpandConstant('{app}\_internal')) then
+    RenameFile(BackupInternal, ExpandConstant('{app}\_internal'));
+end;
+
+procedure CleanupBackup;
+begin
+  if DirExists(BackupInternal) then
+    DelTree(BackupInternal, True, True, True);
+end;
+
 function IsDriveRoot(Dir: string): Boolean;
 begin
   Result := Length(RemoveBackslash(Dir)) <= 2;
@@ -84,6 +111,21 @@ begin
       Found := FindNext(FindRec);
   end;
   FindClose(FindRec);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    BackupInternalFolder
+  else if CurStep = ssPostInstall then
+    CleanupBackup;
+end;
+
+procedure DeinitializeSetup;
+begin
+  { If the install did not finish, put the runtime back. }
+  if not DirExists(ExpandConstant('{app}\_internal')) then
+    RestoreInternalFolder;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

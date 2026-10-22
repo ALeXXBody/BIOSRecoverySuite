@@ -609,6 +609,9 @@ _QT_OPTIONS = {
 
 
 def main():
+    # --mea-child with bare arguments (no -skip/-exit/-json/-duc/-out) falls into
+    # MEA's interactive prompt and fails with EOF; the bridge always passes the
+    # full flag set, so this path is only reachable by manual invocation.
     if len(sys.argv) > 1:
         _ensure_streams()
     if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "help"):

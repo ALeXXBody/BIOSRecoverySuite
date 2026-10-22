@@ -53,22 +53,28 @@ class DownloadWorker(QThread):
     done = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, url: str, dest: str, sha256):
+    def __init__(self, url: str, dest: str, sha256, signature_url=None):
         super().__init__()
         self.url = url
         self.dest = dest
         self.sha256 = sha256
+        self.signature_url = signature_url
         track(self)
 
     def run(self):
+        sig_dest = self.dest + ".sig"
         try:
             updater.download(self.url, self.dest, progress_cb=lambda p: self.progress.emit(p))
             updater.verify_sha256(self.dest, self.sha256)
+            if self.signature_url:
+                updater.download(self.signature_url, sig_dest)
+                updater.verify_signature(self.dest, sig_dest)
             self.done.emit(self.dest)
         except Exception as e:
             # Never leave an unverified installer where it could be run later.
-            if os.path.exists(self.dest):
-                os.remove(self.dest)
+            for p in (self.dest, sig_dest):
+                if os.path.exists(p):
+                    os.remove(p)
             self.failed.emit(str(e))
 
 
@@ -188,7 +194,10 @@ class UpdateDialog(QDialog):
 
         dest = updater.default_installer_destination(self.release.version)
         self._downloader = DownloadWorker(
-            self.release.installer_url, dest, self.release.installer_sha256
+            self.release.installer_url,
+            dest,
+            self.release.installer_sha256,
+            signature_url=self.release.signature_url,
         )
         self._downloader.progress.connect(self.progress.setValue)
         self._downloader.done.connect(self._on_download_done)
