@@ -27,11 +27,6 @@ from bios_recovery.core.safety import SameFileError, ensure_distinct
 
 FSYS_MARKER = b"Fsys\x01"
 CRC32_SIZE = 4
-# UEFITool documents the SysF entry data length as UINT16; the entry width used by
-# _scan_string (one byte) is not verified against a real Fsys sample. Serial writes stay
-# refused until it is (see set_serial_number).
-SERIAL_LAYOUT_VERIFIED = False
-
 _SERIAL_MARKERS = (b"\x03ssn", b"\x03SSN", b"\x04ssnp")
 _HWC_MARKERS = (b"\x03hwc",)
 _SON_MARKERS = (b"\x03son", b"\x03SON")
@@ -48,6 +43,7 @@ class FsysStoreInfo:
     checksum_valid: Optional[bool] = None
     serial: Optional[str] = None
     serial_base: int = -1
+    serial_layout: Optional[str] = None  # "u8" or "u16": the entry length width that matched
     hwc: Optional[str] = None
     son: Optional[str] = None
     notes: list = field(default_factory=list)
@@ -71,17 +67,39 @@ def _find_fsys_base(data: bytes) -> int:
     return data.find(FSYS_MARKER)
 
 
-def _scan_string(data: bytes, pos: int, end: int) -> Optional[str]:
-    """Parse a marker-tagged length-prefixed string: [len byte][bytes]."""
-    if pos + 1 > end or pos >= len(data):
-        return None
-    ln = data[pos]
-    if ln == 0 or pos + 1 + ln > end or pos + 1 + ln > len(data):
-        return None
-    raw = bytes(data[pos + 1 : pos + 1 + ln])
-    if raw == b"\xff" * ln:
-        return None  # erased
-    return raw.decode("ascii", errors="replace")
+def _printable(raw: bytes) -> bool:
+    return len(raw) > 0 and all(0x20 <= b <= 0x7E for b in raw)
+
+
+def _entry_candidates(data: bytes, pos: int, end: int) -> dict:
+    """Read a marker-tagged entry under each length width the format may use.
+
+    "u8": one length byte, as the reader used before. "u16": a little-endian UINT16
+    DataLength, as UEFITool documents for SysF entries. A candidate counts only when
+    its bytes are printable ASCII and lie inside the store, so a store that fits one
+    width does not also fit the other.
+    """
+    out = {}
+    if pos < min(end, len(data)):
+        ln = data[pos]
+        raw = bytes(data[pos + 1 : pos + 1 + ln]) if ln else b""
+        if pos + 1 + ln <= end and _printable(raw):
+            out["u8"] = (pos + 1, raw)
+    if pos + 2 <= min(end, len(data)):
+        ln = struct.unpack_from("<H", data, pos)[0]
+        raw = bytes(data[pos + 2 : pos + 2 + ln]) if ln else b""
+        if pos + 2 + ln <= end and _printable(raw):
+            out["u16"] = (pos + 2, raw)
+    return out
+
+
+def _scan_entry(data: bytes, pos: int, end: int) -> tuple:
+    """Return (layout, data_start, text) when exactly one width fits, else (None, -1, None)."""
+    cands = _entry_candidates(data, pos, end)
+    if len(cands) != 1:
+        return None, -1, None
+    layout, (start, raw) = next(iter(cands.items()))
+    return layout, start, raw.decode("ascii")
 
 
 def parse_fsys_store(data: bytes) -> FsysStoreInfo:
@@ -118,18 +136,18 @@ def parse_fsys_store(data: bytes) -> FsysStoreInfo:
     for mk in _SERIAL_MARKERS:
         p = data.find(mk, base, end)
         if p >= 0:
-            info.serial = _scan_string(data, p + len(mk), end)
-            if info.serial is not None:
-                info.serial_base = p + len(mk) + 1
+            layout, start, text = _scan_entry(data, p + len(mk), end)
+            if text is not None:
+                info.serial, info.serial_base, info.serial_layout = text, start, layout
                 break
     for mk in _HWC_MARKERS:
         p = data.find(mk, base, end)
         if p >= 0:
-            info.hwc = _scan_string(data, p + len(mk), end)
+            info.hwc = _scan_entry(data, p + len(mk), end)[2]
     for mk in _SON_MARKERS:
         p = data.find(mk, base, end)
         if p >= 0:
-            info.son = _scan_string(data, p + len(mk), end)
+            info.son = _scan_entry(data, p + len(mk), end)[2]
     info.found = True
     return info
 
@@ -278,14 +296,9 @@ def set_serial_number(
     output_path: Optional[str] = None,
 ) -> AppleReport:
     """Patch the Fsys ssn variable — **equal-length in-place swap only** — and
-    repair the store CRC32. Refused while the entry layout is unverified."""
+    repair the store CRC32. Refused unless the entry layout is unambiguous and the
+    patched store reads back with the new serial and a valid CRC."""
     rep = AppleReport()
-    if not SERIAL_LAYOUT_VERIFIED:
-        rep.message = (
-            "Fsys serial layout unverified: the entry length width is not confirmed against a "
-            "real Apple Fsys store, so no serial is written - refused"
-        )
-        return rep
     if _same_file_refusal(file_path, output_path, rep):
         return rep
     with open(file_path, "rb") as f:
@@ -293,7 +306,12 @@ def set_serial_number(
 
     fsys = parse_fsys_store(bytes(data))
     if not fsys.found or fsys.serial_base < 0:
-        rep.message = "Fsys store/serial variable not found - refused"
+        rep.message = (
+            "Fsys store/serial variable not found, or its entry layout is unreadable - refused"
+        )
+        return rep
+    if not _printable(new_serial.encode("ascii", errors="replace")) or "?" in new_serial:
+        rep.message = "new serial must be printable ASCII - refused"
         return rep
 
     s_len = len(fsys.serial)
@@ -310,6 +328,15 @@ def set_serial_number(
     fixed = fix_fsys_checksum_from_buffer(data, fsys.base_address, fsys.size)
     if fixed is None:
         rep.message = "post-patch checksum repair failed verification - not written"
+        return rep
+    check = parse_fsys_store(bytes(data))
+    if (
+        check.serial != new_serial
+        or check.serial_base != s_start
+        or check.serial_layout != fsys.serial_layout
+        or not check.checksum_valid
+    ):
+        rep.message = "patched Fsys store did not read back as expected - not written"
         return rep
     rep.operations.extend(fixed)
 

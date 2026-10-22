@@ -81,21 +81,18 @@ def test_valid_checksum_means_no_write(tmp_path):
     assert before == after  # no write performed
 
 
-def test_serial_patch_refused_while_layout_unverified(tmp_path):
+def test_serial_patch_refused_when_entry_unreadable(tmp_path):
     blob = bytearray(b"\xff" * 0x100000)
-    blob[0x20000:0x20800] = _mk_fsys(SERIAL.encode())
+    blob[0x20000:0x20800] = _mk_fsys(b"\x01\x02" + SERIAL.encode()[2:])
     p = _write(bytes(blob))
     before = open(p, "rb").read()
     rep = set_serial_number(p, "C02X4321ZYXW")
     assert not rep.success
-    assert "layout unverified" in rep.message
+    assert "unreadable" in rep.message
     assert open(p, "rb").read() == before
 
 
-def test_equal_length_serial_patch(monkeypatch):
-    import bios_recovery.manufacturers.apple.apple_efi as apple_efi
-
-    monkeypatch.setattr(apple_efi, "SERIAL_LAYOUT_VERIFIED", True)
+def test_equal_length_serial_patch():
     blob = bytearray(b"\xff" * 0x100000)
     blob[0x20000:0x20800] = _mk_fsys(SERIAL.encode())
     p = _write(bytes(blob))
