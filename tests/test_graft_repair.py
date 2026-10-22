@@ -77,6 +77,7 @@ def test_graft_accepts_capsule_donor(tmp_path):
     hdr[0:16] = APTIO_CAPSULE_GUID_LE
     struct.pack_into("<I", hdr, 0x10, 0x800)
     struct.pack_into("<I", hdr, 0x18, 0x800 + len(donor_image))
+    struct.pack_into("<H", hdr, 0x1C, 0x800)  # RomImageOffset: where the flash image starts
     cap = tmp_path / "donor.308"
     cap.write_bytes(bytes(hdr) + bytes(donor_image))
 

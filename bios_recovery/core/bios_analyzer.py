@@ -129,9 +129,9 @@ class BiosAnalyzer:
             return BiosType.AMI_APTIO
 
         # AMI Aptio capsule (vendor BIOS update): GUID at offset 0
-        from bios_recovery.manufacturers.common.bios_capsule import APTIO_CAPSULE_GUID_LE
+        from bios_recovery.manufacturers.common.bios_capsule import is_aptio_capsule_guid
 
-        if data[:16] == APTIO_CAPSULE_GUID_LE:
+        if is_aptio_capsule_guid(data):
             from bios_recovery.manufacturers.common.bios_capsule import detect_capsule
 
             if detect_capsule(data).success:

@@ -112,11 +112,11 @@ class BiosExtractor:
         return result
 
     def _detect_method(self, data: bytes, file_path: str) -> ExtractionMethod:
-        from bios_recovery.manufacturers.common.bios_capsule import APTIO_CAPSULE_GUID_LE
+        from bios_recovery.manufacturers.common.bios_capsule import is_aptio_capsule_guid
 
         # AMI Aptio vendor capsule (e.g. ASUS .308/.CAP updates): detect by GUID,
         # before any brand-keyword guess (which would miscategorize it).
-        if data[:16] == APTIO_CAPSULE_GUID_LE:
+        if is_aptio_capsule_guid(data):
             from bios_recovery.manufacturers.common.bios_capsule import detect_capsule
 
             if detect_capsule(data).success:
@@ -362,7 +362,7 @@ class BiosExtractor:
             result.messages.extend(info.messages)
             return result
 
-        image = data[info.header_size :]
+        image = data[info.header_size : info.image_end]
         output_file = os.path.join(output_dir, "flashable.bin")
         with open(output_file, "wb") as f:
             f.write(image)

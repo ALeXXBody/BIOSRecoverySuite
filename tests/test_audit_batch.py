@@ -5,17 +5,23 @@ import struct
 import pytest
 
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
-from bios_recovery.manufacturers.common.bios_capsule import APTIO_CAPSULE_GUID_LE, detect_capsule
+from bios_recovery.manufacturers.common.bios_capsule import (
+    APTIO_CAPSULE_GUID_LE,
+    APTIO_UNSIGNED_CAPSULE_GUID_LE,
+    detect_capsule,
+)
 from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor, ExtractionMethod
 from bios_recovery.platforms.ec.ec_patcher import ECPatcher
 from bios_recovery.platforms.intel.me.fit_bridge import ToolProbe, compatible_with_me
 
 
-def _capsule(size_field_delta=0, header_size=0x800, total=0x2000):
+def _capsule(rom_offset=0x800, size_delta=0, total=0x2000, guid=APTIO_CAPSULE_GUID_LE):
     data = bytearray(b"\xff" * total)
-    data[0:16] = APTIO_CAPSULE_GUID_LE
-    struct.pack_into("<I", data, 0x10, header_size)
-    struct.pack_into("<I", data, 0x18, total + size_field_delta)
+    data[0:16] = guid
+    struct.pack_into("<I", data, 0x10, 0x20)
+    struct.pack_into("<I", data, 0x18, total + size_delta)
+    struct.pack_into("<H", data, 0x1C, rom_offset)
+    struct.pack_into("<H", data, 0x1E, 0x20)
     return bytes(data)
 
 
@@ -23,14 +29,32 @@ def test_capsule_with_matching_header_is_accepted():
     assert detect_capsule(_capsule()).success
 
 
-def test_capsule_with_wrong_size_field_is_refused():
-    info = detect_capsule(_capsule(size_field_delta=0x10))
+def test_capsule_larger_than_file_is_refused_as_truncated():
+    info = detect_capsule(_capsule(size_delta=0x10))
     assert not info.success
-    assert any("size field" in m for m in info.messages)
+    assert any("truncated" in m for m in info.messages)
 
 
-def test_capsule_with_non_documented_header_size_is_refused():
-    assert not detect_capsule(_capsule(header_size=0x400)).success
+def test_capsule_with_trailing_bytes_is_accepted_with_a_note():
+    info = detect_capsule(_capsule(size_delta=-0x10))
+    assert info.success and info.image_end == 0x2000 - 0x10
+    assert any("ignored" in m for m in info.messages)
+
+
+def test_capsule_with_zero_or_oversized_image_offset_is_refused():
+    assert not detect_capsule(_capsule(rom_offset=0)).success
+    assert not detect_capsule(_capsule(rom_offset=0x3000)).success
+
+
+def test_unsigned_aptio_capsule_guid_is_accepted():
+    assert detect_capsule(_capsule(guid=APTIO_UNSIGNED_CAPSULE_GUID_LE)).success
+
+
+def test_image_starts_at_rom_image_offset_not_header_size_field():
+    data = _capsule(rom_offset=0x400)
+    info = detect_capsule(data)
+    assert info.success and info.header_size == 0x400
+    assert info.image_size == len(data) - 0x400
 
 
 def test_negative_manual_ec_offset_is_refused_not_ignored():

@@ -417,13 +417,13 @@ class BiosRepairEngine:
         # Accept capsule donors transparently
         donor_file = donor_path
         from bios_recovery.manufacturers.common.bios_capsule import (
-            APTIO_CAPSULE_GUID_LE,
             extract_flashable_image,
+            is_aptio_capsule_guid,
         )
 
         with open(donor_path, "rb") as f:
             donor_head = f.read(16)
-        if donor_head == APTIO_CAPSULE_GUID_LE:
+        if is_aptio_capsule_guid(donor_head):
             extract_dir = donor_path.rsplit(".", 1)[0] + "_grade_extracted"
             os.makedirs(extract_dir, exist_ok=True)
             info = extract_flashable_image(

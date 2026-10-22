@@ -1,11 +1,20 @@
 """AMI Aptio capsule handling.
 
-Laptop repair flow: vendors ship BIOS updates as "Aptio capsules" (.CAP, .308,
-.217 etc.) — an 0x800-byte header (AMI Aptio capsule GUID
-4A3CA68B-7723-48FB-803D-578CC1FEC44D) followed by a complete flash image.
-Burning that image to the SPI chip performs the update without running the
-vendor's DOS/Windows tool — the standard recovery move for laptops that will
-no longer boot far enough to self-update.
+Laptop and desktop vendors ship BIOS updates as AMI Aptio capsules (.CAP, .308,
+.217 ...). The capsule is an EFI_CAPSULE_HEADER followed by two 16-bit fields,
+RomImageOffset and RomLayoutOffset, and then the flash image. Burning that image
+to the SPI chip performs the update without running the vendor's tool.
+
+Layout (UEFI spec EFI_CAPSULE_HEADER, AMI extension as implemented by UEFITool):
+  0x00  CapsuleGuid         AMI signed   4A3CA68B-7723-48FB-803D-578CC1FEC44D
+                            AMI unsigned 14EEBB90-890A-43DB-AED1-5D3C4588A418
+  0x10  HeaderSize          (not used to locate the image for AMI capsules)
+  0x14  Flags
+  0x18  CapsuleImageSize    whole capsule, including the header; must not exceed the file
+  0x1C  RomImageOffset      u16: start of the flash image, from the capsule start
+  0x1E  RomLayoutOffset     u16: module table used for the signature (not needed here)
+
+The flash image is data[RomImageOffset:CapsuleImageSize].
 
 The capsule image is *generic*: it carries a factory-default NVRAM/variables
 store and generally omits the machine identity area, so the optional merge
@@ -18,17 +27,27 @@ import hashlib
 import struct
 from dataclasses import dataclass
 
-APTIO_CAPSULE_GUID_LE = bytes.fromhex("8ba63c4a2377fb48803d578cc1fec44d")
+APTIO_SIGNED_CAPSULE_GUID_LE = bytes.fromhex("8ba63c4a2377fb48803d578cc1fec44d")
+APTIO_UNSIGNED_CAPSULE_GUID_LE = bytes.fromhex("90bbee140a89db43aed15d3c4588a418")
+APTIO_CAPSULE_GUID_LE = APTIO_SIGNED_CAPSULE_GUID_LE
+APTIO_CAPSULE_GUIDS_LE = (APTIO_SIGNED_CAPSULE_GUID_LE, APTIO_UNSIGNED_CAPSULE_GUID_LE)
+APTIO_CAPSULE_HEADER_SIZE = 0x20
+
+
+def is_aptio_capsule_guid(head: bytes) -> bool:
+    """True if the first 16 bytes of a file are one of the two AMI Aptio capsule GUIDs."""
+    return bytes(head[:16]) in APTIO_CAPSULE_GUIDS_LE
 
 
 @dataclass
 class CapsuleInfo:
     success: bool
-    header_size: int = 0
+    header_size: int = 0        # RomImageOffset: where the flash image starts
+    image_end: int = 0          # CapsuleImageSize: where the flash image ends
     image_size: int = 0
     image_sha256: str = ""
     flags_word: int = 0
-    size_field: int = 0
+    size_field: int = 0         # CapsuleImageSize as stored in the header
     messages: list = None
     output_path: str = ""
 
@@ -38,33 +57,37 @@ class CapsuleInfo:
 
 
 def detect_capsule(data: bytes) -> CapsuleInfo:
-    """Parse the 0x800-byte Aptio capsule header and validate structure."""
-    if len(data) < 0x800:
+    """Parse an AMI Aptio capsule header and validate it the way UEFITool does."""
+    if len(data) < APTIO_CAPSULE_HEADER_SIZE:
         return CapsuleInfo(success=False, messages=["File too small for an Aptio capsule"])
-    if data[:16] != APTIO_CAPSULE_GUID_LE:
+    if not is_aptio_capsule_guid(data):
         return CapsuleInfo(success=False, messages=["Not an AMI Aptio capsule (GUID mismatch)"])
 
     messages = []
-    header_size = struct.unpack_from("<I", data, 0x10)[0]
     flags_word = struct.unpack_from("<I", data, 0x14)[0]
     size_field = struct.unpack_from("<I", data, 0x18)[0]
-    image = data[header_size:]
+    rom_image_offset = struct.unpack_from("<H", data, 0x1C)[0]
+
+    if rom_image_offset == 0 or rom_image_offset > len(data) or rom_image_offset > size_field:
+        messages.append(f"AMI capsule image offset {rom_image_offset:#x} is invalid")
+        return CapsuleInfo(success=False, header_size=rom_image_offset,
+                           size_field=size_field, messages=messages)
+    if size_field > len(data):
+        messages.append(
+            f"AMI capsule image size {size_field:#x} is larger than the file "
+            f"({len(data):#x} bytes): the file is truncated"
+        )
+        return CapsuleInfo(success=False, header_size=rom_image_offset,
+                           size_field=size_field, messages=messages)
+    if size_field < len(data):
+        messages.append(
+            f"{len(data) - size_field:#x} bytes follow the capsule image and are ignored"
+        )
+
+    image = data[rom_image_offset:size_field]
     image_size = len(image)
     image_sha256 = hashlib.sha256(image).hexdigest()
 
-    # The documented layout is a fixed 0x800-byte header. Anything else is refused,
-    # because the image boundary would be a guess.
-    if header_size != 0x800:
-        messages.append(f"Capsule header size {header_size:#x} is not the documented 0x800")
-        return CapsuleInfo(success=False, header_size=header_size, messages=messages)
-
-    if size_field != len(data):
-        messages.append(
-            f"Capsule size field {size_field:#x} does not match file size {len(data):#x}; refusing"
-        )
-        return CapsuleInfo(
-            success=False, header_size=header_size, size_field=size_field, messages=messages
-        )
     if image_size % 0x1000 != 0:
         messages.append(f"Capsule image size {image_size:#x} not page-aligned")
 
@@ -75,7 +98,8 @@ def detect_capsule(data: bytes) -> CapsuleInfo:
 
     return CapsuleInfo(
         success=True,
-        header_size=header_size,
+        header_size=rom_image_offset,
+        image_end=size_field,
         image_size=image_size,
         image_sha256=image_sha256,
         flags_word=flags_word,
@@ -84,7 +108,9 @@ def detect_capsule(data: bytes) -> CapsuleInfo:
     )
 
 
-def extract_flashable_image(input_path: str, output_path: str | None = None) -> CapsuleInfo:
+def extract_flashable_image(
+    input_path: str, output_path: str | None = None
+) -> CapsuleInfo:
     """Strip the Aptio capsule header and write the bare flash image."""
     with open(input_path, "rb") as f:
         data = f.read()
@@ -93,19 +119,7 @@ def extract_flashable_image(input_path: str, output_path: str | None = None) -> 
     if not info.success:
         return info
 
-    image = data[info.header_size :]
-
-    # Some capsules carry a 32-byte hash right after the header fields.
-    hdr_hash = data[0x28:0x48]
-    if len(hdr_hash) == 32 and hdr_hash != b"\x00" * 32:
-        if hdr_hash.hex() == info.image_sha256:
-            info.messages.append("Capsule header SHA-256 matches flash image")
-        else:
-            info.messages.append(
-                "Capsule header stores a 32-byte hash that is not SHA-256(image); "
-                f"keeping image (stored {hdr_hash.hex()[:16]}..., "
-                f"sha256 {info.image_sha256[:16]}...)"
-            )
+    image = data[info.header_size:info.image_end]
 
     if output_path is None:
         output_path = input_path.rsplit(".", 1)[0] + "_flashable.bin"

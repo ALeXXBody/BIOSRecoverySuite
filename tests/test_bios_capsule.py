@@ -34,12 +34,15 @@ def _mk_fv(body):
     return bytes(fv)
 
 
-def _mk_capsule(image, hdr_hash=b"\x00" * 32):
-    hdr = bytearray(b"\x00" * 0x800)
-    hdr[0:16] = APTIO_CAPSULE_GUID_LE
-    struct.pack_into("<I", hdr, 0x10, 0x800)
-    struct.pack_into("<I", hdr, 0x18, 0x800 + len(image))
-    struct.pack_into("<32s", hdr, 0x28, hdr_hash)
+def _mk_capsule(image, rom_offset=0x800, guid=APTIO_CAPSULE_GUID_LE, header_size_field=0x20):
+    """AMI Aptio capsule laid out as UEFITool reads it: the image starts at RomImageOffset."""
+    hdr = bytearray(b"\x00" * rom_offset)
+    hdr[0:16] = guid
+    struct.pack_into("<I", hdr, 0x10, header_size_field)     # HeaderSize: not used for AMI
+    struct.pack_into("<I", hdr, 0x14, 0x00000000)            # Flags
+    struct.pack_into("<I", hdr, 0x18, rom_offset + len(image))  # CapsuleImageSize
+    struct.pack_into("<H", hdr, 0x1C, rom_offset)            # RomImageOffset
+    struct.pack_into("<H", hdr, 0x1E, 0x20)                  # RomLayoutOffset
     return bytes(hdr) + image
 
 
@@ -55,7 +58,7 @@ def test_detect_and_extract(tmp_path):
 
     info = detect_capsule(_mk_capsule(image))
     assert info.success
-    assert info.header_size == 0x800
+    assert info.header_size == 0x800   # RomImageOffset, not the HeaderSize field (0x20)
     assert info.image_size == len(image)
 
     out = extract_flashable_image(str(cap_path))
