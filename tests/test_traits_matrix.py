@@ -1,29 +1,31 @@
 """Tests for traits classification and the GUI tool-availability matrix."""
 
-import sys
-
 from bios_recovery.core.traits import ARCH_AMD, ARCH_INTEL, classify
 from bios_recovery.core.traits_matrix import tool_matrix
 
 
 def test_classify_amd_asus_dump():
     import os
-    p = '/home/truenas_admin/drop/E1504FAFAS_flashable.bin'
+
+    p = "/home/truenas_admin/drop/E1504FAFAS_flashable.bin"
     if not os.path.exists(p):
         import pytest
+
         pytest.skip("real dump not present")
-    t = classify(open(p, 'rb').read())
+    t = classify(open(p, "rb").read())
     assert t.architecture == ARCH_AMD
     assert t.vendor == "asus"
 
 
 def test_classify_intel_dell_dump():
     import os
-    p = '/home/truenas_admin/drop/outimage.bin'
+
+    p = "/home/truenas_admin/drop/outimage.bin"
     if not os.path.exists(p):
         import pytest
+
         pytest.skip("real dump not present")
-    t = classify(open(p, 'rb').read())
+    t = classify(open(p, "rb").read())
     assert t.architecture == ARCH_INTEL
     assert t.vendor == "dell"
     assert t.me_family.startswith("CSME")

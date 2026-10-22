@@ -7,8 +7,8 @@ import zipfile
 
 import pytest
 
-from bios_recovery.utils import mea_updater as up
 from bios_recovery.third_party.mea import MEA_PATH
+from bios_recovery.utils import mea_updater as up
 
 
 class _Resp(io.BytesIO):
@@ -38,15 +38,21 @@ def test_newer_release_detected():
 
 
 def test_stage_extracts_only_mea_files(tmp_path, monkeypatch):
-    blob = _zip({
-        "MEAnalyzer-1/MEA.py": b"title = 'ME Analyzer v9.9.9'\n",
-        "MEAnalyzer-1/MEA.dat": b"data",
-        "MEAnalyzer-1/../../evil.exe": b"MZ",
-        "MEAnalyzer-1/readme.txt": b"hi",
-    })
-    rel = up.MEAReleaseInfo(tag="v9.9.9", name="", html_url="",
-                            zip_url="https://example.invalid/a.zip",
-                            zip_sha256=hashlib.sha256(blob).hexdigest())
+    blob = _zip(
+        {
+            "MEAnalyzer-1/MEA.py": b"title = 'ME Analyzer v9.9.9'\n",
+            "MEAnalyzer-1/MEA.dat": b"data",
+            "MEAnalyzer-1/../../evil.exe": b"MZ",
+            "MEAnalyzer-1/readme.txt": b"hi",
+        }
+    )
+    rel = up.MEAReleaseInfo(
+        tag="v9.9.9",
+        name="",
+        html_url="",
+        zip_url="https://example.invalid/a.zip",
+        zip_sha256=hashlib.sha256(blob).hexdigest(),
+    )
     monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp(blob))
     staged = up.stage_mea_update(rel, str(tmp_path))
     assert sorted(staged) == ["MEA.dat", "MEA.py"]
@@ -55,8 +61,9 @@ def test_stage_extracts_only_mea_files(tmp_path, monkeypatch):
 
 def test_digest_mismatch_writes_nothing(tmp_path, monkeypatch):
     blob = _zip({"MEA.py": b"x"})
-    rel = up.MEAReleaseInfo(tag="v9", name="", html_url="",
-                            zip_url="https://example.invalid/a.zip", zip_sha256="0" * 64)
+    rel = up.MEAReleaseInfo(
+        tag="v9", name="", html_url="", zip_url="https://example.invalid/a.zip", zip_sha256="0" * 64
+    )
     monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp(blob))
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         up.stage_mea_update(rel, str(tmp_path / "stage"))
@@ -64,8 +71,9 @@ def test_digest_mismatch_writes_nothing(tmp_path, monkeypatch):
 
 
 def test_missing_digest_is_refused(tmp_path):
-    rel = up.MEAReleaseInfo(tag="v9", name="", html_url="",
-                            zip_url="https://example.invalid/a.zip", zip_sha256=None)
+    rel = up.MEAReleaseInfo(
+        tag="v9", name="", html_url="", zip_url="https://example.invalid/a.zip", zip_sha256=None
+    )
     with pytest.raises(ValueError, match="no published SHA-256"):
         up.stage_mea_update(rel, str(tmp_path))
 
@@ -82,9 +90,13 @@ def test_same_release_line_is_not_reported_newer(monkeypatch):
 def test_stage_refuses_archive_that_expands_too_far(tmp_path, monkeypatch):
     monkeypatch.setattr(up, "MAX_UNCOMPRESSED_BYTES", 1024)
     blob = _zip({"MEA.py": b"x" * 4096})
-    rel = up.MEAReleaseInfo(tag="v9", name="", html_url="",
-                            zip_url="https://example.invalid/a.zip",
-                            zip_sha256=hashlib.sha256(blob).hexdigest())
+    rel = up.MEAReleaseInfo(
+        tag="v9",
+        name="",
+        html_url="",
+        zip_url="https://example.invalid/a.zip",
+        zip_sha256=hashlib.sha256(blob).hexdigest(),
+    )
     monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp(blob))
     with pytest.raises(ValueError, match="expands beyond"):
         up.stage_mea_update(rel, str(tmp_path / "stage"))
@@ -98,9 +110,13 @@ def test_stage_refuses_to_write_through_a_symlink(tmp_path, monkeypatch):
     victim.write_text("keep")
     os.symlink(victim, stage / "MEA.py")
     blob = _zip({"MEA.py": b"title = 'ME Analyzer v9.9.9'\n"})
-    rel = up.MEAReleaseInfo(tag="v9", name="", html_url="",
-                            zip_url="https://example.invalid/a.zip",
-                            zip_sha256=hashlib.sha256(blob).hexdigest())
+    rel = up.MEAReleaseInfo(
+        tag="v9",
+        name="",
+        html_url="",
+        zip_url="https://example.invalid/a.zip",
+        zip_sha256=hashlib.sha256(blob).hexdigest(),
+    )
     monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp(blob))
     with pytest.raises(ValueError, match="symlink"):
         up.stage_mea_update(rel, str(stage))

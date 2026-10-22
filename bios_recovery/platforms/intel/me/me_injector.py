@@ -12,7 +12,6 @@ This engine:
   * rewrites the region in place, leaving the descriptor untouched.
 """
 
-
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
 from bios_recovery.core.me_manifest import detect_me_version_best as detect_me_version_in_blob
 
@@ -42,8 +41,10 @@ class MEInjector:
         result = BiosAnalyzer().analyze(image_path)
         me = next((r for r in result.regions if r.region_type.name == "INTEL_ME"), None)
         if me is None:
-            return {"success": False,
-                    "message": "target image has no Intel ME region (no flash descriptor?)"}
+            return {
+                "success": False,
+                "message": "target image has no Intel ME region (no flash descriptor?)",
+            }
 
         clean_version = detect_me_version_in_blob(clean)
         if not clean_version and not detect_me_version_in_blob(clean[:0x1000]):
@@ -52,25 +53,33 @@ class MEInjector:
         else:
             warn = None
 
-        region = image[me.offset:me.offset + me.size]
+        region = image[me.offset : me.offset + me.size]
         cur_version = result.me_version or detect_me_version_in_blob(region)
 
         if len(clean) > me.size:
-            return {"success": False,
-                    "message": f"clean ME image ({len(clean)} bytes) is larger than the "
-                               f"ME region ({me.size} bytes) - wrong file or wrong machine"}
+            return {
+                "success": False,
+                "message": f"clean ME image ({len(clean)} bytes) is larger than the "
+                f"ME region ({me.size} bytes) - wrong file or wrong machine",
+            }
 
-        new_region = bytearray(b"\xFF" * me.size)
-        new_region[:len(clean)] = clean
-        image[me.offset:me.offset + me.size] = new_region
+        new_region = bytearray(b"\xff" * me.size)
+        new_region[: len(clean)] = clean
+        image[me.offset : me.offset + me.size] = new_region
 
         with open(output_path, "wb") as f:
             f.write(bytes(image))
-        msg = (f"ME region at 0x{me.offset:X} ({me.size} bytes) replaced with clean image"
-               + (f" (v{clean_version})" if clean_version else ""))
+        msg = f"ME region at 0x{me.offset:X} ({me.size} bytes) replaced with clean image" + (
+            f" (v{clean_version})" if clean_version else ""
+        )
         if cur_version and clean_version and cur_version != clean_version:
             msg += f" - NOTE: old dump was v{cur_version}; version differs, verify this is intended"
         if warn:
             msg += f" - WARNING: {warn}"
-        return {"success": True, "message": msg, "output_path": output_path,
-                "old_version": cur_version, "new_version": clean_version}
+        return {
+            "success": True,
+            "message": msg,
+            "output_path": output_path,
+            "old_version": cur_version,
+            "new_version": clean_version,
+        }

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 ARCH_INTEL = "intel"
 ARCH_AMD = "amd"
 ARCH_APPLE_INTEL = "apple_intel"
@@ -23,39 +22,58 @@ ARCH_APPLE_T2 = "apple_t2"
 ARCH_UNKNOWN = "unknown"
 
 _INTEL_MARKERS = (
-    b"\x5a\xa5\xf0\x0f",          # FLA signature (descriptor mode)
-    b"$MN2",                       # CSME manifests
-    b"$CPD",                       # CPD structures
-    b"$FPT",                       # legacy FPT region
+    b"\x5a\xa5\xf0\x0f",  # FLA signature (descriptor mode)
+    b"$MN2",  # CSME manifests
+    b"$CPD",  # CPD structures
+    b"$FPT",  # legacy FPT region
     b"Intel(R) Management Engine",
 )
 _AMD_MARKERS = (
-    b"$PSP",                       # PSP directories
-    b"$BHD",                       # bootstrap directory
+    b"$PSP",  # PSP directories
+    b"$BHD",  # bootstrap directory
     b"AGESA",
 )
 _APPLE_INTEL_MARKERS = (
-    b"Fsys\x01",                   # SMC NVRAM Fsys store
-    b"BIOS ID: ",                  # AppleRomInformation
+    b"Fsys\x01",  # SMC NVRAM Fsys store
+    b"BIOS ID: ",  # AppleRomInformation
     b"Model: MacBook",
 )
 _APPLE_T2_MARKERS = (
-    b"iBoot",                      # T2 SMC ROM boot stage
+    b"iBoot",  # T2 SMC ROM boot stage
     b"T2SOC",
 )
 
 _VENDOR_MARKERS = {
     "asus": (b"ASUSTeK", b"ASUS Notebook", b"90NB", b"ASUS"),
     "dell": (
-        b"Dell Inc.", b"Dell System", b"DELL", b"$UPT", b"$SLA", b"DVAR", b"Alienware",
+        b"Dell Inc.",
+        b"Dell System",
+        b"DELL",
+        b"$UPT",
+        b"$SLA",
+        b"DVAR",
+        b"Alienware",
     ),
     "apple": (b"Apple Computer, Inc.", b"Apple Inc.", b"AppleRomInfo", b"Fsys\x01"),
-    "hp": (b"Hewlett-Packard", b"HP Inc.", b"Hewlett Packard Enterprise", b"COMPAQ",
-           b"HP UEFI Secure Boot"),
+    "hp": (
+        b"Hewlett-Packard",
+        b"HP Inc.",
+        b"Hewlett Packard Enterprise",
+        b"COMPAQ",
+        b"HP UEFI Secure Boot",
+    ),
     "lenovo": (b"LENOVO", b"Lenovo", b"ThinkPad", b"$MAN$"),
     # OEM-owned Secure Boot key names (PK/KEK/db) identify the firmware owner
-    "acer": (b"Acer Aspire", b"TravMate", b"ZFOREST", b"ACERABCT",
-             b"Acer Platform Key", b"Acer Key Exchange", b"Acer Database", b"Acer Root CA"),
+    "acer": (
+        b"Acer Aspire",
+        b"TravMate",
+        b"ZFOREST",
+        b"ACERABCT",
+        b"Acer Platform Key",
+        b"Acer Key Exchange",
+        b"Acer Database",
+        b"Acer Root CA",
+    ),
     "samsung": (b"SAMSUNG ELECTRONICS",),
     "toshiba": (b"Toshiba", b"TOSHIBA"),
     "sony": (b"Sony", b"SONY", b"VAIO"),
@@ -81,11 +99,11 @@ class Traits:
     architecture: str = ARCH_UNKNOWN
     vendor: str = "generic"
     evidence: dict = field(default_factory=dict)
-    me_family: str = ""      # e.g. "CSME 15", "CSME 16", "Core Ultra"
+    me_family: str = ""  # e.g. "CSME 15", "CSME 16", "Core Ultra"
     me_version: str = ""
     psp_generation: str = ""
     ec_controller: str = ""  # "IT51368 VG (BGA128)" / "NPCE…"
-    bundle_kind: str = ""    # "aptio_capsule" / "dell_pfs" / "apple_efirom" / ""
+    bundle_kind: str = ""  # "aptio_capsule" / "dell_pfs" / "apple_efirom" / ""
 
 
 _ALNUM = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
@@ -145,8 +163,10 @@ def classify(data: bytes) -> Traits:
         t.architecture = ARCH_APPLE_T2
         t.vendor = "apple"
         t.bundle_kind = "apple_socrom"
-    elif apple_intel or (not intel_hits and any(
-            i in (b"Fsys\x01", b"BIOS ID: ", b"Model: MacBook") for i in apple_intel)):
+    elif apple_intel or (
+        not intel_hits
+        and any(i in (b"Fsys\x01", b"BIOS ID: ", b"Model: MacBook") for i in apple_intel)
+    ):
         # Fsys presence decides over a bare-IFD Intel Mac
         t.architecture = ARCH_APPLE_INTEL
         t.vendor = "apple"
@@ -173,7 +193,9 @@ def classify(data: bytes) -> Traits:
             leaders = [v for n, v, _ in scored if n == top]
             # A tie is not evidence for either brand: tools for a specific vendor must refuse.
             t.vendor = leaders[0] if len(leaders) == 1 else "ambiguous"
-            t.evidence = {v: [h.decode('ascii', 'replace') for h in hs[:6]] for ln, v, hs in scored[:3]}
+            t.evidence = {
+                v: [h.decode("ascii", "replace") for h in hs[:6]] for ln, v, hs in scored[:3]
+            }
         elif t.architecture == ARCH_APPLE_INTEL:
             t.vendor = "apple"
 
@@ -183,7 +205,9 @@ def classify(data: bytes) -> Traits:
         fam = ""
         try:
             from collections import Counter
+
             from bios_recovery.core.me_manifest import iter_manifest_versions
+
             mvs = iter_manifest_versions(data)
             if mvs:
                 # The engine version is the most common manifest version, as in the analyzer.

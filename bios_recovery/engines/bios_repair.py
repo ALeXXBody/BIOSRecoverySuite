@@ -1,2 +1,38 @@
 # Backward-compat shim — real implementation lives in bios_recovery.core.
-from bios_recovery.core.bios_repair import *
+from bios_recovery.core.bios_repair import (
+    BiosAnalyzer,
+    BiosRepairEngine,
+    BiosType,
+    Enum,
+    IntelMECleaner,
+    Optional,
+    RepairIssue,
+    RepairReport,
+    RepairType,
+    SameFileError,
+    auto,
+    dataclass,
+    ensure_distinct,
+    field,
+    os,
+    tempfile,
+)
+
+__all__ = [
+    "BiosAnalyzer",
+    "BiosRepairEngine",
+    "BiosType",
+    "Enum",
+    "IntelMECleaner",
+    "Optional",
+    "RepairIssue",
+    "RepairReport",
+    "RepairType",
+    "SameFileError",
+    "auto",
+    "dataclass",
+    "ensure_distinct",
+    "field",
+    "os",
+    "tempfile",
+]

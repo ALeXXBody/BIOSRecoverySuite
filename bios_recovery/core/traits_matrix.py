@@ -22,24 +22,30 @@ _INTEL_ARCHS = (ARCH_INTEL, ARCH_APPLE_INTEL)
 
 def tool_matrix(traits) -> dict[str, ToolRow]:
     """Decide, per tool name, whether it applies to the classified image."""
-    intel_tool = ToolRow(True) if traits.architecture in _INTEL_ARCHS else ToolRow(
-        False, "Not applicable: AMD platform (no Intel ME)" if traits.architecture == ARCH_AMD
-        else "Not applicable on this platform type"
+    intel_tool = (
+        ToolRow(True)
+        if traits.architecture in _INTEL_ARCHS
+        else ToolRow(
+            False,
+            "Not applicable: AMD platform (no Intel ME)"
+            if traits.architecture == ARCH_AMD
+            else "Not applicable on this platform type",
+        )
     )
     return {
         # Intel-bound tools
         "ME Cleaner": intel_tool,
         "ME Injector": intel_tool,
         # vendor-bound tools
-        "Lenovo Unlock": ToolRow(True) if traits.vendor == "lenovo" else ToolRow(
-            False, "Not applicable: manufacturer-specific tool (Lenovo)"
-        ),
-        "Dell DVAR Recovery": ToolRow(True) if traits.vendor == "dell" else ToolRow(
-            False, "Not applicable: Dell-specific password store"
-        ),
-        "Apple Fsys Tools": ToolRow(True) if traits.vendor == "apple" else ToolRow(
-            False, "Not applicable: Apple-specific NVRAM store"
-        ),
+        "Lenovo Unlock": ToolRow(True)
+        if traits.vendor == "lenovo"
+        else ToolRow(False, "Not applicable: manufacturer-specific tool (Lenovo)"),
+        "Dell DVAR Recovery": ToolRow(True)
+        if traits.vendor == "dell"
+        else ToolRow(False, "Not applicable: Dell-specific password store"),
+        "Apple Fsys Tools": ToolRow(True)
+        if traits.vendor == "apple"
+        else ToolRow(False, "Not applicable: Apple-specific NVRAM store"),
         # common tools
         "Overview": ToolRow(True),
         "Repair": ToolRow(True),

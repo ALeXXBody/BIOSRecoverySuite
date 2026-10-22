@@ -2,14 +2,14 @@
 
 import json
 import os
+import platform
 import subprocess
 import sys
 import tempfile
-import platform
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from bios_recovery.third_party.mea import MEA_PATH, ensure_data_files, MEA_ROOT
+from bios_recovery.third_party.mea import MEA_PATH, MEA_ROOT, ensure_data_files
 
 
 @dataclass
@@ -33,8 +33,9 @@ def _find_python():
     return sys.executable
 
 
-def run_mea_analyzer(input_file: str, output_dir: Optional[str] = None,
-                     include_html: bool = False) -> MEAResult:
+def run_mea_analyzer(
+    input_file: str, output_dir: Optional[str] = None, include_html: bool = False
+) -> MEAResult:
     if not ensure_data_files():
         return MEAResult(success=False, error="ME Analyzer data files missing")
 
@@ -47,26 +48,48 @@ def run_mea_analyzer(input_file: str, output_dir: Optional[str] = None,
     python_exe = _find_python()
     if getattr(sys, "frozen", False):
         # The exe's own dispatch (--mea-child in main._run_mea_child) loads MEA.py
-        args = [python_exe, "--mea-child", input_file,
-                "-skip", "-exit", "-json", "-duc", "-out", work_dir]
+        args = [
+            python_exe,
+            "--mea-child",
+            input_file,
+            "-skip",
+            "-exit",
+            "-json",
+            "-duc",
+            "-out",
+            work_dir,
+        ]
     else:
-        args = [python_exe, MEA_PATH, input_file,
-                "-skip", "-exit", "-json", "-duc", "-out", work_dir]
+        args = [
+            python_exe,
+            MEA_PATH,
+            input_file,
+            "-skip",
+            "-exit",
+            "-json",
+            "-duc",
+            "-out",
+            work_dir,
+        ]
     if include_html:
         args.append("-html")
 
     env = os.environ.copy()
     if getattr(sys, "frozen", False):
-        env["PYTHONPATH"] = os.pathsep.join([
-            env.get("PYTHONPATH", ""),
-            os.path.dirname(sys.executable),
-            MEA_ROOT,
-        ])
+        env["PYTHONPATH"] = os.pathsep.join(
+            [
+                env.get("PYTHONPATH", ""),
+                os.path.dirname(sys.executable),
+                MEA_ROOT,
+            ]
+        )
     else:
-        env["PYTHONPATH"] = os.pathsep.join([
-            env.get("PYTHONPATH", ""),
-            os.path.dirname(MEA_ROOT),
-        ])
+        env["PYTHONPATH"] = os.pathsep.join(
+            [
+                env.get("PYTHONPATH", ""),
+                os.path.dirname(MEA_ROOT),
+            ]
+        )
 
     try:
         kwargs = {
@@ -103,11 +126,15 @@ def run_mea_analyzer(input_file: str, output_dir: Optional[str] = None,
         json_data=json_data,
         stdout=proc.stdout or "",
         stderr=proc.stderr or "",
-        error="" if success else (f"Return code {proc.returncode}" if proc.returncode != 0 else "No JSON output"),
+        error=""
+        if success
+        else (f"Return code {proc.returncode}" if proc.returncode != 0 else "No JSON output"),
     )
 
     if json_data and isinstance(json_data, dict):
-        file_key = next((k for k in json_data if k == os.path.basename(input_file) or k == input_file), None)
+        file_key = next(
+            (k for k in json_data if k == os.path.basename(input_file) or k == input_file), None
+        )
         if file_key and isinstance(json_data[file_key], dict) and "Messages" in json_data[file_key]:
             try:
                 res.messages = list(json_data[file_key]["Messages"])

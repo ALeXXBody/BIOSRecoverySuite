@@ -1,7 +1,7 @@
 """Regression tests for DMI extraction and password removal."""
 
-from bios_recovery.engines.dmi_extractor import DMIExtractor
 from bios_recovery.core.password_remover import PasswordRemover
+from bios_recovery.engines.dmi_extractor import DMIExtractor
 
 
 def test_dmi_extraction_from_dump(intel_ifd):

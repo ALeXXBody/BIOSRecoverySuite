@@ -99,7 +99,7 @@ class ECPatcher:
             b"IT55",
             b"IT51",
             b"IT57",
-            b"\x80\x04",   # ITE reporter ID used in many EC images
+            b"\x80\x04",  # ITE reporter ID used in many EC images
         ],
         ECController.NUVOTON: [
             b"NPCE",
@@ -217,7 +217,7 @@ class ECPatcher:
         if not scored:
             return -1, -1
 
-        MAX_EC = 0x80000   # 512KB covers every known EC image
+        MAX_EC = 0x80000  # 512KB covers every known EC image
         # Real EC chips are 128/256/512KB, and a manufacturer embeds the EC
         # firmware as exactly one chip-sized block delimited by erased flash.
         STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
@@ -252,19 +252,19 @@ class ECPatcher:
                 blob_end = anchor + 1
             ends = self._observed_ends(data, blob_end)
             if not ends:
-                continue   # walk hit the search ceiling: end not observable
+                continue  # walk hit the search ceiling: end not observable
             if not (blob_start > 0 and self._bounded_below(data, blob_start)):
-                continue   # cluster not bounded below by observed padding
+                continue  # cluster not bounded below by observed padding
             hits = set()
             for end in ends:
                 for p in STD_EC_SIZES:
                     start = end - p
                     if start < 0 or start < blob_start:
-                        continue   # would cross the measured boundary
+                        continue  # would cross the measured boundary
                     if not (start <= anchor < end):
-                        continue   # marker cluster must sit inside the region
+                        continue  # marker cluster must sit inside the region
                     if not self._sits_on_padding(data, start):
-                        continue   # computed start with no boundary under it
+                        continue  # computed start with no boundary under it
                     hits.add((start, p))
             if len(hits) == 1:
                 return next(iter(hits))
@@ -334,11 +334,12 @@ class ECPatcher:
         mistaken for a region boundary.
         """
         if off == 0:
-            return True          # the start of the file bounds the region itself
+            return True  # the start of the file bounds the region itself
         if off < 0x2000:
-            return False         # cannot observe the required 8KB of padding
-        return (cls._is_pad_block(data[off - 0x2000:off - 0x1000])
-                and cls._is_pad_block(data[off - 0x1000:off]))
+            return False  # cannot observe the required 8KB of padding
+        return cls._is_pad_block(data[off - 0x2000 : off - 0x1000]) and cls._is_pad_block(
+            data[off - 0x1000 : off]
+        )
 
     @classmethod
     def _bounded_above(cls, data: bytes, off: int) -> bool:
@@ -349,12 +350,12 @@ class ECPatcher:
         """
         total = len(data)
         if off >= total:
-            return off == total   # only exact EOF counts; past EOF is nonsense
+            return off == total  # only exact EOF counts; past EOF is nonsense
         if off < 0:
             return False
         run, p = 0, off
         while run < 2 and p < total:
-            if not cls._is_pad_block(data[p:p + 0x1000]):
+            if not cls._is_pad_block(data[p : p + 0x1000]):
                 return False
             run += 1
             p += 0x1000
@@ -392,9 +393,9 @@ class ECPatcher:
             prev = start - BLOCK
             if prev < 0:
                 break
-            if cls._is_pad_block(data[prev:prev + BLOCK]):
+            if cls._is_pad_block(data[prev : prev + BLOCK]):
                 if boundary is None:
-                    boundary = start      # last real-content block
+                    boundary = start  # last real-content block
                 run += 1
                 if run >= PAD_RUN:
                     start = boundary
@@ -409,9 +410,9 @@ class ECPatcher:
         run = 0
         boundary = None
         while end < ceiling:
-            if cls._is_pad_block(data[end:end + BLOCK]):
+            if cls._is_pad_block(data[end : end + BLOCK]):
                 if boundary is None:
-                    boundary = end        # padding starts here
+                    boundary = end  # padding starts here
                 run += 1
                 if run >= PAD_RUN:
                     end = boundary
@@ -437,8 +438,8 @@ class ECPatcher:
         total = len(data)
         if blob_end < 0 or blob_end > total:
             return ()
-        if blob_end < total and not cls._is_pad_block(data[blob_end:blob_end + 0x1000]):
-            return ()   # search ceiling, not a boundary content shows
+        if blob_end < total and not cls._is_pad_block(data[blob_end : blob_end + 0x1000]):
+            return ()  # search ceiling, not a boundary content shows
         content_end = cls._content_end_before(data, blob_end)
         ends = [blob_end, content_end, cls._pad_end_after(data, content_end)]
         # Block-level resume point: where the run of all-FF 4KB blocks stops.
@@ -449,8 +450,8 @@ class ECPatcher:
         # them, so the caller refuses instead of picking one.)
         BLOCK = 0x1000
         b = (min(content_end, total) + BLOCK - 1) // BLOCK * BLOCK
-        if b < total and cls._is_pad_block(data[b:b + BLOCK]):
-            while b < total and cls._is_pad_block(data[b:b + BLOCK]):
+        if b < total and cls._is_pad_block(data[b : b + BLOCK]):
+            while b < total and cls._is_pad_block(data[b : b + BLOCK]):
                 b += BLOCK
             ends.append(b)
         return tuple(dict.fromkeys(ends))
@@ -479,7 +480,7 @@ class ECPatcher:
         BLOCK = 0x1000
         i = max(0, min(pos, total))
         while i < total:
-            chunk = data[i:i + BLOCK]
+            chunk = data[i : i + BLOCK]
             if cls._is_pad_block(chunk):
                 i += len(chunk)
                 continue
@@ -505,11 +506,11 @@ class ECPatcher:
         if start <= 0 or start > len(data):
             return False
         lo = max(1, start - 0x1000)
-        window = data[lo:start + 1]
+        window = data[lo : start + 1]
         for i in range(1, len(window)):
             if window[i - 1] == 0xFF and window[i] != 0xFF:
-                e = lo + i   # first non-FF byte after the run ends
-                if e >= 0x2000 and data[e - 0x2000:e].count(0xFF) == 0x2000:
+                e = lo + i  # first non-FF byte after the run ends
+                if e >= 0x2000 and data[e - 0x2000 : e].count(0xFF) == 0x2000:
                     return True
         return False
 
@@ -549,14 +550,14 @@ class ECPatcher:
                 blob_end = anchor + 1
             ends = self._observed_ends(data, blob_end)
             if not ends:
-                continue   # walk hit the search ceiling: end not observable
+                continue  # walk hit the search ceiling: end not observable
             hits = set()
             for end in ends:
                 start = end - size
                 if start < 0 or start < blob_start:
-                    continue   # would cross the measured boundary
+                    continue  # would cross the measured boundary
                 if not (start <= anchor < end):
-                    continue   # marker cluster must sit inside the region
+                    continue  # marker cluster must sit inside the region
                 hits.add(start)
             if len(hits) == 1:
                 return next(iter(hits))
@@ -588,18 +589,26 @@ class ECPatcher:
         if offset is not None and offset >= 0 and size:
             offset = int(offset)
             if offset + size > len(data):
-                return -1, -1, (
-                    f"Region 0x{offset:X}+0x{size:X} runs past the end of the "
-                    f"file (0x{len(data):X} bytes)."
+                return (
+                    -1,
+                    -1,
+                    (
+                        f"Region 0x{offset:X}+0x{size:X} runs past the end of the "
+                        f"file (0x{len(data):X} bytes)."
+                    ),
                 )
             return offset, size, ""
 
         if size:
             offset = self._end_anchored_start(data, size)
             if offset < 0:
-                return -1, -1, (
-                    "Could not locate the end of the EC region. Enter an offset "
-                    "manually, or check that this file is a full SPI dump."
+                return (
+                    -1,
+                    -1,
+                    (
+                        "Could not locate the end of the EC region. Enter an offset "
+                        "manually, or check that this file is a full SPI dump."
+                    ),
                 )
             return offset, size, ""
 
@@ -625,7 +634,7 @@ class ECPatcher:
         if error or offset < 0:
             return ECAnalysis(found=False, message=error)
 
-        ec_data = data[offset:offset + size]
+        ec_data = data[offset : offset + size]
         analysis = ECAnalysis(found=True, offset=offset, size=size, raw=ec_data)
 
         analysis.controller = self._detect_controller(ec_data)
@@ -640,13 +649,15 @@ class ECPatcher:
                 idx = ec_data.find(pattern, search)
                 if idx < 0:
                     break
-                blob = ec_data[max(0, idx - 8):idx + 16]
-                analysis.password_flags.append({
-                    "name": name,
-                    "offset_in_ec": idx,
-                    "offset_in_image": offset + idx,
-                    "context": blob.hex(),
-                })
+                blob = ec_data[max(0, idx - 8) : idx + 16]
+                analysis.password_flags.append(
+                    {
+                        "name": name,
+                        "offset_in_ec": idx,
+                        "offset_in_image": offset + idx,
+                        "context": blob.hex(),
+                    }
+                )
                 search = idx + 1
 
         analysis.checksum_valid = self._check_xor_checksum(ec_data)
@@ -671,7 +682,9 @@ class ECPatcher:
             xor ^= b
         return xor == ec_data[-1]
 
-    def list_patches(self, vendor: Optional[str] = None, controller: Optional[ECController] = None) -> list[ECPatch]:
+    def list_patches(
+        self, vendor: Optional[str] = None, controller: Optional[ECController] = None
+    ) -> list[ECPatch]:
         result = []
         for p in self._patches:
             if vendor and p.vendor.lower() != vendor.lower():
@@ -701,11 +714,15 @@ class ECPatcher:
             try:
                 signature = bytes.fromhex(patch.signature_hex)
             except ValueError:
-                out.append({
-                    "key": patch.key, "vendor": patch.vendor,
-                    "found": False, "note": "invalid hex in pattern",
-                    "verified": patch.verified,
-                })
+                out.append(
+                    {
+                        "key": patch.key,
+                        "vendor": patch.vendor,
+                        "found": False,
+                        "note": "invalid hex in pattern",
+                        "verified": patch.verified,
+                    }
+                )
                 continue
             offsets = []
             pos = 0
@@ -715,15 +732,17 @@ class ECPatcher:
                     break
                 offsets.append(i)
                 pos = i + 1
-            out.append({
-                "key": patch.key,
-                "vendor": patch.vendor,
-                "controller": patch.controller,
-                "generation": patch.generation,
-                "found": bool(offsets),
-                "offsets": [hex(x) for x in offsets],
-                "verified": patch.verified,
-            })
+            out.append(
+                {
+                    "key": patch.key,
+                    "vendor": patch.vendor,
+                    "controller": patch.controller,
+                    "generation": patch.generation,
+                    "found": bool(offsets),
+                    "offsets": [hex(x) for x in offsets],
+                    "verified": patch.verified,
+                }
+            )
         return out
 
     def apply_patch(
@@ -768,7 +787,7 @@ class ECPatcher:
                 message="Signature not found in image",
             )
 
-        data[offset:offset + len(replacement)] = replacement
+        data[offset : offset + len(replacement)] = replacement
 
         if output_path is None:
             output_path = input_path.rsplit(".", 1)[0] + "_ecpatched.bin"
@@ -827,7 +846,7 @@ class ECPatcher:
             )
 
         with open(output_path, "wb") as f:
-            f.write(data[offset:offset + size])
+            f.write(data[offset : offset + size])
         return ECPatchResult(
             status=ECStatus.SUCCESS,
             offset=offset,
@@ -844,18 +863,20 @@ class ECPatcher:
         except (OSError, json.JSONDecodeError):
             return
         for item in raw if isinstance(raw, list) else raw.get("patches", []):
-            self._patches.append(ECPatch(
-                key=item.get("key", ""),
-                vendor=item.get("vendor", ""),
-                generation=item.get("generation", ""),
-                controller=item.get("controller", ""),
-                description=item.get("description", ""),
-                signature_hex=item.get("signature_hex", ""),
-                patch_hex=item.get("patch_hex", ""),
-                offset_hint=item.get("offset_hint", ""),
-                verified=item.get("verified", False),
-                source=item.get("source", ""),
-            ))
+            self._patches.append(
+                ECPatch(
+                    key=item.get("key", ""),
+                    vendor=item.get("vendor", ""),
+                    generation=item.get("generation", ""),
+                    controller=item.get("controller", ""),
+                    description=item.get("description", ""),
+                    signature_hex=item.get("signature_hex", ""),
+                    patch_hex=item.get("patch_hex", ""),
+                    offset_hint=item.get("offset_hint", ""),
+                    verified=item.get("verified", False),
+                    source=item.get("source", ""),
+                )
+            )
 
     def install_patch(self, patch: ECPatch) -> None:
         self._patches.append(patch)

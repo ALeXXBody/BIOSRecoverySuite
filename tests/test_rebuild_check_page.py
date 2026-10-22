@@ -8,6 +8,7 @@ from tests.fixture_builder import build_intel_ifd_image
 @pytest.fixture
 def qapp():
     from PySide6.QtWidgets import QApplication
+
     yield QApplication.instance() or QApplication([])
 
 
@@ -20,12 +21,14 @@ def isolated(tmp_path, monkeypatch):
 
 def test_page_is_in_main_window(qapp):
     from bios_recovery.gui.main_window import MainWindow
+
     w = MainWindow()
     assert "Rebuild Check" in [w.tabs.tabText(i) for i in range(w.tabs.count())]
 
 
 def test_check_reports_release_and_empty_library(qapp, tmp_path):
     from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
+
     img = tmp_path / "me.bin"
     img.write_bytes(build_intel_ifd_image())
     page = RebuildCheckPage()
@@ -37,6 +40,7 @@ def test_check_reports_release_and_empty_library(qapp, tmp_path):
 
 def test_verify_refuses_identical_image(qapp, tmp_path):
     from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
+
     img = tmp_path / "me.bin"
     img.write_bytes(build_intel_ifd_image())
     page = RebuildCheckPage()
@@ -46,6 +50,7 @@ def test_verify_refuses_identical_image(qapp, tmp_path):
 
 def test_verify_requires_both_paths(qapp):
     from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
+
     page = RebuildCheckPage()
     page.verify("", "")
     assert "Choose both" in page.verify_output.toPlainText()

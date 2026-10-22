@@ -25,8 +25,7 @@ def _locate_smbios(data: bytes):
             continue
         table_len = struct.unpack_from("<H", data, idx + 0x16)[0]
         table_addr = struct.unpack_from("<I", data, idx + 0x18)[0]
-        if 0 < table_addr < len(data) and 0 < table_len and \
-                table_addr + table_len <= len(data):
+        if 0 < table_addr < len(data) and 0 < table_len and table_addr + table_len <= len(data):
             start = min(idx, table_addr)
             end = max(idx + 0x1F, table_addr + table_len)
             return (idx, start, end)
@@ -54,21 +53,23 @@ class DMIClone:
         o = _locate_smbios(old)
         n = _locate_smbios(new)
         if not o or not n:
-            return {"success": False,
-                    "message": "SMBIOS data not found in both dumps "
-                               f"(old: {bool(o)}, new: {bool(n)})"}
+            return {
+                "success": False,
+                "message": f"SMBIOS data not found in both dumps (old: {bool(o)}, new: {bool(n)})",
+            }
 
-        block = old[o[1]:o[2]]
+        block = old[o[1] : o[2]]
         if n[1] + len(block) > len(new):
-            return {"success": False,
-                    "message": "DMI block from old dump does not fit in new dump"}
+            return {"success": False, "message": "DMI block from old dump does not fit in new dump"}
 
-        new[n[1]:n[1] + len(block)] = block
+        new[n[1] : n[1] + len(block)] = block
         with open(output_path, "wb") as f:
             f.write(bytes(new))
 
-        return {"success": True,
-                "message": f"DMI identity block ({len(block)} bytes) cloned "
-                           f"from 0x{o[1]:X} (old) to 0x{n[1]:X} (new)",
-                "output_path": output_path,
-                "bytes": len(block)}
+        return {
+            "success": True,
+            "message": f"DMI identity block ({len(block)} bytes) cloned "
+            f"from 0x{o[1]:X} (old) to 0x{n[1]:X} (new)",
+            "output_path": output_path,
+            "bytes": len(block),
+        }

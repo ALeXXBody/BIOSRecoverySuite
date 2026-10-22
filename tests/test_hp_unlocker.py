@@ -20,7 +20,9 @@ def test_new_style_usercred_unlock(tmp_path):
     # modern HP UEFI: UTF-16LE 'UserCred' followed by a credential block
     cred = bytearray(0x64)
     cred[:] = b"\x77" * 0x64
-    data = b"\xAA" * 0x1000 + b'U\x00s\x00e\x00r\x00C\x00r\x00e\x00d' + bytes(cred) + b"\xBB" * 0x100
+    data = (
+        b"\xaa" * 0x1000 + b"U\x00s\x00e\x00r\x00C\x00r\x00e\x00d" + bytes(cred) + b"\xbb" * 0x100
+    )
     src = _write(tmp_path, data)
 
     u = HPUnlocker()
@@ -39,23 +41,19 @@ def test_new_style_usercred_unlock(tmp_path):
         assert after[base + j] == expected, f"byte {j} wrong"
     # untouched surroundings
     assert after[:0x1000] == data[:0x1000]
-    assert after[base + 100:] == data[base + 100:]
+    assert after[base + 100 :] == data[base + 100 :]
 
 
 def test_old_style_vss_biosuser_unlock(tmp_path):
     # legacy HP: $VSS entries keyed 'BiosUser' with FF-wipeable payload
     def vss_entry(payload_len):
-        entry = b'$VSS'
-        entry += b'B\x00i\x00o\x00s\x00U\x00s\x00e\x00r'
+        entry = b"$VSS"
+        entry += b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r"
         entry += bytes(payload_len)
-        entry += b'\xaaU'
+        entry += b"\xaaU"
         return entry
 
-    data = (b"\x11" * 0x200
-            + vss_entry(0x40)
-            + b"\x22" * 0x30
-            + vss_entry(0x20)
-            + b"\x33" * 0x100)
+    data = b"\x11" * 0x200 + vss_entry(0x40) + b"\x22" * 0x30 + vss_entry(0x20) + b"\x33" * 0x100
     src = _write(tmp_path, data)
 
     u = HPUnlocker()
@@ -68,22 +66,22 @@ def test_old_style_vss_biosuser_unlock(tmp_path):
     assert report["success"] and report["cleared"] == 2
 
     after = _read(out)
-    first_key = data.find(b'B\x00i\x00o\x00s\x00U\x00s\x00e\x00r')
-    end1 = data.find(b'\xaaU', first_key)
+    first_key = data.find(b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r")
+    end1 = data.find(b"\xaaU", first_key)
     # reference semantics: wipe starts 22 bytes into the key entry
     wiped = end1 - (first_key + 22)
     assert wiped > 0
-    assert after[first_key:first_key + 22] == data[first_key:first_key + 22]
-    assert after[first_key + 22:end1] == b"\xFF" * wiped
+    assert after[first_key : first_key + 22] == data[first_key : first_key + 22]
+    assert after[first_key + 22 : end1] == b"\xff" * wiped
 
     # second entry wiped as well; final tail untouched
-    second_key = data.find(b'B\x00i\x00o\x00s\x00U\x00s\x00e\x00r', first_key + 2)
-    end2 = data.find(b'\xaaU', second_key)
-    assert after[second_key + 22:end2] == b"\xFF" * (end2 - second_key - 22)
+    second_key = data.find(b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r", first_key + 2)
+    end2 = data.find(b"\xaaU", second_key)
+    assert after[second_key + 22 : end2] == b"\xff" * (end2 - second_key - 22)
     assert after[end2:] == data[end2:]
     # gap between the entries untouched
-    assert after[end1:first_key - 4 - 0x40 + 0x40] == data[end1:second_key - 22] or True
-    assert after[end1:second_key + 22] == data[end1:second_key + 22]
+    assert after[end1 : first_key - 4 - 0x40 + 0x40] == data[end1 : second_key - 22] or True
+    assert after[end1 : second_key + 22] == data[end1 : second_key + 22]
 
 
 def test_unlock_no_match_reports_failure(tmp_path):

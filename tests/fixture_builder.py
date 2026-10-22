@@ -128,11 +128,11 @@ def build_intel_ifd_image(size: int = 0x1000000) -> bytes:
 
     # Intel Flash Descriptor
     struct.pack_into("<I", data, fd + 0x00, 0x0FF0A55A)
-    struct.pack_into("<I", data, fd + 0x04, 0x00100001)          # FLMAP0: FRBA=0x100, NC=2
+    struct.pack_into("<I", data, fd + 0x04, 0x00040001)          # FLMAP0: FRBA=0x40, NC=2
     struct.pack_into("<I", data, fd + 0x08, 0x00200000)          # FLMAP1: FPSBA=0x200
     struct.pack_into("<I", data, fd + 0x0C, 0x00000000)          # FLMAP2
 
-    frba = fd + 0x100
+    frba = fd + 0x40
     struct.pack_into("<I", data, frba + 0x00, flreg(fd, fd + 0x1000))   # FREG0 Descriptor
     struct.pack_into("<I", data, frba + 0x04, flreg(bios, size))        # FREG1 BIOS
     struct.pack_into("<I", data, frba + 0x08, flreg(me, gbe))           # FREG2 ME

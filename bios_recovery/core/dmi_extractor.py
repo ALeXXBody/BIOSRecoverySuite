@@ -96,21 +96,21 @@ class DMIExtractor:
         return self._scan_for_smbios_structures(data)
 
     def _parse_smbios_entry(self, data: bytes, offset: int) -> Optional[bytes]:
-        if data[offset:offset + 4] == b"_SM_":
+        if data[offset : offset + 4] == b"_SM_":
             table_length = struct.unpack_from("<H", data, offset + 22)[0]
             table_addr = struct.unpack_from("<I", data, offset + 24)[0]
 
             if table_addr > 0 and table_length > 0:
                 if table_addr + table_length <= len(data):
-                    return data[table_addr:table_addr + table_length]
+                    return data[table_addr : table_addr + table_length]
                 if table_addr < 0x100000:
-                    return data[table_addr:table_addr + table_length]
+                    return data[table_addr : table_addr + table_length]
 
-        if data[offset:offset + 5] == b"_DMI_":
+        if data[offset : offset + 5] == b"_DMI_":
             table_length = struct.unpack_from("<H", data, offset + 5)[0]
             table_addr = struct.unpack_from("<I", data, offset + 7)[0]
             if table_addr + table_length <= len(data):
-                return data[table_addr:table_addr + table_length]
+                return data[table_addr : table_addr + table_length]
 
         return None
 
@@ -135,7 +135,7 @@ class DMIExtractor:
             if data[i] in self.SMBIOS_TYPES and i + 4 < len(data):
                 struct_length = data[i + 1]
                 if 4 <= struct_length <= 256 and i + struct_length <= len(data):
-                    dmi_data.extend(data[i:i + struct_length])
+                    dmi_data.extend(data[i : i + struct_length])
                     i += struct_length
                     while i < len(data) and i < i + 0x100:
                         if data[i] == 0x00 and data[i + 1] == 0x00 if i + 1 < len(data) else False:
@@ -164,7 +164,7 @@ class DMIExtractor:
                 break
 
             handle = struct.unpack_from("<H", data, offset + 2)[0]
-            struct_data = data[offset:offset + struct_length]
+            struct_data = data[offset : offset + struct_length]
 
             dmi_struct = DMIStructure(
                 type_id=struct_type,
@@ -288,11 +288,15 @@ class DMIExtractor:
                     break
                 context_start = max(0, idx - 16)
                 context_end = min(len(data), idx + len(ascii_pattern) + 16)
-                results.append({
-                    "offset": f"{idx:#x}",
-                    "context": data[context_start:context_end].hex(),
-                    "matched": data[idx:idx + len(ascii_pattern)].decode("ascii", errors="replace"),
-                })
+                results.append(
+                    {
+                        "offset": f"{idx:#x}",
+                        "context": data[context_start:context_end].hex(),
+                        "matched": data[idx : idx + len(ascii_pattern)].decode(
+                            "ascii", errors="replace"
+                        ),
+                    }
+                )
                 offset = idx + 1
 
         return results

@@ -100,7 +100,9 @@ class SPIFlasher:
         try:
             result = subprocess.run(
                 self._cmd(["--list-supported", "programmer"]),
-                capture_output=True, text=True, timeout=20,
+                capture_output=True,
+                text=True,
+                timeout=20,
             )
         except (subprocess.SubprocessError, OSError):
             return []
@@ -118,7 +120,9 @@ class SPIFlasher:
         try:
             result = subprocess.run(
                 self._cmd(["-p", programmer, "--flash-name"]),
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
         except (subprocess.SubprocessError, OSError):
             return ChipInfo(vendor="", name="", size=0)
@@ -134,11 +138,15 @@ class SPIFlasher:
         if not self.value:
             self.value = self._resolve_tool()
         if not self.value:
-            return FlasherResult(status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer)
+            return FlasherResult(
+                status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer
+            )
         try:
             result = subprocess.run(
                 self._cmd(["-p", programmer, "-r", output_path]),
-                capture_output=True, text=True, timeout=600,
+                capture_output=True,
+                text=True,
+                timeout=600,
             )
         except (subprocess.SubprocessError, OSError) as e:
             return FlasherResult(status=SPIStatus.ERROR, message=str(e), programmer=programmer)
@@ -153,15 +161,25 @@ class SPIFlasher:
                 programmer=programmer,
                 output=combined,
             )
-        return FlasherResult(status=SPIStatus.ERROR, message="Read failed", output=combined, programmer=programmer)
+        return FlasherResult(
+            status=SPIStatus.ERROR, message="Read failed", output=combined, programmer=programmer
+        )
 
-    def write_chip(self, image_path: str, programmer: str = "ch341a_spi", consent: bool = False, verify: bool = True) -> FlasherResult:
+    def write_chip(
+        self,
+        image_path: str,
+        programmer: str = "ch341a_spi",
+        consent: bool = False,
+        verify: bool = True,
+    ) -> FlasherResult:
         if not consent:
             return FlasherResult(status=SPIStatus.DENIED, message="Write requires explicit consent")
         if not self.value:
             self.value = self._resolve_tool()
         if not self.value:
-            return FlasherResult(status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer)
+            return FlasherResult(
+                status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer
+            )
         cmd = self._cmd(["-p", programmer, "-w", image_path])
         if verify:
             cmd.append("-v")
@@ -172,8 +190,16 @@ class SPIFlasher:
         combined = result.stdout + result.stderr
         chip, _ = _parse_flash_output(combined)
         if result.returncode == 0:
-            return FlasherResult(status=SPIStatus.SUCCESS, message=("Write+verify complete" if verify else "Write complete"), flash_chip=chip, programmer=programmer, output=combined)
-        return FlasherResult(status=SPIStatus.ERROR, message="Write failed", output=combined, programmer=programmer)
+            return FlasherResult(
+                status=SPIStatus.SUCCESS,
+                message=("Write+verify complete" if verify else "Write complete"),
+                flash_chip=chip,
+                programmer=programmer,
+                output=combined,
+            )
+        return FlasherResult(
+            status=SPIStatus.ERROR, message="Write failed", output=combined, programmer=programmer
+        )
 
     def erase_chip(self, programmer: str = "ch341a_spi", consent: bool = False) -> FlasherResult:
         if not consent:
@@ -181,15 +207,26 @@ class SPIFlasher:
         if not self.value:
             self.value = self._resolve_tool()
         if not self.value:
-            return FlasherResult(status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer)
+            return FlasherResult(
+                status=SPIStatus.ERROR, message="flashrom not found", programmer=programmer
+            )
         try:
-            result = subprocess.run(self._cmd(["-p", programmer, "-E"]), capture_output=True, text=True, timeout=600)
+            result = subprocess.run(
+                self._cmd(["-p", programmer, "-E"]), capture_output=True, text=True, timeout=600
+            )
         except (subprocess.SubprocessError, OSError) as e:
             return FlasherResult(status=SPIStatus.ERROR, message=str(e), programmer=programmer)
         combined = result.stdout + result.stderr
         if result.returncode == 0:
-            return FlasherResult(status=SPIStatus.SUCCESS, message="Chip erased", programmer=programmer, output=combined)
-        return FlasherResult(status=SPIStatus.ERROR, message="Erase failed", output=combined, programmer=programmer)
+            return FlasherResult(
+                status=SPIStatus.SUCCESS,
+                message="Chip erased",
+                programmer=programmer,
+                output=combined,
+            )
+        return FlasherResult(
+            status=SPIStatus.ERROR, message="Erase failed", output=combined, programmer=programmer
+        )
 
     def progress_from_output(self, text: str) -> int:
         """Extract the latest flashrom progress percentage (0-100) from a log line."""

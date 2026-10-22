@@ -60,7 +60,11 @@ def _pick_assets(assets: list) -> dict:
         url = a.get("browser_download_url")
         if not url or not url.startswith("https://"):
             continue
-        if installer is None and name.startswith("biosrecoverysuite-setup-") and name.endswith(".exe"):
+        if (
+            installer is None
+            and name.startswith("biosrecoverysuite-setup-")
+            and name.endswith(".exe")
+        ):
             installer = url
             digest = a.get("digest") or ""
             if digest.startswith("sha256:"):
@@ -82,10 +86,13 @@ class ReleaseInfo:
 
 def fetch_latest_release() -> ReleaseInfo:
     """Fetch the latest published release. Raises urllib.error on failure."""
-    req = urllib.request.Request(LATEST_URL, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
-    })
+    req = urllib.request.Request(
+        LATEST_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": USER_AGENT,
+        },
+    )
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
         data = json.load(resp)
 
@@ -100,8 +107,12 @@ def fetch_latest_release() -> ReleaseInfo:
     )
 
 
-def download(url: str, dest_path: str, progress_cb: Optional[Callable[[int], None]] = None,
-             chunk_size: int = 256 * 1024) -> str:
+def download(
+    url: str,
+    dest_path: str,
+    progress_cb: Optional[Callable[[int], None]] = None,
+    chunk_size: int = 256 * 1024,
+) -> str:
     """Stream a file to dest_path. A download that ends early is an error.
 
     Refuses non-HTTPS URLs and files over MAX_INSTALLER_BYTES. On any failure the

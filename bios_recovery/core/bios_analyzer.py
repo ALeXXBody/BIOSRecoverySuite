@@ -1,8 +1,8 @@
 """BIOS file analysis engine - parses and analyzes BIOS/UEFI firmware images."""
 
-import struct
 import hashlib
 import os
+import struct
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -130,8 +130,10 @@ class BiosAnalyzer:
 
         # AMI Aptio capsule (vendor BIOS update): GUID at offset 0
         from bios_recovery.manufacturers.common.bios_capsule import APTIO_CAPSULE_GUID_LE
+
         if data[:16] == APTIO_CAPSULE_GUID_LE:
             from bios_recovery.manufacturers.common.bios_capsule import detect_capsule
+
             if detect_capsule(data).success:
                 return BiosType.AMI_CAPSULE
 
@@ -191,12 +193,14 @@ class BiosAnalyzer:
         if fd_offset < 0:
             return regions
 
-        regions.append(RegionInfo(
-            region_type=RegionType.FLASH_DESCRIPTOR,
-            offset=fd_offset,
-            size=0x1000,
-            name="Flash Descriptor",
-        ))
+        regions.append(
+            RegionInfo(
+                region_type=RegionType.FLASH_DESCRIPTOR,
+                offset=fd_offset,
+                size=0x1000,
+                name="Flash Descriptor",
+            )
+        )
 
         if fd_offset + 0x20 > len(data):
             return regions
@@ -227,12 +231,14 @@ class BiosAnalyzer:
             base = fd_offset + ((flreg & 0x7FFF) << 12)
             limit = fd_offset + (((flreg >> 16) & 0x7FFF) << 12 | 0xFFF)
             if base < limit and limit < len(data):
-                regions.append(RegionInfo(
-                    region_type=rtype,
-                    offset=base,
-                    size=limit - base + 1,
-                    name=name,
-                ))
+                regions.append(
+                    RegionInfo(
+                        region_type=rtype,
+                        offset=base,
+                        size=limit - base + 1,
+                        name=name,
+                    )
+                )
 
         return regions
 
@@ -243,7 +249,7 @@ class BiosAnalyzer:
             return 0x10
 
         for offset in range(0, min(len(data), 0x10000), 0x10):
-            if data[offset:offset + 4] == b"\x5a\xa5\xf0\x0f":
+            if data[offset : offset + 4] == b"\x5a\xa5\xf0\x0f":
                 return offset
         return -1
 
@@ -268,12 +274,14 @@ class BiosAnalyzer:
             if not fv_len:
                 continue
             accepted.append((fv_start, fv_start + fv_len))
-            regions.append(RegionInfo(
-                region_type=RegionType.FIRMWARE_VOLUME,
-                offset=fv_start,
-                size=fv_len,
-                name=f"Firmware Volume @0x{fv_start:X}",
-            ))
+            regions.append(
+                RegionInfo(
+                    region_type=RegionType.FIRMWARE_VOLUME,
+                    offset=fv_start,
+                    size=fv_len,
+                    name=f"Firmware Volume @0x{fv_start:X}",
+                )
+            )
 
     @staticmethod
     def _valid_fv_length(data: bytes, fv_start: int) -> int:
@@ -301,12 +309,14 @@ class BiosAnalyzer:
             return
         start = min(r.offset for r in volumes)
         end = max(r.offset + r.size for r in volumes)
-        regions.append(RegionInfo(
-            region_type=RegionType.BIOS,
-            offset=start,
-            size=end - start,
-            name="BIOS (span of firmware volumes)",
-        ))
+        regions.append(
+            RegionInfo(
+                region_type=RegionType.BIOS,
+                offset=start,
+                size=end - start,
+                name="BIOS (span of firmware volumes)",
+            )
+        )
 
     def _search_me_region(self, data: bytes, regions: list[RegionInfo]) -> None:
         positions = self._fpt_positions(data)
@@ -314,12 +324,14 @@ class BiosAnalyzer:
             fpt_pos = positions[0]
             has_me = any(r.region_type == RegionType.INTEL_ME for r in regions)
             if not has_me:
-                regions.append(RegionInfo(
-                    region_type=RegionType.INTEL_ME,
-                    offset=fpt_pos,
-                    size=len(data) - fpt_pos,
-                    name="Intel ME (detected by FPT)",
-                ))
+                regions.append(
+                    RegionInfo(
+                        region_type=RegionType.INTEL_ME,
+                        offset=fpt_pos,
+                        size=len(data) - fpt_pos,
+                        name="Intel ME (detected by FPT)",
+                    )
+                )
 
     def _get_me_version(self, data: bytes, regions: list[RegionInfo]) -> str:
         me_regions = [r for r in regions if r.region_type in (RegionType.INTEL_ME, RegionType.TXE)]
@@ -340,7 +352,7 @@ class BiosAnalyzer:
 
             for i in range(entries):
                 entry_off = fpt_pos + 0x20 + i * 0x20
-                entry_name = data[entry_off:entry_off + 4]
+                entry_name = data[entry_off : entry_off + 4]
                 if entry_name in (b"FTPR", b"$MN2", b"ME  "):
                     version = self._decode_me_version(data, me_r)
                     if version:
@@ -351,7 +363,9 @@ class BiosAnalyzer:
     def _manifest_me_version(data: bytes) -> str:
         """Most common version among the ME/CSME manifests in the image (FPT not decodable)."""
         from collections import Counter
+
         from bios_recovery.core.me_manifest import iter_manifest_versions
+
         versions = Counter(v for v, _base in iter_manifest_versions(data))
         return versions.most_common(1)[0][0] if versions else ""
 
@@ -359,7 +373,7 @@ class BiosAnalyzer:
         from bios_recovery.utils.me_manifest import detect_me_version_best
 
         search_end = min(me_region.offset + me_region.size, len(data))
-        region = data[me_region.offset:search_end]
+        region = data[me_region.offset : search_end]
         return detect_me_version_best(region)
 
     def _get_me_type(self, data: bytes, regions: list[RegionInfo]) -> str:
@@ -378,7 +392,9 @@ class BiosAnalyzer:
             return "CSME"
         return f"CSME {major}"
 
-    def _find_issues(self, data: bytes, regions: list[RegionInfo], bios_type: BiosType) -> list[str]:
+    def _find_issues(
+        self, data: bytes, regions: list[RegionInfo], bios_type: BiosType
+    ) -> list[str]:
         issues = []
         if not regions:
             issues.append("No recognizable firmware regions found")
@@ -398,10 +414,14 @@ class BiosAnalyzer:
         fpt_headers = self._fpt_headers(data)
         if len(fpt_headers) > 1:
             issues.append(
-                f"Conflicting FPT headers found ({len(fpt_headers)} different) - possible dual-ME or corruption")
+                f"Conflicting FPT headers found ({len(fpt_headers)} different) - "
+                f"possible dual-ME or corruption"
+            )
 
         if bios_type == BiosType.UNKNOWN:
-            issues.append("Could not identify BIOS type - file may be corrupt or unsupported format")
+            issues.append(
+                "Could not identify BIOS type - file may be corrupt or unsupported format"
+            )
 
         return issues
 
@@ -438,26 +458,36 @@ class BiosAnalyzer:
 
     def _fpt_headers(self, data: bytes) -> set[bytes]:
         """Distinct FPT header blocks in the image (identical copies count once)."""
-        return {bytes(data[p:p + 0x20]) for p in self._fpt_positions(data)}
+        return {bytes(data[p : p + 0x20]) for p in self._fpt_positions(data)}
 
-    def _find_warnings(self, data: bytes, regions: list[RegionInfo], bios_type: BiosType) -> list[str]:
+    def _find_warnings(
+        self, data: bytes, regions: list[RegionInfo], bios_type: BiosType
+    ) -> list[str]:
         warnings = []
         padding = self._padding_after_chip(data)
         if padding and len(data) % 0x1000:
             chip = len(data) - padding
             warnings.append(
-                f"{padding} bytes past the 0x{chip:X} chip image are 0xFF padding (dumper over-read); not an error")
+                f"{padding} bytes past the 0x{chip:X} chip image are 0xFF padding "
+                f"(dumper over-read); not an error"
+            )
         copies = len(self._fpt_positions(data))
         if copies > 1 and len(self._fpt_headers(data)) == 1:
-            warnings.append(f"FPT header appears {copies} times with identical content (duplicate copy)")
+            warnings.append(
+                f"FPT header appears {copies} times with identical content (duplicate copy)"
+            )
         if len(data) < 0x10000:
             warnings.append("File is smaller than 64KB - may be an incomplete dump")
         fd_region = [r for r in regions if r.region_type == RegionType.FLASH_DESCRIPTOR]
         if fd_region and fd_region[0].offset == 0x10:
-            warnings.append("Flash Descriptor at 0x10: a 16-byte header precedes the chip image (not an error)")
+            warnings.append(
+                "Flash Descriptor at 0x10: a 16-byte header precedes the chip image (not an error)"
+            )
 
         if len(data) > 0x2000000:
-            warnings.append(f"File is {len(data) / 0x100000:.1f} MB - unusually large for a BIOS image")
+            warnings.append(
+                f"File is {len(data) / 0x100000:.1f} MB - unusually large for a BIOS image"
+            )
 
         non_standard = [r for r in regions if r.region_type == RegionType.UNKNOWN]
         if non_standard:

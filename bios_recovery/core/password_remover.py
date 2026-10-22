@@ -1,7 +1,7 @@
 """BIOS password removal engine - supports multiple manufacturers."""
 
-import struct
 import os
+import struct
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
@@ -116,12 +116,14 @@ class PasswordRemover:
                 idx = data.find(var_name, offset)
                 if idx < 0:
                     break
-                report.found_passwords.append({
-                    "type": PasswordType.AMI_SETUP_PASSWORD,
-                    "name": var_name.decode("utf-16-le", errors="replace"),
-                    "offset": idx,
-                    "size": len(var_name),
-                })
+                report.found_passwords.append(
+                    {
+                        "type": PasswordType.AMI_SETUP_PASSWORD,
+                        "name": var_name.decode("utf-16-le", errors="replace"),
+                        "offset": idx,
+                        "size": len(var_name),
+                    }
+                )
                 report.messages.append(f"Found AMI password variable at {idx:#x}")
                 offset = idx + 1
 
@@ -135,12 +137,14 @@ class PasswordRemover:
             if idx + 4 <= len(data):
                 var_size = struct.unpack_from("<I", data, idx)[0]
                 if 0x10 <= var_size <= 0x10000:
-                    report.found_passwords.append({
-                        "type": PasswordType.UEFI_PASSWORD,
-                        "name": "UEFI Variable",
-                        "offset": idx,
-                        "size": var_size,
-                    })
+                    report.found_passwords.append(
+                        {
+                            "type": PasswordType.UEFI_PASSWORD,
+                            "name": "UEFI Variable",
+                            "offset": idx,
+                            "size": var_size,
+                        }
+                    )
             offset = idx + 4
 
     def _find_lenovo_passwords(self, data: bytearray, report: PasswordRemovalReport) -> None:
@@ -150,12 +154,14 @@ class PasswordRemover:
             idx = data.find(ce_pattern, offset)
             if idx < 0:
                 break
-            report.found_passwords.append({
-                "type": PasswordType.LENOVO_PASSWORD,
-                "name": "cE! security variable",
-                "offset": idx,
-                "size": 8,
-            })
+            report.found_passwords.append(
+                {
+                    "type": PasswordType.LENOVO_PASSWORD,
+                    "name": "cE! security variable",
+                    "offset": idx,
+                    "size": 8,
+                }
+            )
             report.messages.append(f"Found Lenovo security variable at {idx:#x}")
             offset = idx + 1
 
@@ -166,12 +172,14 @@ class PasswordRemover:
                 idx = data.find(pattern, offset)
                 if idx < 0:
                     break
-                report.found_passwords.append({
-                    "type": PasswordType.DELL_ADMIN_PASSWORD,
-                    "name": f"Dell {pattern.decode()} password marker",
-                    "offset": idx,
-                    "size": len(pattern),
-                })
+                report.found_passwords.append(
+                    {
+                        "type": PasswordType.DELL_ADMIN_PASSWORD,
+                        "name": f"Dell {pattern.decode()} password marker",
+                        "offset": idx,
+                        "size": len(pattern),
+                    }
+                )
                 report.messages.append(f"Found Dell password marker at {idx:#x}")
                 offset = idx + 1
 
@@ -191,12 +199,14 @@ class PasswordRemover:
                 if idx < 0:
                     break
                 if idx - last_match >= min_separation:
-                    report.found_passwords.append({
-                        "type": PasswordType.HP_PASSWORD,
-                        "name": "HP password region",
-                        "offset": idx,
-                        "size": len(marker),
-                    })
+                    report.found_passwords.append(
+                        {
+                            "type": PasswordType.HP_PASSWORD,
+                            "name": "HP password region",
+                            "offset": idx,
+                            "size": len(marker),
+                        }
+                    )
                     found += 1
                     last_match = idx
                 offset = idx + 1
@@ -258,12 +268,14 @@ class PasswordRemover:
                     idx = data.find(pattern, offset)
                     if idx < 0:
                         break
-                    found.append({
-                        "type": pattern_name.name,
-                        "pattern": pattern.hex(),
-                        "offset": f"{idx:#x}",
-                        "context": data[max(0, idx - 8):idx + len(pattern) + 8].hex(),
-                    })
+                    found.append(
+                        {
+                            "type": pattern_name.name,
+                            "pattern": pattern.hex(),
+                            "offset": f"{idx:#x}",
+                            "context": data[max(0, idx - 8) : idx + len(pattern) + 8].hex(),
+                        }
+                    )
                     offset = idx + 1
 
         return found

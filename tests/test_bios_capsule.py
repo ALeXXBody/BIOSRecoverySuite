@@ -30,7 +30,7 @@ def _mk_fv(body):
     struct.pack_into("<H", fv, 0x32, 0)
     struct.pack_into("<H", fv, 0x32, (-sum(struct.unpack_from("<36H", fv, 0))) & 0xFFFF)
     blob = bytes(body)
-    fv[0x48:0x48 + len(blob)] = blob[:FV_LEN - 0x48]
+    fv[0x48 : 0x48 + len(blob)] = blob[: FV_LEN - 0x48]
     return bytes(fv)
 
 
@@ -73,7 +73,7 @@ def test_restore_nvar_restores_dump_region(tmp_path):
     """Merge semantics: NV/machine FVs come from the dump; capsule code stays."""
     factory_rec = _nvar_record(b"Setup", b"\x01" * 8)
     cap_image = bytearray(b"\xff" * 0x2000000)
-    cap_image[NV_BASE:NV_BASE + FV_LEN] = _mk_fv(factory_rec)
+    cap_image[NV_BASE : NV_BASE + FV_LEN] = _mk_fv(factory_rec)
     cap_path = tmp_path / "test.308"
     cap_path.write_bytes(_mk_capsule(bytes(cap_image)))
     out = extract_flashable_image(str(cap_path))
@@ -82,11 +82,12 @@ def test_restore_nvar_restores_dump_region(tmp_path):
     machine_rec = _nvar_record(b"Setup", b"\x42" * 8) + b"SERIAL-BLOB" + b"\xff" * 0x100
     mfg_blob = b"MFG0\x00T6N0CV09125124A" + b"\xff" * 0x40
     dump = bytearray(b"\xff" * 0x2000000)
-    dump[NV_BASE:NV_BASE + FV_LEN] = _mk_fv(machine_rec)
-    dump[MFG_BASE:MFG_BASE + FV_LEN] = _mk_fv(mfg_blob)
+    dump[NV_BASE : NV_BASE + FV_LEN] = _mk_fv(machine_rec)
+    dump[MFG_BASE : MFG_BASE + FV_LEN] = _mk_fv(mfg_blob)
 
     res = restore_nvar_from_dump(
-        out.output_path, _write(tmp_path / "dump.bin", bytes(dump)),
+        out.output_path,
+        _write(tmp_path / "dump.bin", bytes(dump)),
         str(tmp_path / "merged.bin"),
     )
     assert res.success

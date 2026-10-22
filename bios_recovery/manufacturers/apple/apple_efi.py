@@ -23,7 +23,6 @@ import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 FSYS_MARKER = b"Fsys\x01"
 CRC32_SIZE = 4
 
@@ -38,8 +37,8 @@ class FsysStoreInfo:
     found: bool = False
     base_address: int = -1
     size: int = 0
-    crc_stored: Optional[int] = None     # as stored (flipped) on flash
-    crc_computed: Optional[int] = None   # crc32(size-4 bytes)
+    crc_stored: Optional[int] = None  # as stored (flipped) on flash
+    crc_computed: Optional[int] = None  # crc32(size-4 bytes)
     checksum_valid: Optional[bool] = None
     serial: Optional[str] = None
     serial_base: int = -1
@@ -73,7 +72,7 @@ def _scan_string(data: bytes, pos: int, end: int) -> Optional[str]:
     ln = data[pos]
     if ln == 0 or pos + 1 + ln > end or pos + 1 + ln > len(data):
         return None
-    raw = bytes(data[pos + 1:pos + 1 + ln])
+    raw = bytes(data[pos + 1 : pos + 1 + ln])
     if raw == b"\xff" * ln:
         return None  # erased
     return raw.decode("ascii", errors="replace")
@@ -94,19 +93,19 @@ def parse_fsys_store(data: bytes) -> FsysStoreInfo:
         info.notes.append(f"implausible store size {info.size:#x}")
         return info
 
-    buf = bytes(data[base:base + info.size])
+    buf = bytes(data[base : base + info.size])
     # stored CRC: last 4 bytes, byte-flipped
     stored_flipped = buf[-CRC32_SIZE:]
-    info.crc_computed = binascii.crc32(buf[:info.size - CRC32_SIZE]) & 0xFFFFFFFF
+    info.crc_computed = binascii.crc32(buf[: info.size - CRC32_SIZE]) & 0xFFFFFFFF
     # flip the computed value to compare with the stored (reversed) bytes
     computed_flipped = int.from_bytes(stored_flipped, "little")
     info.crc_stored = computed_flipped
     # For verification we compare stored == crc32 computed over data minus crc:
     # stored bytes encode the SAME crc value byte-reversed.
     stored_value = int.from_bytes(stored_flipped, "little")
-    computed = binascii.crc32(buf[:info.size - CRC32_SIZE]) & 0xFFFFFFFF
+    computed = binascii.crc32(buf[: info.size - CRC32_SIZE]) & 0xFFFFFFFF
     info.crc_computed = computed
-    info.checksum_valid = (stored_value == computed)
+    info.checksum_valid = stored_value == computed
 
     # variables
     end = base + info.size
@@ -164,12 +163,14 @@ def fix_fsys_checksum(file_path: str, output_path: Optional[str] = None) -> Appl
         rep.success = True
         return rep
 
-    crc = binascii.crc32(
-        bytes(data[fsys.base_address:fsys.base_address + fsys.size - CRC32_SIZE])
-    ) & 0xFFFFFFFF
+    crc = (
+        binascii.crc32(bytes(data[fsys.base_address : fsys.base_address + fsys.size - CRC32_SIZE]))
+        & 0xFFFFFFFF
+    )
     # stored byte-reversed
-    data[fsys.base_address + fsys.size - CRC32_SIZE:fsys.base_address + fsys.size] = \
-        crc.to_bytes(CRC32_SIZE, "little")
+    data[fsys.base_address + fsys.size - CRC32_SIZE : fsys.base_address + fsys.size] = crc.to_bytes(
+        CRC32_SIZE, "little"
+    )
 
     # verify
     again = parse_fsys_store(bytes(data))
@@ -183,7 +184,9 @@ def fix_fsys_checksum(file_path: str, output_path: Optional[str] = None) -> Appl
         f.write(bytes(data))
     rep.success = True
     rep.message = "Fsys checksum repaired and verified"
-    rep.operations.append(f"CRC32 0x{crc:08X} written at 0x{fsys.base_address + fsys.size - CRC32_SIZE:x}")
+    rep.operations.append(
+        f"CRC32 0x{crc:08X} written at 0x{fsys.base_address + fsys.size - CRC32_SIZE:x}"
+    )
     rep.output_path = output_path
     return rep
 
@@ -212,7 +215,7 @@ def replace_fsys_store(
         )
         return rep
 
-    data[fsys.base_address:fsys.base_address + fsys.size] = donor
+    data[fsys.base_address : fsys.base_address + fsys.size] = donor
 
     fixed = fix_fsys_checksum_from_buffer(data, fsys.base_address, fsys.size)
     if fixed is None:
@@ -232,9 +235,9 @@ def replace_fsys_store(
 
 def fix_fsys_checksum_from_buffer(data: bytearray, base: int, size: int) -> Optional[list]:
     """Repair CRC32 within a buffer; returns operation strings on success."""
-    computed = binascii.crc32(bytes(data[base:base + size - CRC32_SIZE])) & 0xFFFFFFFF
-    data[base + size - CRC32_SIZE:base + size] = computed.to_bytes(CRC32_SIZE, "little")
-    verify = binascii.crc32(bytes(data[base:base + size - CRC32_SIZE])) & 0xFFFFFFFF
+    computed = binascii.crc32(bytes(data[base : base + size - CRC32_SIZE])) & 0xFFFFFFFF
+    data[base + size - CRC32_SIZE : base + size] = computed.to_bytes(CRC32_SIZE, "little")
+    verify = binascii.crc32(bytes(data[base : base + size - CRC32_SIZE])) & 0xFFFFFFFF
     if verify != computed:
         return None
     return [f"CRC32 0x{computed:08X} written at 0x{base + size - CRC32_SIZE:x}"]
@@ -265,7 +268,7 @@ def set_serial_number(
         return rep
 
     s_start = fsys.serial_base
-    data[s_start:s_start + s_len] = new_serial.encode("ascii")
+    data[s_start : s_start + s_len] = new_serial.encode("ascii")
 
     fixed = fix_fsys_checksum_from_buffer(data, fsys.base_address, fsys.size)
     if fixed is None:

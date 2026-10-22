@@ -118,7 +118,8 @@ class ManufacturerProfiles:
                 ],
                 uses_flash_descriptor=True,
                 common_flash_sizes=[0x800000, 0x1000000, 0x2000000],
-                notes="Dell uses PFS (Packaged Firmware Suite) format for updates. BIOS is typically 8-32MB.",
+                notes="Dell uses PFS (Packaged Firmware Suite) format for updates. "
+                      "BIOS is typically 8-32MB.",
             ),
             Manufacturer.HP: ManufacturerProfile(
                 manufacturer=Manufacturer.HP,
@@ -154,7 +155,8 @@ class ManufacturerProfiles:
                 ],
                 uses_flash_descriptor=True,
                 common_flash_sizes=[0x400000, 0x800000, 0x1000000],
-                notes="Newer HP models use Insyde firmware with signed EC. Password removal may require EC patch.",
+                notes="Newer HP models use Insyde firmware with signed EC. "
+                      "Password removal may require EC patch.",
             ),
             Manufacturer.LENOVO: ManufacturerProfile(
                 manufacturer=Manufacturer.LENOVO,
@@ -178,7 +180,8 @@ class ManufacturerProfiles:
                 ],
                 uses_flash_descriptor=True,
                 common_flash_sizes=[0x400000, 0x800000, 0x1000000, 0x2000000],
-                notes="Modern Lenovo (8th gen+) requires EC patch for password removal. Uses MEC15XX/MEC17XX chips.",
+                notes="Modern Lenovo (8th gen+) requires EC patch for password removal. "
+                      "Uses MEC15XX/MEC17XX chips.",
             ),
             Manufacturer.ASUS: ManufacturerProfile(
                 manufacturer=Manufacturer.ASUS,
@@ -271,7 +274,8 @@ class ManufacturerProfiles:
                 ],
                 uses_flash_descriptor=False,
                 common_flash_sizes=[0x400000, 0x800000],
-                notes="Apple uses proprietary EFI. Password removal requires FSC block CRC calculation.",
+                notes="Apple uses proprietary EFI. "
+                      "Password removal requires FSC block CRC calculation.",
             ),
             Manufacturer.FUJITSU: ManufacturerProfile(
                 manufacturer=Manufacturer.FUJITSU,

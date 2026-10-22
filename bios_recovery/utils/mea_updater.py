@@ -69,10 +69,13 @@ def is_mea_newer(remote_tag: str, local_tag: str) -> bool:
 
 
 def _get_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
-    })
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": USER_AGENT,
+        },
+    )
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
         return json.load(resp)
 
@@ -123,7 +126,11 @@ def check_mea_update(local_mea_py: str) -> dict:
         status = "same version (revision unknown)"
         newer = False
     else:
-        status = "newer release available" if is_mea_newer(remote.tag, f"v{local}" if local else "") else "up to date"
+        status = (
+            "newer release available"
+            if is_mea_newer(remote.tag, f"v{local}" if local else "")
+            else "up to date"
+        )
         newer = status == "newer release available"
     return {
         "local_version": local,

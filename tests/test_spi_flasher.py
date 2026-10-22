@@ -4,8 +4,7 @@ import os
 
 import pytest
 
-from bios_recovery.apps.spi_flasher import SPIFlasher, ChipInfo, SPIStatus
-
+from bios_recovery.apps.spi_flasher import ChipInfo, SPIFlasher, SPIStatus
 
 FAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_flashrom.py")
 
@@ -41,7 +40,7 @@ def test_read_chip(flasher, tmp_path):
 def test_write_requires_consent(flasher, tmp_path):
     image = str(tmp_path / "img.bin")
     with open(image, "wb") as f:
-        f.write(b"\xAB" * 4096)
+        f.write(b"\xab" * 4096)
     result = flasher.write_chip(image, "ch341a_spi", consent=False)
     assert result.status == SPIStatus.DENIED
 
@@ -49,7 +48,7 @@ def test_write_requires_consent(flasher, tmp_path):
 def test_write_with_consent(flasher, tmp_path):
     image = str(tmp_path / "img.bin")
     with open(image, "wb") as f:
-        f.write(b"\xAB" * 4096)
+        f.write(b"\xab" * 4096)
     result = flasher.write_chip(image, "ch341a_spi", consent=True, verify=True)
     assert result.status == SPIStatus.SUCCESS
 

@@ -12,11 +12,10 @@ IndiaFix/badcaps "HP Unlocker" / "RC Unlocker" drag-drop tools use):
 Always flash back the original dump afterwards unless instructed otherwise.
 """
 
-
-_USER_CRED = b'U\x00s\x00e\x00r\x00C\x00r\x00e\x00d'
-_VSS_MAGIC = b'$VSS'
-_VSS_KEY = b'B\x00i\x00o\x00s\x00U\x00s\x00e\x00r'
-_VSS_END = b'\xaaU'
+_USER_CRED = b"U\x00s\x00e\x00r\x00C\x00r\x00e\x00d"
+_VSS_MAGIC = b"$VSS"
+_VSS_KEY = b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r"
+_VSS_END = b"\xaaU"
 
 
 class HPUnlocker:
@@ -50,8 +49,13 @@ class HPUnlocker:
         with open(image_path, "rb") as f:
             data = bytearray(f.read())
 
-        report = {"success": False, "style": None, "cleared": 0,
-                  "output_path": output_path, "messages": []}
+        report = {
+            "success": False,
+            "style": None,
+            "cleared": 0,
+            "output_path": output_path,
+            "messages": [],
+        }
 
         loc = data.find(_USER_CRED)
         if loc >= 0:
@@ -64,8 +68,7 @@ class HPUnlocker:
                     data[pos] = 0xFF if 10 <= j < 14 else 0x00
             report["cleared"] = 1
             report["success"] = True
-            report["messages"].append(
-                f"UserCred credential block cleared at 0x{loc:X}")
+            report["messages"].append(f"UserCred credential block cleared at 0x{loc:X}")
         else:
             report["style"] = "old"
             search_from = 0
@@ -84,12 +87,11 @@ class HPUnlocker:
                 search_from = loc_start
             if report["cleared"]:
                 report["success"] = True
-                report["messages"].append(
-                    f"Cleared {report['cleared']} $VSS/BiosUser entr(ies)")
+                report["messages"].append(f"Cleared {report['cleared']} $VSS/BiosUser entr(ies)")
             else:
                 report["messages"].append(
-                    "ERROR: unable to find HP BIOS password - "
-                    "is this a correct HP BIOS image?")
+                    "ERROR: unable to find HP BIOS password - is this a correct HP BIOS image?"
+                )
 
         with open(output_path, "wb") as f:
             f.write(bytes(data))

@@ -44,8 +44,11 @@ GLOBAL_GUID = "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
 
 def guid_to_bytes(guid: str) -> bytes:
     p = guid.strip("{}").split("-")
-    return (struct.pack("<IHH", int(p[0], 16), int(p[1], 16), int(p[2], 16))
-            + bytes.fromhex(p[3]) + bytes.fromhex(p[4]))
+    return (
+        struct.pack("<IHH", int(p[0], 16), int(p[1], 16), int(p[2], 16))
+        + bytes.fromhex(p[3])
+        + bytes.fromhex(p[4])
+    )
 
 
 def bytes_to_guid(b: bytes) -> str:
@@ -60,22 +63,22 @@ def _align(x: int, a: int) -> int:
 @dataclass
 class SectionNode:
     stype: int
-    off: int                  # offset of section start within its storage buffer
+    off: int  # offset of section start within its storage buffer
     hdr_size: int
     body_off: int
     body_size: int
     guid: Optional[str] = None
-    comp: Optional[str] = None          # 'lzma' | 'lzmaf86' | 'efi' | 'tiano'
-    kind: str = "raw"                   # raw | sections | fv | unknown
-    data: Optional[bytearray] = None    # decompressed content; ONLY storage owners own this
-    children: list = field(default_factory=list)   # SectionNode or FileNode
+    comp: Optional[str] = None  # 'lzma' | 'lzmaf86' | 'efi' | 'tiano'
+    kind: str = "raw"  # raw | sections | fv | unknown
+    data: Optional[bytearray] = None  # decompressed content; ONLY storage owners own this
+    children: list = field(default_factory=list)  # SectionNode or FileNode
     parent_file: Optional["FileNode"] = None
 
 
 @dataclass(eq=False)
 class FileNode:
     guid: str
-    off: int                  # offset within its storage buffer (image if storage is None)
+    off: int  # offset within its storage buffer (image if storage is None)
     hdr_size: int
     size: int
     ftype: int
@@ -83,7 +86,7 @@ class FileNode:
     state: int
     align: int
     sections: list = field(default_factory=list)
-    storage: Optional[SectionNode] = None   # owning lzma container; None = image buffer
+    storage: Optional[SectionNode] = None  # owning lzma container; None = image buffer
     dirty: bool = False
 
 
@@ -121,8 +124,7 @@ class UEFIPatcher:
                 if m:
                     key, val = m.group(1), m.group(2).strip()
                     if key == "group":
-                        cur = {"key": val, "desc": "", "models": "", "source": "",
-                               "lines": []}
+                        cur = {"key": val, "desc": "", "models": "", "source": "", "lines": []}
                         self.groups.append(cur)
                     elif cur is not None and key in ("desc", "models", "source"):
                         cur[key] = val
@@ -167,7 +169,7 @@ class UEFIPatcher:
                 break
             fv_start = idx - 0x28
             if fv_start >= 0 and fv_start + 0x48 <= len(data):
-                fs_guid = bytes_to_guid(data[fv_start + 0x10:fv_start + 0x20])
+                fs_guid = bytes_to_guid(data[fv_start + 0x10 : fv_start + 0x20])
                 if fs_guid in (FFS2_GUID, FFS3_GUID):
                     fv_len = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
                     hdr_len = struct.unpack_from("<H", data, fv_start + 0x30)[0]
@@ -177,15 +179,22 @@ class UEFIPatcher:
             idx += 4
         return out
 
-    def parse_fv_files(self, buf, fv_off: int, fv_len: int, hdr_len: int,
-                       attrs: int, storage: Optional[SectionNode]) -> list[FileNode]:
+    def parse_fv_files(
+        self,
+        buf,
+        fv_off: int,
+        fv_len: int,
+        hdr_len: int,
+        attrs: int,
+        storage: Optional[SectionNode],
+    ) -> list[FileNode]:
         polarity = bool(attrs & ERASE_POLARITY_BIT)
         files = []
         off = fv_off + hdr_len
         end = fv_off + fv_len
         resync_tries = 0
         while off + FFS_MIN_HEADER <= end:
-            hdr = buf[off:off + FFS_MIN_HEADER]
+            hdr = buf[off : off + FFS_MIN_HEADER]
             free = (all(b == 0x00 for b in hdr)) if polarity else (all(b == 0xFF for b in hdr))
             if free:
                 break
@@ -208,8 +217,12 @@ class UEFIPatcher:
             resync_tries = 0
             node = FileNode(
                 guid=bytes_to_guid(hdr[0:16]),
-                off=off, hdr_size=hdr_size, size=size,
-                ftype=hdr[0x12], attrs=attrs_f, state=state,
+                off=off,
+                hdr_size=hdr_size,
+                size=size,
+                ftype=hdr[0x12],
+                attrs=attrs_f,
+                state=state,
                 align=max(8, 1 << ((attrs_f >> 3) & 0x07)),
                 storage=storage,
             )
@@ -218,8 +231,9 @@ class UEFIPatcher:
             off = _align(off + size, 8)
         return files
 
-    def parse_sections(self, buf, base: int, parent_file: FileNode,
-                       storage: Optional[SectionNode]) -> list:
+    def parse_sections(
+        self, buf, base: int, parent_file: FileNode, storage: Optional[SectionNode]
+    ) -> list:
         """Parse a section chain inside `buf`; base = chain offset within buf."""
         out = []
         off = base
@@ -236,14 +250,19 @@ class UEFIPatcher:
             if size < hdr or off + size > end:
                 break
             body_off = off + hdr
-            node = SectionNode(stype=stype, off=off, hdr_size=hdr,
-                               body_off=body_off, body_size=size - hdr,
-                               parent_file=parent_file)
+            node = SectionNode(
+                stype=stype,
+                off=off,
+                hdr_size=hdr,
+                body_off=body_off,
+                body_size=size - hdr,
+                parent_file=parent_file,
+            )
 
             if stype == SEC_GUID_DEFINED and body_off + 20 <= off + size:
-                node.guid = bytes_to_guid(buf[body_off:body_off + 16])
+                node.guid = bytes_to_guid(buf[body_off : body_off + 16])
                 data_off = struct.unpack_from("<H", buf, body_off + 16)[0]
-                payload = bytes(buf[off + data_off:off + size])
+                payload = bytes(buf[off + data_off : off + size])
                 if node.guid == LZMA_GUID:
                     node.comp = "lzma"
                     try:
@@ -257,8 +276,9 @@ class UEFIPatcher:
                             node.kind = "sections"
                             node.children = kids
                         else:
-                            fv_files = self.parse_fv_files(node.data, 0, len(node.data),
-                                                           0x48, 0, child_storage)
+                            fv_files = self.parse_fv_files(
+                                node.data, 0, len(node.data), 0x48, 0, child_storage
+                            )
                             if fv_files:
                                 node.kind = "fv"
                                 node.children = fv_files
@@ -280,8 +300,7 @@ class UEFIPatcher:
                     node.kind = "unknown"
             elif stype == SEC_FV_IMAGE:
                 node.kind = "fv"
-                node.children = self.parse_fv_files(buf, body_off, size - hdr,
-                                                    0x48, 0, storage)
+                node.children = self.parse_fv_files(buf, body_off, size - hdr, 0x48, 0, storage)
             out.append(node)
             off = _align(off + size, 4)
         return out
@@ -370,7 +389,7 @@ class UEFIPatcher:
             for guid, scope, ops in g["lines"]:
                 count = 0
                 for buf, off, length, _f, _owner in self._region_for_scope(image, guid, scope):
-                    region = bytes(buf[off:off + length])
+                    region = bytes(buf[off : off + length])
                     for fb, _rb in ops:
                         idx = region.find(fb)
                         while idx >= 0:
@@ -378,17 +397,20 @@ class UEFIPatcher:
                             idx = region.find(fb, idx + 1)
                 per_line.append(count)
                 total += count
-            result[g["key"]] = {"matches": total, "per_line": per_line,
-                                "desc": g["desc"], "models": g["models"]}
+            result[g["key"]] = {
+                "matches": total,
+                "per_line": per_line,
+                "desc": g["desc"],
+                "models": g["models"],
+            }
         return result
 
-    def apply(self, input_path: str, output_path: str,
-              group_keys: Optional[list] = None) -> dict:
+    def apply(self, input_path: str, output_path: str, group_keys: Optional[list] = None) -> dict:
         with open(input_path, "rb") as f:
             image = bytearray(f.read())
 
         wanted = set(group_keys) if group_keys else {g["key"] for g in self.groups}
-        dirty_storages = {}          # id(buffer) -> owner SectionNode
+        dirty_storages = {}  # id(buffer) -> owner SectionNode
         dirty_files = set()
         report = {"applied": [], "messages": [], "success": True}
 
@@ -401,11 +423,11 @@ class UEFIPatcher:
                     for fb, rb in ops:
                         idx = 0
                         while True:
-                            idx = bytes(buf[off:off + length]).find(fb, idx)
+                            idx = bytes(buf[off : off + length]).find(fb, idx)
                             if idx < 0:
                                 break
                             pos = off + idx
-                            buf[pos:pos + len(fb)] = rb
+                            buf[pos : pos + len(fb)] = rb
                             hits += 1
                             idx += len(rb)
                             if owner is not None:
@@ -417,7 +439,8 @@ class UEFIPatcher:
                 report["applied"].append({"group": g["key"], "patches": hits})
             else:
                 report["messages"].append(
-                    f"group '{g['key']}': no patterns matched (image unchanged by this group)")
+                    f"group '{g['key']}': no patterns matched (image unchanged by this group)"
+                )
 
         # file-level checksum refresh (equal-length patches only)
         for fnode in dirty_files:
@@ -428,7 +451,8 @@ class UEFIPatcher:
             if fnode.storage is not None:
                 raise UEFIPatchError(
                     "patched file lives inside a compressed container; "
-                    "single-level LZMA patching is supported")
+                    "single-level LZMA patching is supported"
+                )
             spliced = False
             for sec in fnode.sections:
                 if id(sec.data) in dirty_storages:
@@ -439,7 +463,8 @@ class UEFIPatcher:
                         if isinstance(deep, SectionNode) and id(deep.data) in dirty_storages:
                             raise UEFIPatchError(
                                 "patched content lives in a nested compressed container; "
-                                "single-level LZMA patching is supported")
+                                "single-level LZMA patching is supported"
+                            )
             if spliced:
                 dirty_files.discard(fnode)
 
@@ -456,7 +481,7 @@ class UEFIPatcher:
     def _refresh_file_checksums(self, image: bytearray, fnode: FileNode):
         buf = self._buffer_for(fnode, image)
         off = fnode.off
-        hdr = bytearray(buf[off:off + fnode.hdr_size])
+        hdr = bytearray(buf[off : off + fnode.hdr_size])
         if len(hdr) < fnode.hdr_size:
             return
         probe = bytearray(hdr)
@@ -465,16 +490,18 @@ class UEFIPatcher:
         probe[0x17] = 0
         hdr[0x10] = (0x100 - (sum(probe) & 0xFF)) & 0xFF
         if fnode.attrs & FFS_ATTRIB_CHECKSUM:
-            body = buf[off + fnode.hdr_size: off + fnode.size]
+            body = buf[off + fnode.hdr_size : off + fnode.size]
             hdr[0x11] = (0x100 - (sum(body) & 0xFF)) & 0xFF
         else:
             hdr[0x11] = 0xAA
-        buf[off:off + fnode.hdr_size] = hdr
+        buf[off : off + fnode.hdr_size] = hdr
 
     def _lzma_section_bytes(self, node: SectionNode) -> bytes:
-        payload = lzma.compress(bytes(node.data), format=lzma.FORMAT_ALONE,
-                                filters=[{"id": lzma.FILTER_LZMA1, "preset": 9,
-                                          "dict_size": 1 << 24}])
+        payload = lzma.compress(
+            bytes(node.data),
+            format=lzma.FORMAT_ALONE,
+            filters=[{"id": lzma.FILTER_LZMA1, "preset": 9, "dict_size": 1 << 24}],
+        )
         hdr_len = 4
         total = hdr_len + 20 + len(payload)
         if total <= 0xFFFFFF:
@@ -483,7 +510,7 @@ class UEFIPatcher:
         else:
             hdr_len = 8
             total = hdr_len + 20 + len(payload)
-            hdr = b"\xFF\xFF\xFF" + bytes([SEC_GUID_DEFINED]) + struct.pack("<I", total)
+            hdr = b"\xff\xff\xff" + bytes([SEC_GUID_DEFINED]) + struct.pack("<I", total)
             doff = hdr_len + 20
         body = guid_to_bytes(LZMA_GUID) + struct.pack("<HH", doff, 0x01) + payload
         return hdr + body
@@ -492,16 +519,16 @@ class UEFIPatcher:
         new_section = self._lzma_section_bytes(node)
 
         new_body = b""
-        for sec in fnode.sections:          # top-level sections only
+        for sec in fnode.sections:  # top-level sections only
             if sec is node:
                 raw = new_section
             else:
-                raw = bytes(image[sec.off:sec.off + sec.hdr_size + sec.body_size])
+                raw = bytes(image[sec.off : sec.off + sec.hdr_size + sec.body_size])
             new_body += raw
-            new_body += b"\xFF" * (_align(len(raw), 4) - len(raw))
+            new_body += b"\xff" * (_align(len(raw), 4) - len(raw))
         new_size = fnode.hdr_size + len(new_body)
 
-        hdr = bytearray(image[fnode.off:fnode.off + fnode.hdr_size])
+        hdr = bytearray(image[fnode.off : fnode.off + fnode.hdr_size])
         state = hdr[0x17]
         size3 = new_size if new_size <= 0xFFFFFF else 0xFFFFFF
         hdr[0x14] = size3 & 0xFF
@@ -521,8 +548,9 @@ class UEFIPatcher:
         new_file = bytes(hdr) + new_body
         self._splice_file_in_fv(image, fnode, new_file, state)
 
-    def _splice_file_in_fv(self, image: bytearray, fnode: FileNode,
-                           new_file: bytes, state: Optional[int] = None):
+    def _splice_file_in_fv(
+        self, image: bytearray, fnode: FileNode, new_file: bytes, state: Optional[int] = None
+    ):
         """Replace fnode's bytes with new_file inside its FV, shifting
         subsequent files (with alignment pad files) and restoring free space."""
         if state is None:
@@ -537,9 +565,13 @@ class UEFIPatcher:
         fv_off, fv_len, hdr_len = fv
 
         siblings = sorted(
-            (f for f in self.iter_files(image)
-             if f.storage is None and fv_off + hdr_len <= f.off < fv_off + fv_len),
-            key=lambda f: f.off)
+            (
+                f
+                for f in self.iter_files(image)
+                if f.storage is None and fv_off + hdr_len <= f.off < fv_off + fv_len
+            ),
+            key=lambda f: f.off,
+        )
 
         tail = []
         past = False
@@ -548,7 +580,7 @@ class UEFIPatcher:
                 tail.append((new_file, s.align, state))
                 past = True
             elif past:
-                tail.append((bytes(image[s.off:s.off + s.size]), s.align, s.state))
+                tail.append((bytes(image[s.off : s.off + s.size]), s.align, s.state))
 
         pos = fnode.off
         blob = bytearray()
@@ -560,15 +592,15 @@ class UEFIPatcher:
             blob += raw
             pos += len(raw)
         end = fv_off + fv_len
-        blob += b"\xFF" * (end - (fnode.off + len(blob)))
-        image[fnode.off:end] = blob
+        blob += b"\xff" * (end - (fnode.off + len(blob)))
+        image[fnode.off : end] = blob
 
     def _make_pad_file(self, pos: int, target: int, state: int) -> bytes:
         size = target - pos
         if size < 0x18:
             size = _align(pos + 0x18, 8) - pos
         hdr = bytearray(0x18)
-        hdr[0:16] = b"\xFF" * 16
+        hdr[0:16] = b"\xff" * 16
         hdr[0x12] = FFS_PAD_FILE
         hdr[0x14] = size & 0xFF
         hdr[0x15] = (size >> 8) & 0xFF
@@ -580,7 +612,7 @@ class UEFIPatcher:
         probe[0x17] = 0
         hdr[0x10] = (0x100 - (sum(probe) & 0xFF)) & 0xFF
         hdr[0x11] = 0xAA
-        return bytes(hdr) + b"\xFF" * (size - 0x18)
+        return bytes(hdr) + b"\xff" * (size - 0x18)
 
     # ------------------------------------------------------------------ #
     #  DXE driver replacement (Lenovo autopatch mechanism)               #
@@ -588,7 +620,9 @@ class UEFIPatcher:
 
     def _default_dxe_registry_path(self) -> str:
         here = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(os.path.dirname(os.path.dirname(here)), "patches", "dxe_replacements.json")
+        return os.path.join(
+            os.path.dirname(os.path.dirname(here)), "patches", "dxe_replacements.json"
+        )
 
     def load_dxe_replacements(self, registry_path: Optional[str] = None) -> list[dict]:
         path = registry_path or self._default_dxe_registry_path()
@@ -602,14 +636,16 @@ class UEFIPatcher:
         items = raw if isinstance(raw, list) else raw.get("replacements", [])
         out = []
         for it in items:
-            out.append({
-                "key": it.get("key", ""),
-                "file": it.get("file", ""),
-                "target_guid": it.get("target_guid", ""),
-                "description": it.get("description", ""),
-                "verified": bool(it.get("verified", False)),
-                "source": it.get("source", ""),
-            })
+            out.append(
+                {
+                    "key": it.get("key", ""),
+                    "file": it.get("file", ""),
+                    "target_guid": it.get("target_guid", ""),
+                    "description": it.get("description", ""),
+                    "verified": bool(it.get("verified", False)),
+                    "source": it.get("source", ""),
+                }
+            )
         return out
 
     def save_dxe_replacements(self, entries: list[dict], registry_path: Optional[str] = None):
@@ -648,7 +684,9 @@ class UEFIPatcher:
                 blob[0x16] = (size >> 16) & 0xFF
         else:
             if driver_bytes[:2] == b"MZ":
-                body = struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([SEC_PE32]) + driver_bytes
+                body = (
+                    struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([SEC_PE32]) + driver_bytes
+                )
             else:
                 # unknown payload: keep it verbatim in a RAW section
                 body = struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([0x19]) + driver_bytes
@@ -673,8 +711,9 @@ class UEFIPatcher:
             blob[0x11] = 0xAA
         return bytes(blob[:0x18]) + bytes(body)
 
-    def replace_ffs_file(self, image_path: str, output_path: str,
-                         target_guid: str, driver_path: str) -> dict:
+    def replace_ffs_file(
+        self, image_path: str, output_path: str, target_guid: str, driver_path: str
+    ) -> dict:
         """Replace the FFS file with target_guid by the provided driver binary."""
         with open(image_path, "rb") as f:
             image = bytearray(f.read())
@@ -689,17 +728,23 @@ class UEFIPatcher:
         if target is None:
             return {"success": False, "message": f"no FFS file with GUID {target_guid} found"}
         if target.storage is not None:
-            return {"success": False,
-                    "message": "target file lives inside a compressed container; not supported yet"}
+            return {
+                "success": False,
+                "message": "target file lives inside a compressed container; not supported yet",
+            }
 
         new_file = self.build_replacement_file(target, driver_bytes)
         self._splice_file_in_fv(image, target, new_file)
 
         with open(output_path, "wb") as f:
             f.write(bytes(image))
-        return {"success": True, "message": f"replaced FFS file {target_guid}",
-                "output_path": output_path,
-                "old_size": target.size, "new_size": len(new_file)}
+        return {
+            "success": True,
+            "message": f"replaced FFS file {target_guid}",
+            "output_path": output_path,
+            "old_size": target.size,
+            "new_size": len(new_file),
+        }
 
     def list_files(self, image_path: str) -> list[dict]:
         """Enumerate FFS files with driver names (from UI sections) for user guidance."""
@@ -711,18 +756,26 @@ class UEFIPatcher:
             for node in self._walk_nodes(fnode.sections):
                 if isinstance(node, SectionNode) and node.stype == 0x16:
                     buf = fnode.storage.data if fnode.storage is not None else image
-                    body = bytes(buf[node.body_off:node.body_off + node.body_size])
+                    body = bytes(buf[node.body_off : node.body_off + node.body_size])
                     try:
                         name = body.decode("utf-16-le", errors="replace").rstrip("\x00")
                     except Exception:
                         name = None
                     break
-            out.append({"guid": fnode.guid, "type": fnode.ftype, "size": fnode.size,
-                        "offset": fnode.off, "name": name})
+            out.append(
+                {
+                    "guid": fnode.guid,
+                    "type": fnode.ftype,
+                    "size": fnode.size,
+                    "offset": fnode.off,
+                    "name": name,
+                }
+            )
         return out
 
-    def derive_replacements(self, original_path: str, patched_path: str,
-                            out_dir: str) -> list[dict]:
+    def derive_replacements(
+        self, original_path: str, patched_path: str, out_dir: str
+    ) -> list[dict]:
         """Diff an original and a patched (e.g. badcaps-autopatched) dump and
         extract every replaced FFS file as a reusable replacement entry."""
         os.makedirs(out_dir, exist_ok=True)
@@ -739,30 +792,32 @@ class UEFIPatcher:
             onode = orig_files.get(guid)
             if onode is None:
                 continue
-            if bytes(orig[onode.off:onode.off + onode.size]) == \
-                    bytes(patched[pnode.off:pnode.off + pnode.size]):
+            if bytes(orig[onode.off : onode.off + onode.size]) == bytes(
+                patched[pnode.off : pnode.off + pnode.size]
+            ):
                 continue
             fname = f"{guid}.ffs"
             with open(os.path.join(out_dir, fname), "wb") as f:
-                f.write(bytes(patched[pnode.off:pnode.off + pnode.size]))
-            derived.append({
-                "key": f"derived_{guid.lower()[:8]}",
-                "file": fname,
-                "target_guid": guid,
-                "description": f"auto-derived replacement for {guid} "
-                               f"({'.'.join(str(seg) for seg in [pnode.ftype])})",
-                "verified": False,
-                "source": f"diffed pair {os.path.basename(original_path)} -> "
-                          f"{os.path.basename(patched_path)}",
-            })
+                f.write(bytes(patched[pnode.off : pnode.off + pnode.size]))
+            derived.append(
+                {
+                    "key": f"derived_{guid.lower()[:8]}",
+                    "file": fname,
+                    "target_guid": guid,
+                    "description": f"auto-derived replacement for {guid} "
+                    f"({'.'.join(str(seg) for seg in [pnode.ftype])})",
+                    "verified": False,
+                    "source": f"diffed pair {os.path.basename(original_path)} -> "
+                    f"{os.path.basename(patched_path)}",
+                }
+            )
         return derived
 
     # ------------------------------------------------------------------ #
     #  NVRAM clean pass (autopatch step 2)                               #
     # ------------------------------------------------------------------ #
 
-    def replace_nvram_volume(self, image_path: str, output_path: str,
-                             vol_path: str) -> dict:
+    def replace_nvram_volume(self, image_path: str, output_path: str, vol_path: str) -> dict:
         """Replace a firmware volume in-place with the supplied clean image.
 
         Faithful to the reference autopatcher: a target FV matches when its
@@ -777,7 +832,7 @@ class UEFIPatcher:
             return {"success": False, "message": "volume image too small"}
 
         pattern = vol[:48]
-        vol_size = int.from_bytes(vol[0x20:0x23], "little")   # FvLength, low 3 bytes
+        vol_size = int.from_bytes(vol[0x20:0x23], "little")  # FvLength, low 3 bytes
         vol_checksum = int.from_bytes(vol[0x32:0x34], "little")
 
         def _finish(res):
@@ -787,27 +842,48 @@ class UEFIPatcher:
 
         pos = image.find(pattern)
         if pos < 0:
-            return _finish({"success": False,
-                            "message": "no matching firmware volume found in image (NVRAM layout differs)",
-                            "skipped": True})
+            return _finish(
+                {
+                    "success": False,
+                    "message": "no matching firmware volume found in image (NVRAM layout differs)",
+                    "skipped": True,
+                }
+            )
         # FvLength low 3 bytes live at FV header offset 0x20..0x22 (little)
-        tgt_size = int.from_bytes(image[pos + 0x20:pos + 0x23], "little")
-        tgt_checksum = int.from_bytes(image[pos + 0x32:pos + 0x34], "little")
+        tgt_size = int.from_bytes(image[pos + 0x20 : pos + 0x23], "little")
+        tgt_checksum = int.from_bytes(image[pos + 0x32 : pos + 0x34], "little")
         if tgt_size != vol_size:
-            return _finish({"success": False, "skipped": True,
-                            "message": f"volume size mismatch (image {tgt_size} vs replacement {vol_size}) - skipped"})
+            return _finish(
+                {
+                    "success": False,
+                    "skipped": True,
+                    "message": f"volume size mismatch (image {tgt_size} vs "
+                    f"replacement {vol_size}) - skipped",
+                }
+            )
         if tgt_checksum != vol_checksum:
-            return _finish({"success": False, "skipped": True,
-                            "message": f"volume header checksum mismatch (image 0x{tgt_checksum:x} vs "
-                                       f"replacement 0x{vol_checksum:x}) - skipped"})
-        image[pos:pos + len(vol)] = vol
-        return _finish({"success": True, "message": f"NVRAM volume replaced at 0x{pos:X}",
-                        "output_path": output_path, "offset": pos})
+            return _finish(
+                {
+                    "success": False,
+                    "skipped": True,
+                    "message": f"volume header checksum mismatch (image 0x{tgt_checksum:x} vs "
+                    f"replacement 0x{vol_checksum:x}) - skipped",
+                }
+            )
+        image[pos : pos + len(vol)] = vol
+        return _finish(
+            {
+                "success": True,
+                "message": f"NVRAM volume replaced at 0x{pos:X}",
+                "output_path": output_path,
+                "offset": pos,
+            }
+        )
 
-    def run_autopatch(self, image_path: str, output_path: str,
-                      include_nvram: bool = True) -> dict:
+    def run_autopatch(self, image_path: str, output_path: str, include_nvram: bool = True) -> dict:
         """Full badcaps-style flow: DXE driver replacement, then NVRAM clean."""
         import shutil
+
         shutil.copyfile(image_path, output_path)
         report = {"steps": [], "success": True}
         patches_dir = os.path.dirname(self.patches_path)
@@ -815,19 +891,30 @@ class UEFIPatcher:
         for entry in self.load_dxe_replacements():
             bin_path = os.path.join(patches_dir, "dxe", entry["file"])
             if not os.path.exists(bin_path):
-                report["steps"].append({"step": entry["key"], "ok": False,
-                                        "message": f"binary missing: {entry['file']}"})
+                report["steps"].append(
+                    {
+                        "step": entry["key"],
+                        "ok": False,
+                        "message": f"binary missing: {entry['file']}",
+                    }
+                )
                 continue
             nxt = output_path + ".tmp"
             res = self.replace_ffs_file(output_path, nxt, entry["target_guid"], bin_path)
             if res["success"]:
                 shutil.move(nxt, output_path)
-                report["steps"].append({"step": entry["key"], "ok": True,
-                                        "message": res["message"]})
+                report["steps"].append(
+                    {"step": entry["key"], "ok": True, "message": res["message"]}
+                )
             else:
-                report["steps"].append({"step": entry["key"], "ok": False,
-                                        "message": res["message"],
-                                        "skipped": res.get("skipped", False)})
+                report["steps"].append(
+                    {
+                        "step": entry["key"],
+                        "ok": False,
+                        "message": res["message"],
+                        "skipped": res.get("skipped", False),
+                    }
+                )
 
         if include_nvram:
             vol_path = os.path.join(patches_dir, "dxe", "NVRAM_EfiSystemNvDataFvGuid.vol")
@@ -836,9 +923,14 @@ class UEFIPatcher:
                 res = self.replace_nvram_volume(output_path, nxt, vol_path)
                 if res["success"]:
                     shutil.move(nxt, output_path)
-                report["steps"].append({"step": "nvram_clean", "ok": res["success"],
-                                        "message": res["message"],
-                                        "skipped": res.get("skipped", False)})
+                report["steps"].append(
+                    {
+                        "step": "nvram_clean",
+                        "ok": res["success"],
+                        "message": res["message"],
+                        "skipped": res.get("skipped", False),
+                    }
+                )
 
         report["output_path"] = output_path
         report["success"] = any(s["ok"] for s in report["steps"])
@@ -850,11 +942,16 @@ class UEFIPatcher:
 
     CE_BACKDOOR_GUID = "6ACCE65D-DA35-4B39-B64B-5ED927A7DC7E"
     KNOWN_DRIVERS = [
-        "LenovoWmaPolicyDxe", "SystemFormBrowserCoreDxe", "SvpPasswdDxe",
-        "LenovoSvpPasswordDxe", "ThinkPadPasswordDxe", "H2OFormBrowserDxe",
-        "SetupUtilityApp", "LenovoSetupConfigurationDxe",
+        "LenovoWmaPolicyDxe",
+        "SystemFormBrowserCoreDxe",
+        "SvpPasswdDxe",
+        "LenovoSvpPasswordDxe",
+        "ThinkPadPasswordDxe",
+        "H2OFormBrowserDxe",
+        "SetupUtilityApp",
+        "LenovoSetupConfigurationDxe",
     ]
-    TAMPER_MARKER = bytes.fromhex("4C4E564242534543FB")   # LNVBBSEC + FB
+    TAMPER_MARKER = bytes.fromhex("4C4E564242534543FB")  # LNVBBSEC + FB
     TAMPER_PATCHED = bytes.fromhex("4C4E564242534543FF")  # LNVBBSEC + FF
 
     def detect_lenovo(self, image_path: str) -> dict:
@@ -886,8 +983,12 @@ class UEFIPatcher:
             ascii_hits = data.count(drv.encode("ascii"))
             utf16_hits = data.count(drv.encode("utf-16-le"))
             if ascii_hits or utf16_hits:
-                out["drivers"].append({"name": drv, "ascii_hits": ascii_hits,
-                                       "utf16_hits": utf16_hits})
-        out["is_lenovo"] = bool(out["drivers"]) or bool(out["ce_backdoor"]["guid_hits"]) \
+                out["drivers"].append(
+                    {"name": drv, "ascii_hits": ascii_hits, "utf16_hits": utf16_hits}
+                )
+        out["is_lenovo"] = (
+            bool(out["drivers"])
+            or bool(out["ce_backdoor"]["guid_hits"])
             or out["tamper_marker"] is not None
+        )
         return out

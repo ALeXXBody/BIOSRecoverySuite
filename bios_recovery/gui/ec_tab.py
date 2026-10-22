@@ -57,8 +57,7 @@ class ECTab(QWidget):
         override_group = QGroupBox("Manual region override (if auto-detect is wrong)")
         override_layout = QVBoxLayout(override_group)
 
-        self.override_check = QCheckBox(
-            "Use manual chip size instead of auto-detect")
+        self.override_check = QCheckBox("Use manual chip size instead of auto-detect")
         override_layout.addWidget(self.override_check)
 
         hint = QLabel(
@@ -78,9 +77,13 @@ class ECTab(QWidget):
         size_row.addWidget(self.override_offset, 1)
         size_row.addWidget(QLabel("Size:"))
         self.override_size = QComboBox()
-        self.override_size.addItems([
-            "0x20000 (128 KB)", "0x40000 (256 KB)", "0x80000 (512 KB)",
-        ])
+        self.override_size.addItems(
+            [
+                "0x20000 (128 KB)",
+                "0x40000 (256 KB)",
+                "0x80000 (512 KB)",
+            ]
+        )
         self.override_size.setCurrentIndex(1)
         size_row.addWidget(self.override_size)
         override_layout.addLayout(size_row)
@@ -123,7 +126,9 @@ class ECTab(QWidget):
         self.verified_label = QLabel("")
         patch_layout.addWidget(self.verified_label)
 
-        patch_layout.addWidget(QLabel("Only 'verified' patches are applied unless you explicitly accept the risk."))
+        patch_layout.addWidget(
+            QLabel("Only 'verified' patches are applied unless you explicitly accept the risk.")
+        )
         layout.addWidget(patch_group)
 
         self.patches_table = QTableWidget(0, 4)
@@ -161,7 +166,8 @@ class ECTab(QWidget):
             if p.key == key:
                 self.patch_desc.setText(p.description)
                 self.verified_label.setText(
-                    f"Verified: {'Yes' if p.verified else 'NO - unverified, apply at your own risk'}"
+                    "Verified: "
+                    + ("Yes" if p.verified else "NO - unverified, apply at your own risk")
                 )
                 return
         self.patch_desc.setText("")
@@ -169,7 +175,9 @@ class ECTab(QWidget):
 
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open SPI dump or EC firmware", "",
+            self,
+            "Open SPI dump or EC firmware",
+            "",
             "Binary (*.bin *.rom *.dump);;All Files (*)",
         )
         if path:
@@ -178,7 +186,9 @@ class ECTab(QWidget):
             self._log(f"Loaded {path}")
 
     def browse_extract(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save EC firmware", "ec_firmware.bin", "Binary (*.bin)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save EC firmware", "ec_firmware.bin", "Binary (*.bin)"
+        )
         if path:
             self.extract_path.setText(path)
 
@@ -208,7 +218,8 @@ class ECTab(QWidget):
             offset = int(raw, 16)
         except ValueError:
             QMessageBox.warning(
-                self, "Bad offset",
+                self,
+                "Bad offset",
                 f"'{raw}' is not a valid hex offset. Example: 1FC0000\n\n"
                 "Leave the offset blank to anchor the region at its detected "
                 "end using the selected chip size.",
@@ -234,8 +245,11 @@ class ECTab(QWidget):
             )
             self._log("EC not found.")
             return
-        checksum = "valid" if analysis.checksum_valid else (
-            "invalid/trailing" if analysis.checksum_valid is False else "n/a")
+        checksum = (
+            "valid"
+            if analysis.checksum_valid
+            else ("invalid/trailing" if analysis.checksum_valid is False else "n/a")
+        )
         lines = [
             "EC firmware found",
             f"  Offset: 0x{analysis.offset:X}",
@@ -252,8 +266,7 @@ class ECTab(QWidget):
             lines.append("")
             lines.append("  (manual chip size active -- verify before flashing)")
             if off_override is None:
-                lines.append(
-                    f"  (size 0x{size_override:X} anchored at the detected end)")
+                lines.append(f"  (size 0x{size_override:X} anchored at the detected end)")
         self.analysis_text.setPlainText("\n".join(lines))
         self.last_extracted = analysis
         self._log(f"Analyzed EC at 0x{analysis.offset:X} ({analysis.size:,} bytes).")
@@ -267,8 +280,7 @@ class ECTab(QWidget):
             out = self.current_dump.rsplit(".", 1)[0] + "_ec.bin"
             self.extract_path.setText(out)
         if os.path.exists(out):
-            answer = QMessageBox.question(
-                self, "Overwrite?", f"{out} already exists. Replace it?")
+            answer = QMessageBox.question(self, "Overwrite?", f"{out} already exists. Replace it?")
             if answer != QMessageBox.StandardButton.Yes:
                 return
         off_override, size_override = self._override_region()
@@ -277,7 +289,8 @@ class ECTab(QWidget):
         if result.status == ECStatus.SUCCESS:
             if off_override is not None or size_override is not None:
                 QMessageBox.information(
-                    self, "Extract",
+                    self,
+                    "Extract",
                     result.message + "\n\nExtracted using a MANUAL chip size -- "
                     "double-check this is the right region before flashing.",
                 )
@@ -313,6 +326,12 @@ class ECTab(QWidget):
         result = self.patcher.apply_patch(self.current_dump, key, require_verified=require_verified)
         self._log(result.message)
         if result.status == ECStatus.SUCCESS:
-            QMessageBox.information(self, "Applied", f"{result.message}\n\nOutput saved to: {result.output_path}")
+            QMessageBox.information(
+                self, "Applied", f"{result.message}\n\nOutput saved to: {result.output_path}"
+            )
         elif result.status != ECStatus.UNVERIFIED:
-            QMessageBox.warning(self, "Patch Not Applied", result.message + " (output written to existing file only if changed)")
+            QMessageBox.warning(
+                self,
+                "Patch Not Applied",
+                result.message + " (output written to existing file only if changed)",
+            )

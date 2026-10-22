@@ -26,10 +26,10 @@ SOURCES = (
 
 @dataclass(frozen=True)
 class ToolRule:
-    low: tuple          # inclusive lower bound of the ME version
-    high: tuple         # exclusive upper bound
-    release: str       # CSME System Tools release that carries the tool
-    confidence: str    # "listed" | "inferred" | "ambiguous"
+    low: tuple  # inclusive lower bound of the ME version
+    high: tuple  # exclusive upper bound
+    release: str  # CSME System Tools release that carries the tool
+    confidence: str  # "listed" | "inferred" | "ambiguous"
     note: str = ""
 
 
@@ -45,8 +45,13 @@ RULES: tuple = (
     ToolRule((12,), (13,), "v12 r38", "listed", "300 and C240 platforms"),
     ToolRule((13,), (13, 30), "v13.0 r7", "listed", "FIT 13.0.37.1556 comes from this release"),
     ToolRule((13, 30), (13, 50), "v13.30 r3", "listed"),
-    ToolRule((13, 50), (14, 0, 12), "v13.50 r3 or v14.0.11 r1", "ambiguous",
-             "one listing puts 13.50 r3 at CSME 14.0.11 and older; another lists v14.0.11 r1"),
+    ToolRule(
+        (13, 50),
+        (14, 0, 12),
+        "v13.50 r3 or v14.0.11 r1",
+        "ambiguous",
+        "one listing puts 13.50 r3 at CSME 14.0.11 and older; another lists v14.0.11 r1",
+    ),
     ToolRule((14, 0, 12), (14, 0, 20), "v14.0.11 r1", "inferred"),
     ToolRule((14, 0, 20), (14, 5), "v14.0.20 r20", "listed", "CSME 14.0.20 and newer"),
     ToolRule((14, 5), (15,), "v14.5 r7", "listed"),
@@ -54,8 +59,13 @@ RULES: tuple = (
     ToolRule((15, 40), (16,), "v15.40 r3", "listed"),
     ToolRule((16,), (16, 1), "v16.0 r8", "listed", "v16.0 r2 also exists"),
     ToolRule((16, 1), (16, 50), "v16.1 r0", "inferred", "MFIT 16.1 Linux64 build reported"),
-    ToolRule((16, 50), (17,), "v16.50", "listed",
-             "MFIT 16.50.0.1120 Linux64 with FWUpdate and MEInfo 16.50.20 (WinRaid listing)"),
+    ToolRule(
+        (16, 50),
+        (17,),
+        "v16.50",
+        "listed",
+        "MFIT 16.50.0.1120 Linux64 with FWUpdate and MEInfo 16.50.20 (WinRaid listing)",
+    ),
 )
 
 

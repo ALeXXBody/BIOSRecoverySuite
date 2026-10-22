@@ -11,10 +11,13 @@ BASEBOARD = "MT1234ABC"
 
 def _smbios_fixture():
     """Deterministic fixture: EPS @0x0000, structure table @0x0100, FF fill elsewhere."""
-    t1 = (bytes([1, 0x1B]) + struct.pack("<H", 0x0300) +   # type/length/handle
-          bytes([1, 2, 3, 4]) +                            # manufacturer/product/version/serial refs
-          bytes.fromhex(UUID) +                            # UUID at +0x08
-          bytes([0, 5, 6]))                                # wakeup, SKU ref, family ref
+    t1 = (
+        bytes([1, 0x1B])
+        + struct.pack("<H", 0x0300)  # type/length/handle
+        + bytes([1, 2, 3, 4])  # manufacturer/product/version/serial refs
+        + bytes.fromhex(UUID)  # UUID at +0x08
+        + bytes([0, 5, 6])
+    )  # wakeup, SKU ref, family ref
     pool1 = b"ASUS\0Vivobook\0V1\0" + SERIAL.encode() + b"\0\0"
     t2 = bytes([2, 0x08, 0x0301 % 256, 0x03]) + bytes([1, 2, 3, 3])
     pool2 = b"ASUS\0Go15\0" + BASEBOARD.encode() + b"\0\0"
@@ -28,8 +31,8 @@ def _smbios_fixture():
     # (fixture does not require a valid EPS checksum)
 
     blob = bytearray(b"\xff" * 0x2000)
-    blob[0:len(eps)] = eps
-    blob[0x0100:0x0100 + len(table)] = table
+    blob[0 : len(eps)] = eps
+    blob[0x0100 : 0x0100 + len(table)] = table
     return bytes(blob), len(table)
 
 
@@ -42,16 +45,15 @@ def test_dmi_info_reports_identity(tmp_path):
     assert info["serials"]["system"] == SERIAL
     assert info["serials"]["baseboard"] == BASEBOARD
     assert info["uuid"] == UUID
-    assert info["mac"] is None   # no Intel descriptor in this layout
+    assert info["mac"] is None  # no Intel descriptor in this layout
 
 
 def test_equal_length_serial_swap(tmp_path):
     blob, tlen = _smbios_fixture()
     p = tmp_path / "dump.bin"
     p.write_bytes(blob)
-    original_len = len(blob)
 
-    new_serial = "AS3ZZZD9kB"   # same length as SERIAL
+    new_serial = "AS3ZZZD9kB"  # same length as SERIAL
     assert len(new_serial) == len(SERIAL)
     rep = DMIEditor().set_identity(str(p), serial=new_serial)
 
@@ -75,7 +77,7 @@ def test_unequal_length_serial_refused(tmp_path):
 
     assert any("refused" in w for w in rep.warnings)
     out = open(rep.output_path, "rb").read() if rep.success else blob
-    assert SERIAL.encode() in out   # untouched
+    assert SERIAL.encode() in out  # untouched
 
 
 def test_uuid_fixed_write(tmp_path):

@@ -2,10 +2,10 @@
 
 import struct
 
-from tests.fixture_builder import build_intel_ifd_image
-from bios_recovery.platforms.intel.me.me_injector import MEInjector, detect_me_version_in_blob
 from bios_recovery.engines.dmi_clone import DMIClone
 from bios_recovery.engines.dmi_extractor import DMIExtractor
+from bios_recovery.platforms.intel.me.me_injector import MEInjector, detect_me_version_in_blob
+from tests.fixture_builder import build_intel_ifd_image
 
 
 def _read(path):
@@ -16,11 +16,11 @@ def _read(path):
 def _make_clean_me(size: int = 0x3FF000, version=(9, 5)) -> bytes:
     blob = bytearray(bytes((i * 13 + 7) & 0xFF for i in range(size)))
     fpt = 0x10
-    blob[fpt:fpt + 4] = b"$FPT"
+    blob[fpt : fpt + 4] = b"$FPT"
     struct.pack_into("<I", blob, fpt + 4, 2)
     # Real manifest layout: tag at base+0x1C, version u16x4 at base+0x24
     marker = 0x501C
-    blob[marker:marker + 4] = b"$MN2"
+    blob[marker : marker + 4] = b"$MN2"
     ver = version + (0,) * (4 - len(version))
     struct.pack_into("<HHHH", blob, marker + 8, *ver)  # base+0x24 = tag+8
     return bytes(blob)
@@ -39,7 +39,7 @@ def test_me_inject_roundtrip(tmp_path):
     analysis = inj.analyze(str(src))
     assert analysis["found"]
     assert analysis["offset"] == 0x1000
-    assert analysis["version"].startswith("12.8")   # from the fixture's CSME 12.8
+    assert analysis["version"].startswith("12.8")  # from the fixture's CSME 12.8
 
     clean = tmp_path / "clean_me.bin"
     clean.write_bytes(_make_clean_me(version=(9, 5)))
@@ -55,7 +55,8 @@ def test_me_inject_roundtrip(tmp_path):
     assert fixed[:0x1000] == build_intel_ifd_image()[:0x1000]
     # region now carries the new firmware, FF-padded to the region size
     from bios_recovery.platforms.intel.me.me_injector import detect_me_version_in_blob as dv
-    region = fixed[0x1000:0x1000 + 0x3FF000]
+
+    region = fixed[0x1000 : 0x1000 + 0x3FF000]
     assert dv(region).startswith("9.5")
     assert region[-1] == _read(str(clean))[-1]  # equal-size blob, no padding
     # BIOS region untouched
@@ -66,7 +67,7 @@ def test_me_inject_rejects_oversized_clean(tmp_path):
     src = tmp_path / "bios.bin"
     src.write_bytes(build_intel_ifd_image())
     big = tmp_path / "big.bin"
-    big.write_bytes(b"\xFF" * 0x800000)   # larger than the 0x3FF000 ME region
+    big.write_bytes(b"\xff" * 0x800000)  # larger than the 0x3FF000 ME region
     report = MEInjector().inject(str(src), str(big), str(tmp_path / "out.bin"))
     assert not report["success"]
     assert "larger" in report["message"]

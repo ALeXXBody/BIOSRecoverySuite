@@ -2,8 +2,8 @@
 
 import os
 
-from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner, MeCleanResult
 from bios_recovery.engines.bios_repair import BiosRepairEngine
+from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner, MeCleanResult
 
 
 def test_me_info(intel_ifd):
@@ -30,6 +30,7 @@ def test_me_clean_preserves_flash_descriptor(intel_ifd, tmp_path):
     assert head[:4] == b"\x5a\xa5\xf0\x0f", "flash descriptor must survive cleaning"
 
     from bios_recovery.engines.bios_analyzer import BiosAnalyzer
+
     reanalysis = BiosAnalyzer().analyze(out)
     assert reanalysis.has_flash_descriptor
 
@@ -64,10 +65,11 @@ def test_auto_repair_fixes_checksum(intel_ifd, tmp_path):
 
     out = str(tmp_path / "repaired.bin")
     report = BiosRepairEngine().auto_repair(corrupt, out)
+    assert report.output_path == out
 
     with open(out, "rb") as f:
         fixed = f.read()
-    checksum = sum(fixed[0x1010:0x1010 + 0x20]) & 0xFF
+    checksum = sum(fixed[0x1010 : 0x1010 + 0x20]) & 0xFF
     assert checksum == 0, "FPT checksum should match after repair"
 
 

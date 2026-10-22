@@ -26,9 +26,18 @@ def test_main_window_constructs(qapp):
 
     w = MainWindow()
     titles = [w.tabs.tabText(i) for i in range(w.tabs.count())]
-    for expected in ["Overview", "Repair", "ME Cleaner", "DMI", "Security",
-                     "Extract", "Hex Viewer", "SPI Flasher",
-                     "EC Patching", "Lenovo Unlock"]:
+    for expected in [
+        "Overview",
+        "Repair",
+        "ME Cleaner",
+        "DMI",
+        "Security",
+        "Extract",
+        "Hex Viewer",
+        "SPI Flasher",
+        "EC Patching",
+        "Lenovo Unlock",
+    ]:
         assert expected in titles, f"missing tab: {expected}"
     assert "Passwords" not in titles, "password generator must live on the Security page"
     assert hasattr(w, "gen_input") and hasattr(w, "password_text")
@@ -38,6 +47,7 @@ def test_main_window_constructs(qapp):
 def test_lenovo_tab_scan_and_apply(qapp, uefi_patch_image, tmp_path, monkeypatch):
     """Full Lenovo tab flow against the synthetic patched-driver fixture."""
     from PySide6.QtWidgets import QMessageBox
+
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
 
@@ -47,8 +57,9 @@ def test_lenovo_tab_scan_and_apply(qapp, uefi_patch_image, tmp_path, monkeypatch
     tab.current_dump = uefi_patch_image
     tab.run_scan()
     assert tab.groups_table.rowCount() >= 4
-    total_matches = sum(int(tab.groups_table.item(i, 2).text())
-                        for i in range(tab.groups_table.rowCount()))
+    total_matches = sum(
+        int(tab.groups_table.item(i, 2).text()) for i in range(tab.groups_table.rowCount())
+    )
     assert total_matches >= 3
 
     tab.run_detect()
@@ -56,6 +67,7 @@ def test_lenovo_tab_scan_and_apply(qapp, uefi_patch_image, tmp_path, monkeypatch
 
     # select every group and apply
     from PySide6.QtCore import Qt
+
     for i in range(tab.groups_table.rowCount()):
         tab.groups_table.item(i, 0).setCheckState(Qt.Checked)
     tab.apply_patches()

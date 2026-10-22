@@ -67,7 +67,7 @@ def _sha256_file(path: str) -> str:
 class Library:
     tools_folders: list = field(default_factory=list)
     firmware_folders: list = field(default_factory=list)
-    identified: dict = field(default_factory=dict)   # sha256 -> {"family", "version"}
+    identified: dict = field(default_factory=dict)  # sha256 -> {"family", "version"}
 
     def folders(self, kind: str) -> list:
         return self.tools_folders if kind == "tools" else self.firmware_folders
@@ -91,8 +91,12 @@ def load_library() -> Library:
         shutil.copyfile(path, path + ".damaged")
         return Library()
     lib = Library(
-        tools_folders=_strings(data.get("tools_folders", [])) if isinstance(data.get("tools_folders"), list) else [],
-        firmware_folders=_strings(data.get("firmware_folders", [])) if isinstance(data.get("firmware_folders"), list) else [],
+        tools_folders=_strings(data.get("tools_folders", []))
+        if isinstance(data.get("tools_folders"), list)
+        else [],
+        firmware_folders=_strings(data.get("firmware_folders", []))
+        if isinstance(data.get("firmware_folders"), list)
+        else [],
     )
     # Version 1 stored one flat list; it applies to both kinds.
     if isinstance(data.get("folders"), list):
@@ -104,9 +108,15 @@ def load_library() -> Library:
     ident = data.get("identified")
     if isinstance(ident, dict):
         for digest, value in ident.items():
-            if isinstance(value, dict) and isinstance(value.get("family"), str) \
-                    and isinstance(value.get("version"), str):
-                lib.identified[str(digest)] = {"family": value["family"], "version": value["version"]}
+            if (
+                isinstance(value, dict)
+                and isinstance(value.get("family"), str)
+                and isinstance(value.get("version"), str)
+            ):
+                lib.identified[str(digest)] = {
+                    "family": value["family"],
+                    "version": value["version"],
+                }
     return lib
 
 
@@ -171,6 +181,7 @@ def file_platform(path: str) -> str:
 
 def release_line(version: str) -> str:
     from bios_recovery.platforms.intel.me.fit_versions import rule_for_version
+
     rule = rule_for_version(version)
     return rule.release if rule else "unknown"
 
@@ -183,7 +194,7 @@ def tool_file_name(family: str, version: str, platform: str, ext: str = "") -> s
 @dataclass
 class ToolEntry:
     path: str
-    family: str          # "unidentified" until the user identifies the file
+    family: str  # "unidentified" until the user identifies the file
     version: str
     platform: str = "unknown"
     release: str = "unknown"
@@ -215,12 +226,30 @@ def _walk(folder: str):
             yield os.path.join(dirpath, name)
 
 
-_NON_TOOL_SUFFIXES = (".log", ".txt", ".md", ".ini", ".json", ".xml", ".html", ".cfg",
-                      ".zip", ".7z", ".tar", ".gz", ".pdf", ".bin", ".rom")
+_NON_TOOL_SUFFIXES = (
+    ".log",
+    ".txt",
+    ".md",
+    ".ini",
+    ".json",
+    ".xml",
+    ".html",
+    ".cfg",
+    ".zip",
+    ".7z",
+    ".tar",
+    ".gz",
+    ".pdf",
+    ".bin",
+    ".rom",
+)
 
 
 def _looks_like_tool_name(name: str) -> bool:
-    """fit / mfit by name, excluding logs, notes and archives. Identity is still checked by running -h."""
+    """fit / mfit by name, excluding logs, notes and archives.
+
+    Identity is still checked by running the tool with -h.
+    """
     lower = name.lower()
     return lower.startswith(("fit", "mfit")) and not lower.endswith(_NON_TOOL_SUFFIXES)
 
@@ -231,6 +260,7 @@ def identify_tool(path: str, timeout: int = 20):
     Runs a private copy, so the file in the library is never changed.
     """
     from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
+
     if not os.path.isfile(path):
         raise ValueError(f"not a file: {path}")
     if os.path.getsize(path) > MAX_TOOL_BYTES:
@@ -279,15 +309,17 @@ def scan(folders: Optional[list] = None) -> ScanResult:
                     continue
                 digest = _sha256_file(path)
                 known = lib.identified.get(digest)
-                result.tools.append(ToolEntry(
-                    path=path,
-                    family=known["family"] if known else "unidentified",
-                    version=known["version"] if known else "",
-                    platform=file_platform(path),
-                    release=release_line(known["version"]) if known else "unknown",
-                    sha256=digest,
-                    identified=bool(known),
-                ))
+                result.tools.append(
+                    ToolEntry(
+                        path=path,
+                        family=known["family"] if known else "unidentified",
+                        version=known["version"] if known else "",
+                        platform=file_platform(path),
+                        release=release_line(known["version"]) if known else "unknown",
+                        sha256=digest,
+                        identified=bool(known),
+                    )
+                )
                 continue
             if 0 < size <= MAX_FIRMWARE_BYTES and name.endswith((".bin", ".rom", ".fd", ".cap")):
                 with open(path, "rb") as f:
@@ -320,6 +352,7 @@ class ImportResult:
 
 def _looks_like_me_image(data: bytes) -> bool:
     from bios_recovery.core.bios_analyzer import BiosAnalyzer
+
     return bool(BiosAnalyzer()._fpt_positions(data))
 
 
@@ -331,6 +364,7 @@ def import_files(paths: list, kind: str) -> list:
     accepted only with a full ME partition table. Originals are never changed.
     """
     from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
+
     if kind not in KINDS:
         raise ValueError(f"unknown kind: {kind}")
     target_dir = os.path.join(app_library_dir(), kind)
@@ -369,6 +403,7 @@ def import_files(paths: list, kind: str) -> list:
                 result.refused = "no full ME partition table"
                 continue
             from bios_recovery.core.me_manifest import iter_manifest_versions
+
             versions = [v for v, _ in iter_manifest_versions(blob)]
             me = max(set(versions), key=versions.count) if versions else "unknown"
             name = f"ME_{me}_{os.path.basename(src)}"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """BIOS Recovery Suite - Professional BIOS repair and management tool."""
 
-import sys
 import os
+import sys
 
 
 def _run_mea_child():
@@ -57,8 +57,6 @@ if _is_mea_child():
     sys.exit(0)
 
 
-import sys
-
 def _app_dir():
     """Directory the running exe lives in (the folder Qt loads DLLs from)."""
     if getattr(sys, "frozen", False):
@@ -88,9 +86,7 @@ def _diagnose_qt_import_failure(exc):
         try:
             for name in sorted(os.listdir(app_dir)):
                 low = name.lower()
-                if low.endswith(".dll") and (
-                    low.startswith("icu") or low.startswith("qt6")
-                ):
+                if low.endswith(".dll") and (low.startswith("icu") or low.startswith("qt6")):
                     suspects.append(name)
         except OSError:
             pass
@@ -128,11 +124,17 @@ def _diagnose_qt_import_failure(exc):
 
 
 def _library_cli(argv) -> int:
-    """`library add-folder|remove-folder|list|scan [PATH]`: user-chosen tool and firmware folders."""
+    """`library add-folder|remove-folder|list|scan [PATH]`.
+
+    Manages the user-chosen tool and firmware folders.
+    """
     from bios_recovery.core import user_library as lib
-    usage = ("usage: library add-folder PATH | remove-folder PATH | list | scan | identify FILE\n"
-             "The app ships no Intel tools or ME firmware; add the folders where you keep yours.\n"
-             "scan lists files without running them; identify runs one file (-h) and caches the result.")
+
+    usage = (
+        "usage: library add-folder PATH | remove-folder PATH | list | scan | identify FILE\n"
+        "The app ships no Intel tools or ME firmware; add the folders where you keep yours.\n"
+        "scan lists files without running them; identify runs one file (-h) and caches the result."
+    )
     if not argv:
         print(usage, file=sys.stderr)
         return 2
@@ -194,6 +196,7 @@ def _library_cli(argv) -> int:
 def _verify_rebuild_cli(argv) -> int:
     """`verify-rebuild ORIGINAL CANDIDATE`: read-only region gate for a rebuilt image."""
     from bios_recovery.core.rebuild_verify import describe, verify_rebuild
+
     if len(argv) != 2:
         print("usage: verify-rebuild ORIGINAL CANDIDATE", file=sys.stderr)
         return 2
@@ -215,18 +218,18 @@ def _cli_main(argv) -> int:
     """
     import argparse
 
-    p = argparse.ArgumentParser(
-        prog="bios-recovery",
-        description="BIOS Recovery Suite (CLI mode)"
-    )
+    p = argparse.ArgumentParser(prog="bios-recovery", description="BIOS Recovery Suite (CLI mode)")
     sub = p.add_subparsers(dest="command", required=True)
 
     def add(name, help_):
         s_ = sub.add_parser(name, help=help_)
         s_.add_argument("file", help="input file")
         s_.add_argument("-o", "--out", default=None, help="output path / dir")
-        s_.add_argument("--force", action="store_true",
-                        help="run even when the tool does not apply to this image")
+        s_.add_argument(
+            "--force",
+            action="store_true",
+            help="run even when the tool does not apply to this image",
+        )
         return s_
 
     add("analyze", "analyze a BIOS image")
@@ -236,9 +239,15 @@ def _cli_main(argv) -> int:
     add("capsule", "strip an AMI capsule to its bare flash image")
     s_me = add("me-clean", "clean/soft-disable the Intel ME region")
     s_me.add_argument("--no-hap", action="store_true", help="skip HAP soft-disable")
-    s_me.add_argument("--keep-modules", action="store_true", help="do not remove non-essential partitions")
-    s_me.add_argument("--truncate", action="store_true", help="cut the empty tail after the last kept partition")
-    s_me.add_argument("--lock", action="store_true", help="set the descriptor lock (removes ME write access)")
+    s_me.add_argument(
+        "--keep-modules", action="store_true", help="do not remove non-essential partitions"
+    )
+    s_me.add_argument(
+        "--truncate", action="store_true", help="cut the empty tail after the last kept partition"
+    )
+    s_me.add_argument(
+        "--lock", action="store_true", help="set the descriptor lock (removes ME write access)"
+    )
     add("remove-passwords", "strip password/security structures")
     add("recover-passwords", "recover DVAR-stored Dell BIOS passwords from a dump")
     add("dmi", "show DMI/SMBIOS identity")
@@ -248,7 +257,11 @@ def _cli_main(argv) -> int:
     s_sd.add_argument("--mac", default=None)
     add("ec-extract", "locate + extract the EC firmware region")
     add("ec-scan", "advisory scan: which EC patches' signatures are present")
-    s_fi = add("fit-info", "CSME System Tools release for this image's ME; --tool identifies a FIT/MFIT binary you supplied")
+    s_fi = add(
+        "fit-info",
+        "CSME System Tools release for this image's ME; "
+        "--tool identifies a FIT/MFIT binary you supplied",
+    )
     s_fi.add_argument("--tool", default=None, help="path to a Flash Image Tool binary you obtained")
 
     args = p.parse_args(argv)
@@ -261,15 +274,20 @@ def _cli_main(argv) -> int:
     if tool and not args.force:
         from bios_recovery.core.traits import classify
         from bios_recovery.core.traits_matrix import tool_matrix
+
         with open(f, "rb") as fh:
             row = tool_matrix(classify(fh.read())).get(tool)
         if row is not None and not row.applies:
-            print(f"Refused: {tool} does not apply to this image - {row.reason}. "
-                  f"Use --force to run it anyway.", file=sys.stderr)
+            print(
+                f"Refused: {tool} does not apply to this image - {row.reason}. "
+                f"Use --force to run it anyway.",
+                file=sys.stderr,
+            )
             return 3
 
     if args.command == "analyze":
         from bios_recovery.core.bios_analyzer import BiosAnalyzer
+
         r = BiosAnalyzer().analyze(f)
         print(f"type:       {r.bios_type.name}")
         print(f"size:       {r.file_size:,}")
@@ -285,6 +303,7 @@ def _cli_main(argv) -> int:
 
     if args.command == "extract":
         from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
+
         r = BiosExtractor().extract(f, output_dir=args.out)
         print(f"method: {r.method_used} success={r.success}")
         print(f"dir:    {r.output_dir}")
@@ -296,6 +315,7 @@ def _cli_main(argv) -> int:
 
     if args.command == "graft":
         from bios_recovery.core.bios_repair import BiosRepairEngine
+
         rep = BiosRepairEngine().auto_graft_from_donor(f, args.donor, args.out)
         for op in rep.operations:
             print(f"  + {op}")
@@ -306,6 +326,7 @@ def _cli_main(argv) -> int:
 
     if args.command == "capsule":
         from bios_recovery.manufacturers.common.bios_capsule import extract_flashable_image
+
         info_ = extract_flashable_image(f, output_path=args.out)
         if not info_.success:
             print("\n".join(info_.messages), file=sys.stderr)
@@ -318,11 +339,15 @@ def _cli_main(argv) -> int:
 
     if args.command == "me-clean":
         from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
-        rep_ = IntelMECleaner().clean(f, output_path=args.out,
-                                      soft_disable=not args.no_hap,
-                                      truncate=args.truncate,
-                                      remove_modules=not args.keep_modules,
-                                      descriptor_lock=args.lock)
+
+        rep_ = IntelMECleaner().clean(
+            f,
+            output_path=args.out,
+            soft_disable=not args.no_hap,
+            truncate=args.truncate,
+            remove_modules=not args.keep_modules,
+            descriptor_lock=args.lock,
+        )
         for m in rep_.messages:
             print(f"  * {m}")
         print(f"out: {rep_.output_path}")
@@ -330,6 +355,7 @@ def _cli_main(argv) -> int:
 
     if args.command == "remove-passwords":
         from bios_recovery.core.password_remover import PasswordRemover
+
         out_f = args.out or f.rsplit(".", 1)[0] + "_nopass.bin"
         rep_ = PasswordRemover().remove_passwords(f, out_f)
         print(f"status: {rep_.status.name}")
@@ -340,17 +366,22 @@ def _cli_main(argv) -> int:
 
     if args.command == "recover-passwords":
         from bios_recovery.manufacturers.dell.dvar_passwords import recover_passwords
+
         rep_ = recover_passwords(f)
         print(f"success: {rep_.success}")
         print(f"message: {rep_.message}")
         for pww in rep_.passwords:
-            print(f"  @0x{pww.record_offset:x}: {pww.password!r} (len {pww.length}, {pww.recovered_from})")
+            print(
+                f"  @0x{pww.record_offset:x}: {pww.password!r} "
+                f"(len {pww.length}, {pww.recovered_from})"
+            )
         for n in rep_.notes:
             print(f"  {n}")
         return 0 if rep_.success else 1
 
     if args.command == "dmi":
         from bios_recovery.core.dmi_editor import DMIEditor
+
         info_ = DMIEditor().info(f)
         if not info_.get("found"):
             print(info_.get("message", "not found"), file=sys.stderr)
@@ -364,8 +395,10 @@ def _cli_main(argv) -> int:
 
     if args.command == "set-dmi":
         from bios_recovery.core.dmi_editor import DMIEditor
-        rep_ = DMIEditor().set_identity(f, output_path=args.out,
-                                        serial=args.serial, uuid=args.uuid, mac=args.mac)
+
+        rep_ = DMIEditor().set_identity(
+            f, output_path=args.out, serial=args.serial, uuid=args.uuid, mac=args.mac
+        )
         for op in rep_.operations:
             print(f"  + {op}")
         for w in rep_.warnings:
@@ -377,6 +410,7 @@ def _cli_main(argv) -> int:
 
     if args.command == "ec-extract":
         from bios_recovery.platforms.ec.ec_patcher import ECPatcher, ECStatus
+
         out_f = args.out or f.rsplit(".", 1)[0] + "_ec.bin"
         result = ECPatcher().extract_ec(f, out_f)
         print(result.message)
@@ -387,24 +421,36 @@ def _cli_main(argv) -> int:
 
     if args.command == "fit-info":
         from bios_recovery.core.bios_analyzer import BiosAnalyzer
+        from bios_recovery.platforms.intel.me.fit_bridge import compatible_with_me, probe_tool
         from bios_recovery.platforms.intel.me.fit_versions import tool_for_me_version
-        from bios_recovery.platforms.intel.me.fit_bridge import probe_tool, compatible_with_me
+
         me = BiosAnalyzer().analyze(f).me_version
         match = tool_for_me_version(me)
         print(f"ME version:   {me or 'n/a'}")
-        print(f"tool release: {match.release or 'none'} [{match.confidence}]"
-              + (f" - {match.note}" if match.note else ""))
+        print(
+            f"tool release: {match.release or 'none'} [{match.confidence}]"
+            + (f" - {match.note}" if match.note else "")
+        )
         tool_paths = [args.tool] if args.tool else []
         if not tool_paths:
             from bios_recovery.core import user_library as lib
-            from bios_recovery.platforms.intel.me.fit_bridge import ToolProbe, compatible_with_me as _ok
+            from bios_recovery.platforms.intel.me.fit_bridge import ToolProbe
+            from bios_recovery.platforms.intel.me.fit_bridge import compatible_with_me as _ok
+
             for t in lib.scan().tools:
-                if t.identified and _ok(
-                        ToolProbe(path=t.path, identified=True, family=t.family, version=t.version), me)[0]:
+                if (
+                    t.identified
+                    and _ok(
+                        ToolProbe(path=t.path, identified=True, family=t.family, version=t.version),
+                        me,
+                    )[0]
+                ):
                     tool_paths.append(t.path)
             if not tool_paths:
-                print("tool:         none in your library matches this image "
-                      "(add folders with: library add-folder PATH)")
+                print(
+                    "tool:         none in your library matches this image "
+                    "(add folders with: library add-folder PATH)"
+                )
                 return 0
         for tool_path in tool_paths:
             probe = probe_tool(tool_path)
@@ -421,14 +467,17 @@ def _cli_main(argv) -> int:
 
     if args.command == "ec-scan":
         from bios_recovery.platforms.ec.ec_patcher import ECPatcher
+
         p_ = ECPatcher()
         hits = p_.scan_patch_sites(f)
         found = [h for h in hits if h.get("found")]
         print(f"EC patches in table: {len(hits)}  (signatures present: {len(found)})")
         for h in hits:
             if h.get("found"):
-                print(f"  {h['key']:32s} {h['vendor']:12s} gen={h['generation']:24s} "
-                      f"verified={h['verified']} offsets={','.join(h['offsets'])}")
+                print(
+                    f"  {h['key']:32s} {h['vendor']:12s} gen={h['generation']:24s} "
+                    f"verified={h['verified']} offsets={','.join(h['offsets'])}"
+                )
         return 0
 
     return 1
@@ -443,9 +492,18 @@ _CLI_TOOL_FOR_COMMAND = {
 }
 
 _CLI_COMMANDS = {
-    "analyze", "extract", "graft", "capsule", "me-clean",
-    "remove-passwords", "recover-passwords", "dmi", "set-dmi",
-    "ec-extract", "ec-scan", "fit-info",
+    "analyze",
+    "extract",
+    "graft",
+    "capsule",
+    "me-clean",
+    "remove-passwords",
+    "recover-passwords",
+    "dmi",
+    "set-dmi",
+    "ec-extract",
+    "ec-scan",
+    "fit-info",
 }
 
 
@@ -471,8 +529,12 @@ def main():
     # A bare word that is not a command and not an existing path is a typo: refuse it
     # rather than silently opening the GUI. Existing paths (e.g. a file opened from
     # Explorer) still start the GUI.
-    if len(sys.argv) > 1 and not sys.argv[1].startswith("-") and sys.argv[1] not in (
-            _CLI_COMMANDS | {"verify-rebuild", "library"}) and not os.path.exists(sys.argv[1]):
+    if (
+        len(sys.argv) > 1
+        and not sys.argv[1].startswith("-")
+        and sys.argv[1] not in (_CLI_COMMANDS | {"verify-rebuild", "library"})
+        and not os.path.exists(sys.argv[1])
+    ):
         sys.stderr.write(f"Error: unknown command '{sys.argv[1]}'\n\n{_CLI_HELP}")
         return 2
     # CLI mode: `bios-recovery <command> FILE [...]` (no Qt involved)
@@ -497,6 +559,7 @@ def main():
     app.setStyle("Fusion")
 
     from bios_recovery.gui.styles import apply_stylesheet
+
     apply_stylesheet(app)
 
     window = MainWindow()

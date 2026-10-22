@@ -2,8 +2,8 @@
 
 import pytest
 
-from bios_recovery.core.rebuild_verify import verify_rebuild, changed_spans
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
+from bios_recovery.core.rebuild_verify import changed_spans, verify_rebuild
 from tests.fixture_builder import build_intel_ifd_image
 
 
@@ -26,8 +26,11 @@ def _edit(tmp_path, src, edits, name="cand.bin"):
 
 def _me_offset(src):
     """An offset inside the ME region the descriptor declares (the fixture declares one)."""
-    me = [r for r in BiosAnalyzer().analyze(str(src)).regions
-          if r.region_type.name == "INTEL_ME" and "FPT" not in r.name]
+    me = [
+        r
+        for r in BiosAnalyzer().analyze(str(src)).regions
+        if r.region_type.name == "INTEL_ME" and "FPT" not in r.name
+    ]
     assert me, "fixture declares an ME region"
     return me[0].offset + 0x2000
 
@@ -87,6 +90,7 @@ def test_spans_merge_across_small_gaps():
 
 def test_cli_verify_rebuild_exit_codes(tmp_path, ifd, capsys):
     from bios_recovery.main import _verify_rebuild_cli
+
     cand = _edit(tmp_path, ifd, [(_me_offset(ifd), 0)])
     assert _verify_rebuild_cli([str(ifd), cand]) == 0
     bad = _edit(tmp_path, ifd, [(0x402000, 0)], name="bad.bin")
@@ -97,7 +101,8 @@ def test_cli_verify_rebuild_exit_codes(tmp_path, ifd, capsys):
 def test_bpdt_header_block_is_me_layer(tmp_path):
     # A BPDT header block (0xAA 0x55 0 0, 13 entries, major 2) in the ME area is ME data.
     import struct as _s
-    data = bytearray(b"\xFF" * 0x10000)
+
+    data = bytearray(b"\xff" * 0x10000)
     data[0x2000:0x2004] = b"\xaa\x55\x00\x00"
     _s.pack_into("<HH", data, 0x2004, 13, 0x0201)
     src = tmp_path / "bpdt.bin"
@@ -116,9 +121,10 @@ def test_run_across_unclaimed_gap_is_refused(tmp_path):
     # one block and ends in the other must not be accepted just because its first and last
     # bytes are in ME space.
     import struct as _s
-    data = bytearray(b"\xFF" * 0x10000)
+
+    data = bytearray(b"\xff" * 0x10000)
     for off in (0x1000, 0x3000):
-        data[off:off + 4] = b"\xaa\x55\x00\x00"
+        data[off : off + 4] = b"\xaa\x55\x00\x00"
         _s.pack_into("<HH", data, off + 4, 13, 0x0201)
     data[0x2000:0x3000] = b"\x00" * 0x1000
     src = tmp_path / "gap.bin"

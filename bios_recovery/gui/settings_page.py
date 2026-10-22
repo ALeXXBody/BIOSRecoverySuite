@@ -10,8 +10,17 @@ from __future__ import annotations
 import os
 
 from PySide6.QtWidgets import (
-    QFileDialog, QGroupBox, QHBoxLayout, QLabel, QListWidget, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from bios_recovery.core import user_library as lib
@@ -47,12 +56,19 @@ class SettingsPage(QWidget):
 
         self.tools_list = QListWidget()
         self.firmware_list = QListWidget()
-        root.addWidget(self._folder_group(
-            "Intel tools folders (Flash Image Tool / MFIT)", "tools", self.tools_list,
-            "Import tool files…"))
-        root.addWidget(self._folder_group(
-            "ME firmware folders", "firmware", self.firmware_list,
-            "Import firmware files…"))
+        root.addWidget(
+            self._folder_group(
+                "Intel tools folders (Flash Image Tool / MFIT)",
+                "tools",
+                self.tools_list,
+                "Import tool files…",
+            )
+        )
+        root.addWidget(
+            self._folder_group(
+                "ME firmware folders", "firmware", self.firmware_list, "Import firmware files…"
+            )
+        )
 
         scan_box = QGroupBox("Scan")
         scan_layout = QVBoxLayout(scan_box)
@@ -63,7 +79,8 @@ class SettingsPage(QWidget):
         self.identify_button = QPushButton("Identify selected tool (runs it once)")
         self.identify_button.setToolTip(
             "Scanning only lists files. Identifying runs the selected tool once with -h, "
-            "so only do this for tools you trust.")
+            "so only do this for tools you trust."
+        )
         self.identify_button.clicked.connect(self.identify_selected)
         row.addWidget(self.identify_button)
         self.scan_status = QLabel("Not scanned yet.")
@@ -140,8 +157,9 @@ class SettingsPage(QWidget):
         self.scan_button.setEnabled(True)
         self.tools_table.setRowCount(0)
         for t in result.tools:
-            self._add_row(self.tools_table,
-                          [t.family, t.version or "-", t.platform, t.release, t.path])
+            self._add_row(
+                self.tools_table, [t.family, t.version or "-", t.platform, t.release, t.path]
+            )
         self._update_identify_state()
         self.firmware_table.setRowCount(0)
         for f in result.firmware:
@@ -151,7 +169,8 @@ class SettingsPage(QWidget):
         else:
             self.scan_status.setText(
                 f"{len(result.tools)} tool(s), {len(result.firmware)} firmware image(s) "
-                f"in {len(result.folders)} folder(s).")
+                f"in {len(result.folders)} folder(s)."
+            )
 
     def _selected_tool_path(self):
         rows = self.tools_table.selectionModel().selectedRows()
@@ -164,7 +183,9 @@ class SettingsPage(QWidget):
         path = self._selected_tool_path()
         family = None
         if path:
-            family = self.tools_table.item(self.tools_table.selectionModel().selectedRows()[0].row(), 0).text()
+            family = self.tools_table.item(
+                self.tools_table.selectionModel().selectedRows()[0].row(), 0
+            ).text()
         self.identify_button.setEnabled(bool(path) and family == "unidentified")
 
     def identify_selected(self, on_done=None):
@@ -216,4 +237,5 @@ class SettingsPage(QWidget):
         copied = [r for r in results if r.copied_to]
         self.scan_status.setText(
             f"Imported {len(copied)} file(s)."
-            + (" Refused: " + "; ".join(refused) if refused else ""))
+            + (" Refused: " + "; ".join(refused) if refused else "")
+        )

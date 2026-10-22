@@ -23,7 +23,7 @@ def qapp():
 @pytest.fixture
 def dialogs(monkeypatch):
     """Stub every modal dialog used across the app."""
-    from PySide6.QtWidgets import QMessageBox, QFileDialog, QInputDialog
+    from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
@@ -47,8 +47,9 @@ def open_via_dialog(monkeypatch, window, path):
     """Route open_file()'s dialog to a concrete fixture path."""
     from PySide6.QtWidgets import QFileDialog
 
-    monkeypatch.setattr(QFileDialog, "getOpenFileName",
-                        lambda *a, **k: (path, "BIOS Files (*.bin)"))
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *a, **k: (path, "BIOS Files (*.bin)")
+    )
     window.open_file()
 
 
@@ -56,6 +57,7 @@ def _wait_threads(window, max_ms=30000):
     """Let WorkerThreads finish AND spin the event loop so their queued
     result signals actually reach the UI handlers."""
     import time
+
     from PySide6.QtCore import QThread
     from PySide6.QtWidgets import QApplication
 
@@ -90,7 +92,10 @@ def test_repair_flow(window, intel_ifd, monkeypatch):
     _wait_threads(window)
     out = intel_ifd.rsplit(".", 1)[0] + "_repaired.bin"
     assert os.path.exists(out), "repair engine produced no output"
-    assert "Success" in window.repair_text.toPlainText() or "Failed" in window.repair_text.toPlainText()
+    assert (
+        "Success" in window.repair_text.toPlainText()
+        or "Failed" in window.repair_text.toPlainText()
+    )
 
 
 def test_me_info_and_clean(window, intel_ifd, tmp_path, monkeypatch):
@@ -106,6 +111,7 @@ def test_me_info_and_clean(window, intel_ifd, tmp_path, monkeypatch):
 
 def test_me_inject_with_valid_clean_image(window, intel_ifd, tmp_path, monkeypatch):
     import struct
+
     open_via_dialog(monkeypatch, window, intel_ifd)
     clean = tmp_path / "clean_me.bin"
     blob = bytearray(bytes((i * 13 + 7) & 0xFF for i in range(0x3FF000)))
@@ -202,6 +208,7 @@ def test_lenovo_tab_full_flow(window, uefi_patch_image, tmp_path):
     tab.run_detect()
     tab.run_scan()
     from PySide6.QtCore import Qt
+
     for i in range(tab.groups_table.rowCount()):
         tab.groups_table.item(i, 0).setCheckState(Qt.Checked)
     tab.apply_patches()
@@ -233,12 +240,13 @@ def test_menu_and_about(window, monkeypatch):
 # EC tab: manual region override (the safety net for a wrong auto-detect)
 # ---------------------------------------------------------------------------
 
+
 def _ec_dump_with_hidden_region(path):
     """A dump where auto-detection finds nothing (all 0xFF), so the ONLY way
     to extract is the manual override. Mirrors boards that store EC firmware
     in a way the heuristics cannot recognise."""
     with open(path, "wb") as f:
-        f.write(b"\xFF" * 0x10000 + bytes(range(256)) * 1024)
+        f.write(b"\xff" * 0x10000 + bytes(range(256)) * 1024)
     return path
 
 
@@ -296,18 +304,19 @@ def test_ec_tab_blank_offset_anchors_at_region_end(qapp, dialogs, tmp_path):
     capacity and have the region placed at its detected end -- that yields the
     full 256KB without needing to know the offset by heart.
     """
+    import random
+
     from bios_recovery.gui.ec_tab import ECTab
 
-    import random
     random.seed(99)
     total = 0x2000000
     ec_size = 0x40000
     ec_off = total - ec_size
     data = bytearray(random.getrandbits(8) for _ in range(total))
-    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    data[ec_off - 0x100000 : ec_off] = b"\xff" * 0x100000
     ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
-    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
-    ec[0x20000:0x20009] = b"IT8218VG "      # markers in the SECOND HALF
+    ec[0x0000:0x0004] = b"\xaa\x55\xaa\x55"
+    ec[0x20000:0x20009] = b"IT8218VG "  # markers in the SECOND HALF
     ec[0x20100:0x20106] = b"ITE8\x02\x00"
     data[ec_off:] = ec
     dump = str(tmp_path / "ec_256k.bin")
@@ -320,7 +329,7 @@ def test_ec_tab_blank_offset_anchors_at_region_end(qapp, dialogs, tmp_path):
     tab.extract_path.setText(out)
 
     tab.override_check.setChecked(True)
-    tab.override_offset.setText("")           # blank -> anchor at region end
+    tab.override_offset.setText("")  # blank -> anchor at region end
     tab.override_size.setCurrentText("0x40000 (256 KB)")
 
     assert tab._override_region() == (None, 0x40000)
@@ -329,7 +338,7 @@ def test_ec_tab_blank_offset_anchors_at_region_end(qapp, dialogs, tmp_path):
     with open(out, "rb") as f:
         got = f.read()
     assert len(got) == 262144, f"wrote {len(got)} bytes, expected 262144"
-    assert got == bytes(data)[ec_off:ec_off + ec_size]
+    assert got == bytes(data)[ec_off : ec_off + ec_size]
     assert b"IT8218VG" in got
 
 
@@ -355,7 +364,7 @@ def test_ec_tab_bad_hex_offset_is_rejected_safely(qapp, dialogs, tmp_path):
     tab.current_dump = dump
     tab.extract_path.setText(out)
     tab.override_check.setChecked(True)
-    tab.override_offset.setText("ZZZZ")   # invalid hex
+    tab.override_offset.setText("ZZZZ")  # invalid hex
 
-    tab.extract_ec()                       # must not raise
+    tab.extract_ec()  # must not raise
     assert not os.path.exists(out), "invalid offset must not produce a file"

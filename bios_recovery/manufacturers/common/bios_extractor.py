@@ -1,11 +1,11 @@
 """BIOS extraction engine - extracts BIOS firmware from vendor executables."""
 
-import struct
 import os
+import re
+import struct
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
-import re
 
 
 class ExtractionMethod(Enum):
@@ -118,6 +118,7 @@ class BiosExtractor:
         # before any brand-keyword guess (which would miscategorize it).
         if data[:16] == APTIO_CAPSULE_GUID_LE:
             from bios_recovery.manufacturers.common.bios_capsule import detect_capsule
+
             if detect_capsule(data).success:
                 return ExtractionMethod.AMI_CAPSULE
 
@@ -181,7 +182,9 @@ class BiosExtractor:
         size = struct.unpack_from("<I", data, idx + 0x04)[0]
         return 0x10 <= size and idx + size <= len(data)
 
-    def _extract_dell_pfs(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+    def _extract_dell_pfs(
+        self, data: bytes, output_dir: str, original_path: str
+    ) -> ExtractionResult:
         result = ExtractionResult(success=False)
         pfs_offset = 0
 
@@ -196,13 +199,15 @@ class BiosExtractor:
                     if 0 < pfs_size <= len(data) and idx + pfs_size <= len(data):
                         output_file = os.path.join(output_dir, f"pfs_segment_{idx:#x}.bin")
                         with open(output_file, "wb") as f:
-                            f.write(data[idx:idx + pfs_size])
-                        result.files.append({
-                            "name": os.path.basename(output_file),
-                            "size": pfs_size,
-                            "offset": f"{idx:#x}",
-                            "type": "PFS Segment",
-                        })
+                            f.write(data[idx : idx + pfs_size])
+                        result.files.append(
+                            {
+                                "name": os.path.basename(output_file),
+                                "size": pfs_size,
+                                "offset": f"{idx:#x}",
+                                "type": "PFS Segment",
+                            }
+                        )
                         result.success = True
                 except struct.error:
                     pass
@@ -221,26 +226,30 @@ class BiosExtractor:
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
-                f.write(data[offset:offset + size])
-            result.files.append({
-                "name": os.path.basename(output_file),
-                "size": size,
-                "offset": f"{offset:#x}",
-                "type": "BIOS Region",
-            })
+                f.write(data[offset : offset + size])
+            result.files.append(
+                {
+                    "name": os.path.basename(output_file),
+                    "size": size,
+                    "offset": f"{offset:#x}",
+                    "type": "BIOS Region",
+                }
+            )
             result.success = True
 
         me_regions = self._find_me_regions(data)
         for i, (offset, size) in enumerate(me_regions):
             output_file = os.path.join(output_dir, f"me_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
-                f.write(data[offset:offset + size])
-            result.files.append({
-                "name": os.path.basename(output_file),
-                "size": size,
-                "offset": f"{offset:#x}",
-                "type": "ME Region",
-            })
+                f.write(data[offset : offset + size])
+            result.files.append(
+                {
+                    "name": os.path.basename(output_file),
+                    "size": size,
+                    "offset": f"{offset:#x}",
+                    "type": "ME Region",
+                }
+            )
             result.success = True
 
         if not result.files:
@@ -260,18 +269,22 @@ class BiosExtractor:
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
-                f.write(data[offset:offset + size])
-            result.files.append({
-                "name": os.path.basename(output_file),
-                "size": size,
-                "offset": f"{offset:#x}",
-                "type": "BIOS Region",
-            })
+                f.write(data[offset : offset + size])
+            result.files.append(
+                {
+                    "name": os.path.basename(output_file),
+                    "size": size,
+                    "offset": f"{offset:#x}",
+                    "type": "BIOS Region",
+                }
+            )
             result.success = True
 
         return result
 
-    def _extract_lenovo_exe(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+    def _extract_lenovo_exe(
+        self, data: bytes, output_dir: str, original_path: str
+    ) -> ExtractionResult:
         result = self._extract_lenovo(data, output_dir, original_path)
         if not result.success:
             result = self._extract_universal(data, output_dir, original_path)
@@ -283,7 +296,9 @@ class BiosExtractor:
     def _extract_acer(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
         return self._extract_universal(data, output_dir, original_path)
 
-    def _extract_toshiba(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+    def _extract_toshiba(
+        self, data: bytes, output_dir: str, original_path: str
+    ) -> ExtractionResult:
         result = ExtractionResult(success=False)
         com_offset = data.find(b".COM")
         if com_offset >= 0:
@@ -293,18 +308,22 @@ class BiosExtractor:
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
-                f.write(data[offset:offset + size])
-            result.files.append({
-                "name": os.path.basename(output_file),
-                "size": size,
-                "offset": f"{offset:#x}",
-                "type": "BIOS Region",
-            })
+                f.write(data[offset : offset + size])
+            result.files.append(
+                {
+                    "name": os.path.basename(output_file),
+                    "size": size,
+                    "offset": f"{offset:#x}",
+                    "type": "BIOS Region",
+                }
+            )
             result.success = True
 
         return result
 
-    def _extract_samsung(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+    def _extract_samsung(
+        self, data: bytes, output_dir: str, original_path: str
+    ) -> ExtractionResult:
         return self._extract_universal(data, output_dir, original_path)
 
     def _extract_sony(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
@@ -318,18 +337,22 @@ class BiosExtractor:
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
-                f.write(data[offset:offset + size])
-            result.files.append({
-                "name": os.path.basename(output_file),
-                "size": size,
-                "offset": f"{offset:#x}",
-                "type": "BIOS Region",
-            })
+                f.write(data[offset : offset + size])
+            result.files.append(
+                {
+                    "name": os.path.basename(output_file),
+                    "size": size,
+                    "offset": f"{offset:#x}",
+                    "type": "BIOS Region",
+                }
+            )
             result.success = True
 
         return result
 
-    def _extract_ami_capsule(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+    def _extract_ami_capsule(
+        self, data: bytes, output_dir: str, original_path: str
+    ) -> ExtractionResult:
         """Extract the flash image from an AMI Aptio vendor capsule (ASUS .308/.CAP)."""
         from bios_recovery.manufacturers.common.bios_capsule import detect_capsule
 
@@ -339,17 +362,19 @@ class BiosExtractor:
             result.messages.extend(info.messages)
             return result
 
-        image = data[info.header_size:]
+        image = data[info.header_size :]
         output_file = os.path.join(output_dir, "flashable.bin")
         with open(output_file, "wb") as f:
             f.write(image)
 
-        result.files.append({
-            "name": os.path.basename(output_file),
-            "size": len(image),
-            "offset": f"{info.header_size:#x}",
-            "type": "Flash Image (capsule payload)",
-        })
+        result.files.append(
+            {
+                "name": os.path.basename(output_file),
+                "size": len(image),
+                "offset": f"{info.header_size:#x}",
+                "type": "Flash Image (capsule payload)",
+            }
+        )
         result.messages.append(
             f"AMI Aptio capsule: header {info.header_size:#x}, image {len(image):#x} bytes"
         )
@@ -360,33 +385,39 @@ class BiosExtractor:
         result.success = True
         return result
 
-    def _extract_universal(self, data: bytes, output_dir: str, original_path: str) -> ExtractionResult:
+    def _extract_universal(
+        self, data: bytes, output_dir: str, original_path: str
+    ) -> ExtractionResult:
         result = ExtractionResult(success=False)
 
         bios_regions = self._find_bios_regions(data)
         for i, (offset, size) in enumerate(bios_regions):
             output_file = os.path.join(output_dir, f"bios_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
-                f.write(data[offset:offset + size])
-            result.files.append({
-                "name": os.path.basename(output_file),
-                "size": size,
-                "offset": f"{offset:#x}",
-                "type": "BIOS Region",
-            })
+                f.write(data[offset : offset + size])
+            result.files.append(
+                {
+                    "name": os.path.basename(output_file),
+                    "size": size,
+                    "offset": f"{offset:#x}",
+                    "type": "BIOS Region",
+                }
+            )
             result.success = True
 
         me_regions = self._find_me_regions(data)
         for i, (offset, size) in enumerate(me_regions):
             output_file = os.path.join(output_dir, f"me_region_{i:#x}.bin")
             with open(output_file, "wb") as f:
-                f.write(data[offset:offset + size])
-            result.files.append({
-                "name": os.path.basename(output_file),
-                "size": size,
-                "offset": f"{offset:#x}",
-                "type": "ME Region",
-            })
+                f.write(data[offset : offset + size])
+            result.files.append(
+                {
+                    "name": os.path.basename(output_file),
+                    "size": size,
+                    "offset": f"{offset:#x}",
+                    "type": "ME Region",
+                }
+            )
             result.success = True
 
         if not result.files:
@@ -394,19 +425,22 @@ class BiosExtractor:
             for i, (offset, size) in enumerate(fv_regions):
                 output_file = os.path.join(output_dir, f"firmware_volume_{i:#x}.bin")
                 with open(output_file, "wb") as f:
-                    f.write(data[offset:offset + size])
-                result.files.append({
-                    "name": os.path.basename(output_file),
-                    "size": size,
-                    "offset": f"{offset:#x}",
-                    "type": "Firmware Volume",
-                })
+                    f.write(data[offset : offset + size])
+                result.files.append(
+                    {
+                        "name": os.path.basename(output_file),
+                        "size": size,
+                        "offset": f"{offset:#x}",
+                        "type": "Firmware Volume",
+                    }
+                )
                 result.success = True
 
         return result
 
     def _find_bios_regions(self, data: bytes) -> list[tuple[int, int]]:
         from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionType
+
         analyzer = BiosAnalyzer()
         regions = analyzer._parse_intel_ifd(data) if self._find_intel_fd(data) >= 0 else []
         analyzer._search_firmware_volumes(data, regions)
@@ -415,6 +449,7 @@ class BiosExtractor:
 
     def _find_me_regions(self, data: bytes) -> list[tuple[int, int]]:
         from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionType
+
         if self._find_intel_fd(data) < 0:
             return []
         regions = BiosAnalyzer()._parse_intel_ifd(data)
@@ -422,6 +457,7 @@ class BiosExtractor:
 
     def _find_firmware_volumes(self, data: bytes) -> list[tuple[int, int]]:
         from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionInfo
+
         found: list = []
         BiosAnalyzer()._search_firmware_volumes(bytes(data), found)
         return [(r.offset, r.size) for r in found if isinstance(r, RegionInfo)]
@@ -452,14 +488,18 @@ class BiosExtractor:
             if idx < 0:
                 break
             if idx + 5 <= len(data) and self._valid_lzma_dictionary(
-                    struct.unpack_from("<I", data, idx + 1)[0]):
+                struct.unpack_from("<I", data, idx + 1)[0]
+            ):
                 offsets.append(idx)
             idx += 1
         return offsets
 
-    def _try_decompress_lzma(self, data: bytes, offset: int, output_dir: str, result: ExtractionResult) -> None:
+    def _try_decompress_lzma(
+        self, data: bytes, offset: int, output_dir: str, result: ExtractionResult
+    ) -> None:
         """Decode one LZMA stream. The stream must end cleanly within MAX_LZMA_OUTPUT."""
         import lzma
+
         decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
         try:
             decompressed = decomp.decompress(data[offset:], max_length=self.MAX_LZMA_OUTPUT)
@@ -470,12 +510,14 @@ class BiosExtractor:
         output_file = os.path.join(output_dir, f"decompressed_{offset:#x}.bin")
         with open(output_file, "wb") as f:
             f.write(decompressed)
-        result.files.append({
-            "name": os.path.basename(output_file),
-            "size": len(decompressed),
-            "offset": f"{offset:#x}",
-            "type": "Decompressed",
-        })
+        result.files.append(
+            {
+                "name": os.path.basename(output_file),
+                "size": len(decompressed),
+                "offset": f"{offset:#x}",
+                "type": "Decompressed",
+            }
+        )
         result.success = True
 
     def _extract_ascii_strings(self, data: bytes, min_length: int = 4) -> list[str]:

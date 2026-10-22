@@ -122,12 +122,16 @@ class SPITab(QWidget):
         return self.prog_combo.currentText()
 
     def _browse_save(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save chip dump", "chip_dump.bin", "Binary (*.bin)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save chip dump", "chip_dump.bin", "Binary (*.bin)"
+        )
         if path:
             self.read_path.setText(path)
 
     def _browse_open(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open BIOS image", "", "Binary (*.bin *.rom);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open BIOS image", "", "Binary (*.bin *.rom);;All Files (*)"
+        )
         if path:
             self.write_path.setText(path)
 
@@ -155,7 +159,9 @@ class SPITab(QWidget):
     def detect_programmers(self):
         def on_result(programmers):
             if not programmers:
-                self._log("No supported programmers found. Install flashrom and/or a CH341A driver.")
+                self._log(
+                    "No supported programmers found. Install flashrom and/or a CH341A driver."
+                )
                 return
             current = self._current_programmer()
             self.prog_combo.blockSignals(True)
@@ -173,8 +179,11 @@ class SPITab(QWidget):
             self.chip_label.setText(chip.name or "Unknown")
             self._log(f"Identified chip: {chip.name or 'none'}")
 
-        self._start_job(self.identify_btn, lambda: self.flasher.identify_chip(self._current_programmer()),
-                        on_result)
+        self._start_job(
+            self.identify_btn,
+            lambda: self.flasher.identify_chip(self._current_programmer()),
+            on_result,
+        )
 
     def read_chip(self):
         path = self.read_path.text().strip()
@@ -193,8 +202,11 @@ class SPITab(QWidget):
                 self.current_image = path
                 self._log(f"Backup saved to {path} ({result.flash_size:,} bytes)")
 
-        self._start_job(self.read_btn,
-                        lambda: self.flasher.read_chip(path, self._current_programmer()), on_result)
+        self._start_job(
+            self.read_btn,
+            lambda: self.flasher.read_chip(path, self._current_programmer()),
+            on_result,
+        )
 
     def write_chip(self):
         if not self.write_consent.isChecked():
@@ -214,14 +226,18 @@ class SPITab(QWidget):
 
             def after_backup(result):
                 if result.status != SPIStatus.SUCCESS:
-                    QMessageBox.critical(self, "Backup Failed", f"Could not create backup: {result.message}")
+                    QMessageBox.critical(
+                        self, "Backup Failed", f"Could not create backup: {result.message}"
+                    )
                     return
                 self._log("Backup complete.")
                 self._confirm_and_write(image)
 
-            self._start_job(self.write_btn,
-                            lambda: self.flasher.read_chip(backup, self._current_programmer()),
-                            after_backup)
+            self._start_job(
+                self.write_btn,
+                lambda: self.flasher.read_chip(backup, self._current_programmer()),
+                after_backup,
+            )
             return
         self._confirm_and_write(image)
 
@@ -245,10 +261,13 @@ class SPITab(QWidget):
                 self._log(result.output.strip())
 
         verify = self.write_verify.isChecked()
-        self._start_job(self.write_btn,
-                        lambda: self.flasher.write_chip(image, self._current_programmer(),
-                                                        consent=True, verify=verify),
-                        on_result)
+        self._start_job(
+            self.write_btn,
+            lambda: self.flasher.write_chip(
+                image, self._current_programmer(), consent=True, verify=verify
+            ),
+            on_result,
+        )
 
     def erase_chip(self):
         if not self.erase_consent.isChecked():
@@ -268,6 +287,8 @@ class SPITab(QWidget):
             if result.output:
                 self._log(result.output.strip())
 
-        self._start_job(self.erase_btn,
-                        lambda: self.flasher.erase_chip(self._current_programmer(), consent=True),
-                        on_result)
+        self._start_job(
+            self.erase_btn,
+            lambda: self.flasher.erase_chip(self._current_programmer(), consent=True),
+            on_result,
+        )

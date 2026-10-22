@@ -82,8 +82,9 @@ def test_patch_registry_loaded():
 
 def test_unverified_patch_refused(ec_firmware, tmp_path):
     patcher = ECPatcher()
-    result = patcher.apply_patch(ec_firmware, "lenovo_t430_e147_gen3_disable_unlock_flag",
-                                 require_verified=True)
+    result = patcher.apply_patch(
+        ec_firmware, "lenovo_t430_e147_gen3_disable_unlock_flag", require_verified=True
+    )
     assert result.status == ECStatus.UNVERIFIED
 
 
@@ -114,8 +115,10 @@ def test_missing_signature_reports_pattern_missing(intel_ifd, tmp_path):
     # An Intel flash-descriptor dump carries no EC 'UnLock' marker
     assert result.status == ECStatus.PATTERN_MISSING
 
-def _make_spi_15ahp9_style(BIG: int, ec: bytes, noise: bytes | None,
-                           noise_off: int | None) -> bytes:
+
+def _make_spi_15ahp9_style(
+    BIG: int, ec: bytes, noise: bytes | None, noise_off: int | None
+) -> bytes:
     """Full Lenovo-style SPI: pseudorandom BIOS area, optional stray noise
     hit low in the image, erased-flash gap, then the real EC image in the TOP
     of the dump.
@@ -126,11 +129,11 @@ def _make_spi_15ahp9_style(BIG: int, ec: bytes, noise: bytes | None,
     """
     data = bytearray(bytes((i * 7 + 0x5B) & 0xFF for i in range(BIG)))
     if noise is not None:
-        data[noise_off:noise_off + len(noise)] = noise
+        data[noise_off : noise_off + len(noise)] = noise
     start = BIG - len(ec)
     data[start:] = ec
     # Erase the 1MB below the EC region, the way a real image does.
-    data[start - 0x100000:start] = b"\xFF" * 0x100000
+    data[start - 0x100000 : start] = b"\xff" * 0x100000
     return bytes(data)
 
 
@@ -155,6 +158,7 @@ def test_noise_hit_in_bios_area_not_reported_as_ec():
 
     # extraction must write ONLY the EC region
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         f.write(spi)
         path = f.name
@@ -165,7 +169,7 @@ def test_noise_hit_in_bios_area_not_reported_as_ec():
         with open(out, "rb") as f:
             extracted = f.read()
         assert len(extracted) <= 0x80000, f"extracted {len(extracted)} bytes!"
-        assert extracted == spi[analysis.offset:analysis.offset + analysis.size]
+        assert extracted == spi[analysis.offset : analysis.offset + analysis.size]
     finally:
         os.unlink(path)
         if os.path.exists(out):
@@ -187,6 +191,7 @@ def test_pure_noise_rejected():
 # into the EC instead of at its real start).
 # ---------------------------------------------------------------------------
 
+
 def _lenovo_15ahp9_style_dump(seed=1234, ec_size=0x40000, total=0x2000000):
     """32MB 2-chip SPI dump: EC firmware as one chip-sized block at the TOP,
     plus EC-ish strings scattered through the BIOS area (the DXE that talks to
@@ -197,13 +202,14 @@ def _lenovo_15ahp9_style_dump(seed=1234, ec_size=0x40000, total=0x2000000):
     was never programmed. That gap is what delimits the region start.
     """
     import random
+
     random.seed(seed)
     data = bytearray(random.getrandbits(8) for _ in range(total))
 
     ec_off = total - ec_size
-    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    data[ec_off - 0x100000 : ec_off] = b"\xff" * 0x100000
     ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
-    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x0000:0x0004] = b"\xaa\x55\xaa\x55"
     ec[0x0100:0x0109] = b"IT8218VG "
     ec[0x0200:0x0206] = b"ITE8\x02\x00"
     ec[0x0700:0x0706] = b"ENE\x00\x01\x00"
@@ -211,7 +217,7 @@ def _lenovo_15ahp9_style_dump(seed=1234, ec_size=0x40000, total=0x2000000):
     data[ec_off:] = ec
 
     for off in (0x21000, 0x34000, 0x5A000, 0x9C000, 0x120000, 0x1A0000):
-        data[off:off + 6] = b"ITE8\x02\x00"
+        data[off : off + 6] = b"ITE8\x02\x00"
     return bytes(data), ec_off
 
 
@@ -243,7 +249,7 @@ def test_detection_survives_randomised_noise():
 
 def test_manual_override_is_honoured():
     """When auto-detect fails the user must be able to pin the region."""
-    data = b"\xFF" * 0x100000          # nothing detectable at all
+    data = b"\xff" * 0x100000  # nothing detectable at all
     analysis = ECPatcher().analyze_ec(data, offset=0x80000, size=0x40000)
     assert analysis.found
     assert analysis.offset == 0x80000
@@ -251,7 +257,7 @@ def test_manual_override_is_honoured():
 
 
 def test_manual_override_past_eof_is_refused():
-    data = b"\xFF" * 0x10000
+    data = b"\xff" * 0x10000
     analysis = ECPatcher().analyze_ec(data, offset=0x8000, size=0x40000)
     assert not analysis.found
     assert "past the end" in analysis.message
@@ -260,8 +266,9 @@ def test_manual_override_past_eof_is_refused():
 def test_extract_with_override_writes_exact_size():
     import os
     import tempfile
-    payload = bytes(range(256)) * 1024      # 256KB of identifiable data
-    data = b"\xFF" * 0x10000 + payload
+
+    payload = bytes(range(256)) * 1024  # 256KB of identifiable data
+    data = b"\xff" * 0x10000 + payload
 
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         f.write(data)
@@ -293,21 +300,23 @@ def test_extract_with_override_writes_exact_size():
 # marker positions must never shrink it.
 # ---------------------------------------------------------------------------
 
+
 def _late_marker_dump(ec_size=0x40000, total=0x2000000, marker_at=0x20000):
     """32MB dump whose EC block sits at the top with its markers LATE in the
     image, and NO 0xFF padding separating it from the BIOS area (so there is no
     padding boundary to bound the start)."""
     import random
+
     random.seed(4242)
     data = bytearray(random.getrandbits(8) for _ in range(total))
     ec_off = total - ec_size
     # erased-flash gap below the EC region, as in a real 2-chip image
-    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    data[ec_off - 0x100000 : ec_off] = b"\xff" * 0x100000
     ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
-    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
-    ec[marker_at:marker_at + 9] = b"IT8218VG "
-    ec[marker_at + 0x100:marker_at + 0x106] = b"ITE8\x02\x00"
-    ec[marker_at + 0x300:marker_at + 0x304] = b"8218"
+    ec[0x0000:0x0004] = b"\xaa\x55\xaa\x55"
+    ec[marker_at : marker_at + 9] = b"IT8218VG "
+    ec[marker_at + 0x100 : marker_at + 0x106] = b"ITE8\x02\x00"
+    ec[marker_at + 0x300 : marker_at + 0x304] = b"8218"
     data[ec_off:] = ec
     return bytes(data), ec_off
 
@@ -330,9 +339,7 @@ def test_size_is_independent_of_marker_position(marker_at):
     data, ec_off = _late_marker_dump(marker_at=marker_at)
     analysis = ECPatcher().analyze_ec(data)
     assert analysis.found
-    assert analysis.size == 0x40000, (
-        f"marker at +0x{marker_at:X} gave size 0x{analysis.size:X}"
-    )
+    assert analysis.size == 0x40000, f"marker at +0x{marker_at:X} gave size 0x{analysis.size:X}"
 
 
 def test_single_ff_block_inside_firmware_is_not_a_region_boundary():
@@ -341,7 +348,7 @@ def test_single_ff_block_inside_firmware_is_not_a_region_boundary():
     data, ec_off = _late_marker_dump()
     data = bytearray(data)
     # erase 4KB in the MIDDLE of the EC image
-    data[ec_off + 0x10000:ec_off + 0x11000] = b"\xFF" * 0x1000
+    data[ec_off + 0x10000 : ec_off + 0x11000] = b"\xff" * 0x1000
     analysis = ECPatcher().analyze_ec(bytes(data))
     assert analysis.found
     assert analysis.size == 0x40000, f"internal FF run truncated to 0x{analysis.size:X}"
@@ -364,7 +371,7 @@ def test_end_anchored_extraction_uses_chip_capacity():
         with open(out, "rb") as f:
             got = f.read()
         assert len(got) == 0x40000, f"wrote {len(got)} bytes, want 262144"
-        assert got == data[ec_off:ec_off + 0x40000]
+        assert got == data[ec_off : ec_off + 0x40000]
     finally:
         os.unlink(path)
         if os.path.exists(out):
@@ -385,16 +392,17 @@ def test_end_anchored_respects_0xff_terminated_region():
     """With a padding tail after the EC, the end is the padding boundary -- the
     extracted bytes must still be exactly the EC image, not the padding."""
     import random
+
     random.seed(7)
     total = 0x2000000
     ec_size = 0x40000
     data = bytearray(random.getrandbits(8) for _ in range(total))
     ec_off = 0x100000
     ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
-    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x0000:0x0004] = b"\xaa\x55\xaa\x55"
     ec[0x0010:0x0019] = b"IT8218VG "
-    data[ec_off:ec_off + ec_size] = ec
-    data[ec_off + ec_size:] = b"\xFF" * (total - ec_off - ec_size)
+    data[ec_off : ec_off + ec_size] = ec
+    data[ec_off + ec_size :] = b"\xff" * (total - ec_off - ec_size)
 
     p = ECPatcher()
     offset, size, err = p.resolve_region(bytes(data), None, ec_size)
@@ -405,16 +413,17 @@ def test_end_anchored_respects_0xff_terminated_region():
 
 def _layout_dump(ec_size, gap_before, marker_pos, total=0x2000000, seed=1234):
     import random
+
     random.seed(seed)
     d = bytearray(random.getrandbits(8) for _ in range(total))
     ec_off = total - ec_size
     if gap_before:
-        d[ec_off - gap_before:ec_off] = b"\xFF" * gap_before
+        d[ec_off - gap_before : ec_off] = b"\xff" * gap_before
     ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
-    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
-    ec[marker_pos:marker_pos + 9] = b"IT8218VG "
-    ec[marker_pos + 0x100:marker_pos + 0x106] = b"ITE8\x02\x00"
-    ec[marker_pos + 0x300:marker_pos + 0x304] = b"8218"
+    ec[0x0000:0x0004] = b"\xaa\x55\xaa\x55"
+    ec[marker_pos : marker_pos + 9] = b"IT8218VG "
+    ec[marker_pos + 0x100 : marker_pos + 0x106] = b"ITE8\x02\x00"
+    ec[marker_pos + 0x300 : marker_pos + 0x304] = b"8218"
     d[ec_off:] = ec
     return bytes(d), ec_off
 
@@ -456,7 +465,7 @@ def test_end_anchored_is_exact_for_every_layout(label, ec_size, gap, mpos):
         with open(out, "rb") as f:
             got = f.read()
         assert len(got) == ec_size, f"{label}: wrote {len(got)}"
-        assert got == data[ec_off:ec_off + ec_size], f"{label}: wrong bytes"
+        assert got == data[ec_off : ec_off + ec_size], f"{label}: wrong bytes"
     finally:
         os.unlink(path)
         if os.path.exists(out):
@@ -489,8 +498,9 @@ def test_extract_without_override_explains_how_to_proceed():
     """A not-found result must tell the user how to fix it, not just fail."""
     import os
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        f.write(b"\xFF" * 0x80000)
+        f.write(b"\xff" * 0x80000)
         path = f.name
     out = "/tmp/ec_nf.bin"
     try:
@@ -527,22 +537,22 @@ def _two_sided_dump(ec_size, total=0x400000, seed=99, tail=0):
     """Content, then an erased gap, the EC image, an optional stray non-FF
     `tail` directly above the region, then erased flash to EOF."""
     import random
+
     random.seed(seed)
     ec_off = 0x180000
     data = bytearray(random.getrandbits(8) for _ in range(total))
-    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    data[ec_off - 0x100000 : ec_off] = b"\xff" * 0x100000
     ec = bytearray(random.getrandbits(8) for _ in range(ec_size))
-    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x0000:0x0004] = b"\xaa\x55\xaa\x55"
     ec[0x0100:0x0109] = b"IT8218VG "
     ec[0x0200:0x0206] = b"ITE8\x02\x00"
     ec[0x0900:0x0904] = b"8218"
-    data[ec_off:ec_off + ec_size] = ec
+    data[ec_off : ec_off + ec_size] = ec
     after = ec_off + ec_size
     if tail:
-        data[after:after + tail] = bytes(
-            (i * 13 + 3) & 0xFF for i in range(tail))
+        data[after : after + tail] = bytes((i * 13 + 3) & 0xFF for i in range(tail))
         after += tail
-    data[after:] = b"\xFF" * (total - after)
+    data[after:] = b"\xff" * (total - after)
     return bytes(data), ec_off
 
 
@@ -576,6 +586,7 @@ def test_measured_start_is_never_recomputed_from_the_end():
 
     # and nothing may be written on refusal
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         f.write(data)
         path = f.name
@@ -596,6 +607,7 @@ def test_region_whose_end_is_unobservable_refuses():
     must refuse rather than guess -- and the end-anchored path must refuse too
     instead of reporting the search ceiling as an end."""
     import random
+
     random.seed(31337)
     total = 0x400000
     # deterministic pattern whose bytes always differ by 7, so it can never
@@ -603,12 +615,12 @@ def test_region_whose_end_is_unobservable_refuses():
     data = bytearray(((i * 7 + 0x5B) & 0xFF) for i in range(total))
     ec_size = 0x40000
     ec_off = 0x180000
-    data[ec_off - 0x100000:ec_off] = b"\xFF" * 0x100000
+    data[ec_off - 0x100000 : ec_off] = b"\xff" * 0x100000
     ec = bytearray(((i * 7 + 0x5B) & 0xFF) for i in range(ec_size))
     ec[0x0100:0x0109] = b"IT8218VG "
     ec[0x0200:0x0206] = b"ITE8\x02\x00"
     ec[0x0900:0x0904] = b"8218"
-    data[ec_off:ec_off + ec_size] = ec
+    data[ec_off : ec_off + ec_size] = ec
     # NOTE: no padding after the region -- content continues to EOF.
 
     p = ECPatcher()
@@ -634,8 +646,9 @@ def test_region_whose_end_is_unobservable_refuses():
 _PATTERN_CYCLE = bytes(((i * 7 + 0x5B) & 0xFF) for i in range(256))
 
 
-def _padded_tail_dump(total=0x800000, capacity=0x40000, usable=0x30000,
-                      stray=2, pad=0x10000, next_lead_ff=0):
+def _padded_tail_dump(
+    total=0x800000, capacity=0x40000, usable=0x30000, stray=2, pad=0x10000, next_lead_ff=0
+):
     """Mid-dump SPI image with a capacity-padded EC image and strays below it.
 
     * The padding below the region stops ``stray`` programmed bytes BEFORE
@@ -651,21 +664,20 @@ def _padded_tail_dump(total=0x800000, capacity=0x40000, usable=0x30000,
     data = bytearray(_PATTERN_CYCLE * (total // 256))
     ec_off = 0x300000
     # gap below the region, stopping `stray` bytes short of its start
-    data[ec_off - stray - pad:ec_off - stray] = b"\xFF" * pad
+    data[ec_off - stray - pad : ec_off - stray] = b"\xff" * pad
     for i in range(stray):
         data[ec_off - stray + i] = 0x11 + i
     # the EC image: marker cluster near its start, tail padded to capacity
     ec = bytearray(_PATTERN_CYCLE * (capacity // 256))
-    ec[0x0000:0x0004] = b"\xAA\x55\xAA\x55"
+    ec[0x0000:0x0004] = b"\xaa\x55\xaa\x55"
     ec[0x0100:0x0109] = b"IT8218VG "
     ec[0x0200:0x0206] = b"ITE8\x02\x00"
     ec[0x0900:0x0904] = b"8218"
-    ec[usable:capacity] = b"\xFF" * (capacity - usable)
-    data[ec_off:ec_off + capacity] = ec
+    ec[usable:capacity] = b"\xff" * (capacity - usable)
+    data[ec_off : ec_off + capacity] = ec
     # the next region's content resumes at capacity end
     if next_lead_ff:
-        data[ec_off + capacity:ec_off + capacity + next_lead_ff] = (
-            b"\xFF" * next_lead_ff)
+        data[ec_off + capacity : ec_off + capacity + next_lead_ff] = b"\xff" * next_lead_ff
         data[ec_off + capacity + next_lead_ff] = 0x77
     else:
         data[ec_off + capacity] = 0x77
@@ -675,8 +687,7 @@ def _padded_tail_dump(total=0x800000, capacity=0x40000, usable=0x30000,
 def test_auto_detects_capacity_padded_region_mid_dump():
     """An image 0xFF-padded out to its capacity ends where the next region
     resumes, even though the forward walk stops at the padding's start."""
-    for capacity, usable in ((0x20000, 0x18000), (0x40000, 0x30000),
-                             (0x80000, 0x60000)):
+    for capacity, usable in ((0x20000, 0x18000), (0x40000, 0x30000), (0x80000, 0x60000)):
         data, ec_off, cap = _padded_tail_dump(capacity=capacity, usable=usable)
         p = ECPatcher()
         off, size = p.find_ec_region(data)
@@ -685,7 +696,7 @@ def test_auto_detects_capacity_padded_region_mid_dump():
         analysis = p.analyze_ec(data)
         assert analysis.found, f"capacity 0x{cap:X}"
         assert (analysis.offset, analysis.size) == (ec_off, cap)
-        assert analysis.raw == data[ec_off:ec_off + cap]
+        assert analysis.raw == data[ec_off : ec_off + cap]
         assert b"IT8218VG" in analysis.raw
 
         # end-anchored mode (capacity only) must land on the same start
@@ -701,8 +712,7 @@ def test_strays_below_the_region_start_never_shift_the_answer():
         off, size = ECPatcher().find_ec_region(data)
         assert (off, size) == (ec_off, capacity), f"stray={stray}"
         r_off, r_size, err = ECPatcher().resolve_region(data, None, capacity)
-        assert err == "" and (r_off, r_size) == (ec_off, capacity), \
-            f"stray={stray}"
+        assert err == "" and (r_off, r_size) == (ec_off, capacity), f"stray={stray}"
 
 
 def test_ff_led_next_region_is_refused_not_shifted():

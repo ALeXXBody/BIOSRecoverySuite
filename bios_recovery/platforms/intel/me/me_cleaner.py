@@ -1,7 +1,7 @@
 """Intel ME/TXE/CSME cleaning engine - strips and neuters management firmware."""
 
-import struct
 import os
+import struct
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
@@ -95,6 +95,7 @@ class IntelMECleaner:
         if not me_version:
             # Same reader the analyzer uses, so the two tools cannot disagree on the version.
             from bios_recovery.core.bios_analyzer import BiosAnalyzer
+
             me_version = BiosAnalyzer().analyze(input_path).me_version
         me_type = self._get_me_type(me_version)
         original_size = me_end - me_start
@@ -141,7 +142,9 @@ class IntelMECleaner:
         )
 
         fpt_offset = self._find_fpt(data, me_start, me_end)
-        entries = self._parse_fpt_entries(data, fpt_offset, me_start, me_end) if fpt_offset >= 0 else []
+        entries = (
+            self._parse_fpt_entries(data, fpt_offset, me_start, me_end) if fpt_offset >= 0 else []
+        )
 
         ftpr_entry = None
         for name, offset, size in entries:
@@ -155,7 +158,7 @@ class IntelMECleaner:
             # cleaning is not meaningful there; HAP soft-disable still applies.
             exp_end = min(me_end, len(data))
             # The $CPD manifest of a CSE LT layout may sit in the block before the partition base.
-            if b"$CPD" in data[max(0, me_start - 0x1000):exp_end]:
+            if b"$CPD" in data[max(0, me_start - 0x1000) : exp_end]:
                 if soft_disable:
                     self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major)
                     report.hap_bit_set = True
@@ -199,7 +202,9 @@ class IntelMECleaner:
         if truncate and me_gen in (MeGeneration.GEN2, MeGeneration.GEN3) and ftpr_entry is not None:
             self._truncate_me(data, me_start, entries, ftpr_entry)
             report.cleaned_size = len(data) - me_start
-            report.messages.append(f"ME region truncated from {original_size:#x} to {report.cleaned_size:#x}")
+            report.messages.append(
+                f"ME region truncated from {original_size:#x} to {report.cleaned_size:#x}"
+            )
         elif truncate:
             report.messages.append("Truncation skipped: no FTPR partition to bound the region")
 
@@ -251,7 +256,9 @@ class IntelMECleaner:
         # (e) No descriptor at all, but a valid FPT somewhere (raw ME region dump)
         return -1, -1, MeGeneration.UNKNOWN
 
-    def _me_region_from_flreg(self, data: bytes, fd: int) -> Optional[tuple[int, int, MeGeneration]]:
+    def _me_region_from_flreg(
+        self, data: bytes, fd: int
+    ) -> Optional[tuple[int, int, MeGeneration]]:
         """ME region from the descriptor's FLREG2 entry.
 
         FLMAP0 (fd+0x04) gives FRBA in 16-byte units from the descriptor start; the FLREG
@@ -291,7 +298,7 @@ class IntelMECleaner:
         if pos + 0x24 > N:
             return -1
         while pos + 0x24 <= N:
-            if data[pos:pos + 4] == self.FPT_SIGNATURE:
+            if data[pos : pos + 4] == self.FPT_SIGNATURE:
                 count = struct.unpack_from("<I", data, pos + 0x04)[0]
                 if 1 <= count <= 64 and pos + 0x20 + count * 0x20 <= N:
                     return pos
@@ -306,7 +313,7 @@ class IntelMECleaner:
         N = len(data)
         pos = 0
         while pos + 0x24 <= N:
-            if data[pos:pos + 4] == self.FPT_SIGNATURE:
+            if data[pos : pos + 4] == self.FPT_SIGNATURE:
                 count = struct.unpack_from("<I", data, pos + 0x04)[0]
                 if 1 <= count <= 64 and pos + 0x20 + count * 0x20 <= N:
                     return pos
@@ -323,7 +330,11 @@ class IntelMECleaner:
         the table). Falls back to the table's own end when no partition is usable.
         """
         end = 0
-        n = min(struct.unpack_from("<I", data, fpt_off + 0x04)[0], 32) if fpt_off + 8 <= len(data) else 0
+        n = (
+            min(struct.unpack_from("<I", data, fpt_off + 0x04)[0], 32)
+            if fpt_off + 8 <= len(data)
+            else 0
+        )
         for i in range(n):
             e = fpt_off + 0x20 + i * 0x20
             if e + 0x10 > len(data):
@@ -342,7 +353,7 @@ class IntelMECleaner:
         end = fpt_off + 0x20 + entries * 0x20
         for i in range(min(entries, 64)):
             off = fpt_off + 0x20 + i * 0x20
-            name, offset, size = data[off:off + 4], *struct.unpack_from("<II", data, off + 0x08)
+            name, offset, size = data[off : off + 4], *struct.unpack_from("<II", data, off + 0x08)
             if name == b"FTPR" and size != 0xFFFFFFFF:
                 rel_end = fpt_off - 0x10 + offset + size
                 end = max(end, min(rel_end, len(data)))
@@ -370,14 +381,14 @@ class IntelMECleaner:
                 entry_off = fpt_off + 0x20 + i * 0x20
                 if entry_off + 0x20 > len(data):
                     break
-                entry_name = data[entry_off:entry_off + 4]
+                entry_name = data[entry_off : entry_off + 4]
                 entry_off_v, _ = struct.unpack_from("<II", data, entry_off + 0x08)
                 if entry_name in (b"CODE", b"NFTP", b"BRIN"):
                     return MeGeneration.GEN2 if entry_name != b"BRIN" else MeGeneration.GEN1
                 if entry_name == b"FTPR":
                     abs_off = me_start + entry_off_v
                     if abs_off + 4 <= len(data):
-                        tag = data[abs_off:abs_off + 4]
+                        tag = data[abs_off : abs_off + 4]
                         if tag == b"$CPD":
                             return MeGeneration.GEN3
                         if tag == b"$MN2":
@@ -401,7 +412,7 @@ class IntelMECleaner:
             entry_off = fpt_offset + 0x20 + i * 0x20
             if entry_off + 0x20 > len(data):
                 break
-            name = data[entry_off:entry_off + 4]
+            name = data[entry_off : entry_off + 4]
             offset, size = struct.unpack_from("<II", data, entry_off + 0x08)
             abs_offset = me_start + offset
             if abs_offset + size <= me_end:
@@ -425,7 +436,7 @@ class IntelMECleaner:
             if offset < ftpr_end and offset + size > ftpr_off:
                 continue
             end = min(offset + size, len(data))
-            data[offset:end] = b"\xFF" * (end - offset)
+            data[offset:end] = b"\xff" * (end - offset)
             removed += 1
         return removed
 
@@ -451,7 +462,7 @@ class IntelMECleaner:
             if fpsba_abs + 0x100 <= len(data):
                 try:
                     pchstrp0 = struct.unpack_from("<I", data, fpsba_abs)[0]
-                    pchstrp0 |= (1 << 16)
+                    pchstrp0 |= 1 << 16
                     struct.pack_into("<I", data, fpsba_abs, pchstrp0)
                 except struct.error:
                     pass
@@ -459,7 +470,7 @@ class IntelMECleaner:
             if fpsba_abs + 0x30 <= len(data):
                 try:
                     pchstrp10 = struct.unpack_from("<I", data, fpsba_abs + 0x28)[0]
-                    pchstrp10 |= (1 << 7)
+                    pchstrp10 |= 1 << 7
                     struct.pack_into("<I", data, fpsba_abs + 0x28, pchstrp10)
                 except struct.error:
                     pass
@@ -536,6 +547,7 @@ class IntelMECleaner:
         their own manifests, so the first match is not necessarily the engine.
         """
         from collections import Counter
+
         n = len(data)
         exp_end = min(me_start + 0x1000000, n)  # manifests of auxiliary modules sit past the table
         counts: Counter = Counter()
@@ -597,7 +609,11 @@ class IntelMECleaner:
             "offset": f"{me_start:#x}",
             "size": f"{me_end - me_start:#x}",
             "partitions": [
-                {"name": n.decode("ascii", errors="replace"), "offset": f"{o:#x}", "size": f"{s:#x}"}
+                {
+                    "name": n.decode("ascii", errors="replace"),
+                    "offset": f"{o:#x}",
+                    "size": f"{s:#x}",
+                }
                 for n, o, s in entries
             ],
         }
@@ -621,7 +637,7 @@ class IntelMECleaner:
             return -sum((v / n) * math.log2(v / n) for v in c.values())
 
         samples = [
-            data[o:o + 0x10000]
+            data[o : o + 0x10000]
             for o in range(0, min(len(data), 0x2000000), max(1, len(data) // 8))
         ][:8]
         samples = [s for s in samples if s]

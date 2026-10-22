@@ -115,16 +115,20 @@ class DMIEditor:
         }
         for off, stype, slen, strings in _smbios_structures(data, table_addr, table_len):
             if stype == 1 and len(data) >= off + 0x1B:
-                serial_idx = data[off + 0x07]     # Type 1 SerialNumber per spec
-                out["uuid"] = data[off + 0x08:off + 0x18].hex()
+                serial_idx = data[off + 0x07]  # Type 1 SerialNumber per spec
+                out["uuid"] = data[off + 0x08 : off + 0x18].hex()
                 if 1 <= serial_idx <= len(strings):
                     s = strings[serial_idx - 1]
-                    out["serials"]["system"] = data[s[0]:s[0] + s[1]].decode("ascii", errors="replace")
+                    out["serials"]["system"] = data[s[0] : s[0] + s[1]].decode(
+                        "ascii", errors="replace"
+                    )
             if stype == 2 and len(data) >= off + 0x08:
                 serial_idx = data[off + 0x07]
                 if 1 <= serial_idx <= len(strings):
                     s = strings[serial_idx - 1]
-                    out["serials"]["baseboard"] = data[s[0]:s[0] + s[1]].decode("ascii", errors="replace")
+                    out["serials"]["baseboard"] = data[s[0] : s[0] + s[1]].decode(
+                        "ascii", errors="replace"
+                    )
         return out
 
     @staticmethod
@@ -149,7 +153,7 @@ class DMIEditor:
         gb_limit = ((flreg3 >> 16) & 0x7FFF) << 12 | 0xFFF
         if gb_base == 0 or gb_base > gb_limit or gb_limit > len(data):
             return None
-        mac = data[gb_base:gb_base + 6]
+        mac = data[gb_base : gb_base + 6]
         if mac == b"\xff" * 6 or mac == b"\x00" * 6:
             return None
         return ":".join(f"{b:02X}" for b in mac)
@@ -178,7 +182,7 @@ class DMIEditor:
             targets = []
             for off, stype, slen, strings in structures:
                 if stype == 1 and len(data) >= off + 0x1B:
-                    idx = data[off + 0x07]        # Type 1 SerialNumber per spec
+                    idx = data[off + 0x07]  # Type 1 SerialNumber per spec
                     if 1 <= idx <= len(strings):
                         targets.append(strings[idx - 1])
                 if stype == 2 and len(data) >= off + 0x08:
@@ -194,7 +198,7 @@ class DMIEditor:
                         f"({len(new)} != {s_len}); equal-length in-place swaps only"
                     )
                     continue
-                data[s_off:s_off + s_len] = new
+                data[s_off : s_off + s_len] = new
                 report.operations.append(
                     f"serial replaced @0x{s_off:x} (equal-length swap, {s_len} bytes)"
                 )
@@ -207,7 +211,7 @@ class DMIEditor:
             done = 0
             for off, stype, slen, _ in structures:
                 if stype == 1:
-                    data[off + 0x08:off + 0x18] = bytes.fromhex(hexs)
+                    data[off + 0x08 : off + 0x18] = bytes.fromhex(hexs)
                     done += 1
                     report.operations.append(f"Type-1 UUID written @0x{off + 8:x}")
             if not done:
@@ -228,7 +232,7 @@ class DMIEditor:
                 if not (gb_base and gb_base <= gb_limit and gb_limit <= len(data)):
                     report.warnings.append("descriptor has no valid GbE region - MAC skipped")
                 else:
-                    data[gb_base:gb_base + 6] = bytes.fromhex(raw)
+                    data[gb_base : gb_base + 6] = bytes.fromhex(raw)
                     report.operations.append(f"MAC written to GbE region @0x{gb_base:x}")
 
         if not report.operations and not report.warnings:

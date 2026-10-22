@@ -5,7 +5,6 @@ next to the exe shadows the system copy and Qt dies with a bare
 """
 
 import os
-import sys
 
 import pytest
 

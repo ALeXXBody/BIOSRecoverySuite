@@ -3,53 +3,50 @@
 import os
 import sys
 
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
-    QToolButton,
-    QPushButton,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
-    QFileDialog,
-    QMessageBox,
     QLineEdit,
-    QComboBox,
-    QCheckBox,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QGroupBox,
-    QPlainTextEdit,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QIcon
 
+from bios_recovery import __version__
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
-from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
+from bios_recovery.core.bios_repair import BiosRepairEngine
+from bios_recovery.core.dmi_clone import DMIClone
 from bios_recovery.core.dmi_extractor import DMIExtractor
 from bios_recovery.core.password_remover import PasswordRemover
-from bios_recovery.core.bios_repair import BiosRepairEngine
-from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
-from bios_recovery.manufacturers.hp.hp_unlocker import HPUnlocker
-from bios_recovery.platforms.intel.me.me_injector import MEInjector
-from bios_recovery.core.dmi_clone import DMIClone
-from bios_recovery.utils import master_passwords
-from bios_recovery.manufacturers.profiles import ManufacturerProfiles
-from bios_recovery.gui.sidebar_tabs import SidebarTabs
-from bios_recovery.gui.settings_page import SettingsPage
-from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
-from bios_recovery.gui.spi_tab import SPITab
 from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
-from bios_recovery.gui.update_dialog import UpdateDialog, CheckWorker
-from bios_recovery import __version__
-from bios_recovery.platforms.intel.me import mea_bridge
-
-
+from bios_recovery.gui.rebuild_check_page import RebuildCheckPage
+from bios_recovery.gui.settings_page import SettingsPage
+from bios_recovery.gui.sidebar_tabs import SidebarTabs
+from bios_recovery.gui.spi_tab import SPITab
+from bios_recovery.gui.update_dialog import CheckWorker, UpdateDialog
 from bios_recovery.gui.workers import track, wait_for_workers
-
+from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
+from bios_recovery.manufacturers.hp.hp_unlocker import HPUnlocker
+from bios_recovery.manufacturers.profiles import ManufacturerProfiles
+from bios_recovery.platforms.intel.me import mea_bridge
+from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
+from bios_recovery.platforms.intel.me.me_injector import MEInjector
+from bios_recovery.utils import master_passwords
 
 # Tab titles whose tool name in core/traits_matrix.py differs from the title.
 _TAB_TOOL_NAMES = {"Security": "Passwords"}
@@ -57,6 +54,7 @@ _TAB_TOOL_NAMES = {"Security": "Passwords"}
 
 class WorkerThread(QThread):
     """Runs a task in a background thread."""
+
     finished = Signal(object)
     error = Signal(str)
     progress = Signal(int, str)
@@ -189,10 +187,12 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.hex_tab, "Hex Viewer")
         self.tabs.addTab(self.lenovo_tab, "Lenovo Unlock")
         self.rebuild_page = RebuildCheckPage(
-            self, run_task=lambda task, done: self._run_in_thread(task, done))
+            self, run_task=lambda task, done: self._run_in_thread(task, done)
+        )
         self.tabs.addTab(self.rebuild_page, "Rebuild Check")
         self.settings_page = SettingsPage(
-            self, run_task=lambda task, done: self._run_in_thread(task, done))
+            self, run_task=lambda task, done: self._run_in_thread(task, done)
+        )
         self.tabs.addTab(self.settings_page, "Settings")
 
         self._build_menubar()
@@ -209,7 +209,9 @@ class MainWindow(QMainWindow):
         tool_menu.addAction("&Repair BIOS", lambda: self.tabs.setCurrentWidget(self.repair_tab))
         tool_menu.addAction("&Clean ME", lambda: self.tabs.setCurrentWidget(self.me_tab))
         tool_menu.addAction("&Extract DMI", lambda: self.tabs.setCurrentWidget(self.dmi_tab))
-        tool_menu.addAction("Remove &Passwords", lambda: self.tabs.setCurrentWidget(self.password_tab))
+        tool_menu.addAction(
+            "Remove &Passwords", lambda: self.tabs.setCurrentWidget(self.password_tab)
+        )
         tool_menu.addAction("SPI &Flasher", lambda: self.tabs.setCurrentWidget(self.spi_tab))
         tool_menu.addAction("&EC Patching", lambda: self.tabs.setCurrentWidget(self.ec_tab))
         tool_menu.addAction("&Lenovo Unlock", lambda: self.tabs.setCurrentWidget(self.lenovo_tab))
@@ -234,7 +236,8 @@ class MainWindow(QMainWindow):
             frame = QFrame()
             frame.setObjectName("overviewCard")
             frame.setStyleSheet(
-                "QFrame#overviewCard { background: #252537; border: 1px solid #313244; border-radius: 8px; }"
+                "QFrame#overviewCard { background: #252537; border: 1px solid #313244; "
+                "border-radius: 8px; }"
                 " QFrame#overviewCard QLabel { background: transparent; }"
             )
             card_layout = QVBoxLayout(frame)
@@ -293,7 +296,9 @@ class MainWindow(QMainWindow):
         toggle = QToolButton()
         toggle.setText(f"▸ {title}")
         toggle.setCheckable(True)
-        toggle.setStyleSheet("QToolButton { color: #7F849C; font-weight: bold; padding: 4px 0; border: none; }")
+        toggle.setStyleSheet(
+            "QToolButton { color: #7F849C; font-weight: bold; padding: 4px 0; border: none; }"
+        )
         content.setVisible(False)
 
         def on_toggled(checked):
@@ -327,7 +332,8 @@ class MainWindow(QMainWindow):
             me = "not present"
         self._cards["Firmware"].setText(
             f"<span style='color:#7F849C;font-size:11px'>Regions</span><br>"
-            f"<b>{sum(1 for r in result.regions if r.region_type.name == 'FIRMWARE_VOLUME')} firmware volumes</b><br>"
+            f"<b>{sum(1 for r in result.regions if r.region_type.name == 'FIRMWARE_VOLUME')} "
+            f"firmware volumes</b><br>"
             f"<span style='color:#7F849C;font-size:11px'>ME</span><br>"
             f"<b>{me}</b>"
         )
@@ -458,9 +464,12 @@ class MainWindow(QMainWindow):
 
         inject_group = QGroupBox("Inject Clean ME/TXE Region (repair corrupted ME)")
         inject_layout = QVBoxLayout(inject_group)
-        inject_layout.addWidget(QLabel(
-            "Replaces the whole ME region with a clean firmware image of the\n"
-            "same version (drag the clean .bin from your ME repository)."))
+        inject_layout.addWidget(
+            QLabel(
+                "Replaces the whole ME region with a clean firmware image of the\n"
+                "same version (drag the clean .bin from your ME repository)."
+            )
+        )
         inject_row = QHBoxLayout()
         self.me_clean_file = QLineEdit()
         self.me_clean_file.setPlaceholderText("Path to clean ME region image (.bin)")
@@ -481,8 +490,9 @@ class MainWindow(QMainWindow):
         return widget
 
     def browse_clean_me(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open clean ME image", "",
-                                              "Binary (*.bin);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open clean ME image", "", "Binary (*.bin);;All Files (*)"
+        )
         if path:
             self.me_clean_file.setText(path)
 
@@ -493,10 +503,14 @@ class MainWindow(QMainWindow):
         if not clean_path or not os.path.exists(clean_path):
             QMessageBox.warning(self, "No Clean Image", "Select a clean ME region image first.")
             return
-        self._run_in_thread(self.me_injector.inject, self._me_inject_done,
-                            self.current_file, clean_path,
-                            self.current_file.rsplit(".", 1)[0] + "_mefixed.bin",
-                            button=self.me_inject_btn)
+        self._run_in_thread(
+            self.me_injector.inject,
+            self._me_inject_done,
+            self.current_file,
+            clean_path,
+            self.current_file.rsplit(".", 1)[0] + "_mefixed.bin",
+            button=self.me_inject_btn,
+        )
 
     def _me_inject_done(self, result):
         if result["success"]:
@@ -546,9 +560,12 @@ class MainWindow(QMainWindow):
 
         clone_group = QGroupBox("Clone DMI Identity (old dump -> new dump)")
         clone_layout = QVBoxLayout(clone_group)
-        clone_layout.addWidget(QLabel(
-            "Carries serials/UUID/MAC data from the original dump into a clean\n"
-            "BIOS image so the machine keeps its identity after a reflash."))
+        clone_layout.addWidget(
+            QLabel(
+                "Carries serials/UUID/MAC data from the original dump into a clean\n"
+                "BIOS image so the machine keeps its identity after a reflash."
+            )
+        )
         clone_row = QHBoxLayout()
         clone_row.addWidget(QLabel("Old dump:"))
         self.clone_old_edit = QLineEdit()
@@ -578,8 +595,9 @@ class MainWindow(QMainWindow):
         return widget
 
     def browse_clone_new(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open new/clean BIOS dump", "",
-                                              "Binary (*.bin *.rom *.fd);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open new/clean BIOS dump", "", "Binary (*.bin *.rom *.fd);;All Files (*)"
+        )
         if path:
             self.clone_new_edit.setText(path)
 
@@ -592,9 +610,14 @@ class MainWindow(QMainWindow):
         if not new_path or not os.path.exists(new_path):
             QMessageBox.warning(self, "No New Dump", "Select the new/clean BIOS image.")
             return
-        self._run_in_thread(self.dmi_clone.clone, self._dmi_clone_done, old_path, new_path,
-                            new_path.rsplit(".", 1)[0] + "_dmiclone.bin",
-                            button=self.dmi_clone_btn)
+        self._run_in_thread(
+            self.dmi_clone.clone,
+            self._dmi_clone_done,
+            old_path,
+            new_path,
+            new_path.rsplit(".", 1)[0] + "_dmiclone.bin",
+            button=self.dmi_clone_btn,
+        )
 
     def _dmi_clone_done(self, result):
         if result["success"]:
@@ -644,9 +667,12 @@ class MainWindow(QMainWindow):
 
         hp_group = QGroupBox("HP Unlock (ProBook / EliteBook / ZBook dumps)")
         hp_layout = QVBoxLayout(hp_group)
-        hp_layout.addWidget(QLabel(
-            "Clears the HP admin password storage inside the dump\n"
-            "(UserCred block on modern UEFI, $VSS/BiosUser entries on legacy BIOSes)."))
+        hp_layout.addWidget(
+            QLabel(
+                "Clears the HP admin password storage inside the dump\n"
+                "(UserCred block on modern UEFI, $VSS/BiosUser entries on legacy BIOSes)."
+            )
+        )
         self.hp_unlock_btn = QPushButton("Unlock HP Dump")
         self.hp_unlock_btn.clicked.connect(self.hp_unlock)
         hp_layout.addWidget(self.hp_unlock_btn)
@@ -677,19 +703,21 @@ class MainWindow(QMainWindow):
         method_row = QHBoxLayout()
         method_row.addWidget(QLabel("Method:"))
         self.extract_method = QComboBox()
-        self.extract_method.addItems([
-            "Auto Detect",
-            "Dell PFS",
-            "HP / Insyde",
-            "Lenovo FL1",
-            "Lenovo EXE",
-            "ASUS",
-            "Acer",
-            "Toshiba",
-            "Samsung",
-            "Sony VAIO",
-            "Universal",
-        ])
+        self.extract_method.addItems(
+            [
+                "Auto Detect",
+                "Dell PFS",
+                "HP / Insyde",
+                "Lenovo FL1",
+                "Lenovo EXE",
+                "ASUS",
+                "Acer",
+                "Toshiba",
+                "Samsung",
+                "Sony VAIO",
+                "Universal",
+            ]
+        )
         method_row.addWidget(self.extract_method, 1)
         layout.addLayout(method_row)
 
@@ -745,8 +773,9 @@ class MainWindow(QMainWindow):
         row1.addWidget(self.gen_generator, 1)
         brand_layout.addLayout(row1)
 
-        hint = QLabel("Input: the hash/serial shown after 3 wrong passwords "
-                      "(or the system date for ASUS).")
+        hint = QLabel(
+            "Input: the hash/serial shown after 3 wrong passwords (or the system date for ASUS)."
+        )
         hint.setWordWrap(True)
         brand_layout.addWidget(hint)
 
@@ -775,7 +804,8 @@ class MainWindow(QMainWindow):
             self,
             "Open BIOS File",
             "",
-            "BIOS Files (*.bin *.rom *.fd *.wph *.exe *.cap *.fl1 *.pfs *.hdr *.dmi *.dump);;All Files (*)",
+            "BIOS Files (*.bin *.rom *.fd *.wph *.exe *.cap *.fl1 *.pfs *.hdr *.dmi *.dump);;"
+            "All Files (*)",
         )
         if path:
             self.current_file = path
@@ -845,9 +875,12 @@ class MainWindow(QMainWindow):
             return
         path = self.current_file
         button = getattr(self, "analyze_btn", None)
-        self._run_in_thread(self.bios_analyzer.analyze,
-                            lambda result: self._analysis_done_for(path, result), path,
-                            button=button)
+        self._run_in_thread(
+            self.bios_analyzer.analyze,
+            lambda result: self._analysis_done_for(path, result),
+            path,
+            button=button,
+        )
 
     def _analysis_done_for(self, path, result):
         # A result for a file the user has since switched away from must not be shown.
@@ -864,6 +897,7 @@ class MainWindow(QMainWindow):
         )
         # Platform-traits gating (architecture/vendor → which tools apply)
         from bios_recovery.core.traits import classify
+
         traits = classify(self._read_current_file_bytes())
         self._apply_traits(traits)
         self._update_overview_cards(result, traits)
@@ -917,10 +951,12 @@ class MainWindow(QMainWindow):
             self.platform_info.setPlainText("\n".join(lines))
 
         # Overview panel: show the classification (the traits matrix)
-        lines = ["", "=== Platform Classification ===",
-                 f"  Architecture: {traits.architecture}",
-                 f"  Vendor: {traits.vendor}",
-                 ]
+        lines = [
+            "",
+            "=== Platform Classification ===",
+            f"  Architecture: {traits.architecture}",
+            f"  Vendor: {traits.vendor}",
+        ]
         if traits.me_family:
             lines.append(f"  ME family: {traits.me_family} (version {traits.me_version or '?'})")
         for title in ("ME Cleaner", "Lenovo Unlock"):
@@ -961,7 +997,9 @@ class MainWindow(QMainWindow):
             self.regions_table.setItem(i, 0, QTableWidgetItem(region.name))
             self.regions_table.setItem(i, 1, QTableWidgetItem(region.region_type.name))
             self.regions_table.setItem(i, 2, QTableWidgetItem(f"0x{region.offset:X}"))
-            self.regions_table.setItem(i, 3, QTableWidgetItem(f"0x{region.size:X} ({region.size:,} bytes)"))
+            self.regions_table.setItem(
+                i, 3, QTableWidgetItem(f"0x{region.size:X} ({region.size:,} bytes)")
+            )
 
     def run_repair(self):
         if not self.current_file:
@@ -1007,13 +1045,16 @@ class MainWindow(QMainWindow):
             return
         self.graft_btn.setEnabled(False)
         engine = BiosRepairEngine()
-        self._run_in_thread(engine.auto_graft_from_donor, self._graft_done,
-                            self.current_file, donor)
+        self._run_in_thread(
+            engine.auto_graft_from_donor, self._graft_done, self.current_file, donor
+        )
 
     def _graft_done(self, report):
         self.graft_btn.setEnabled(True)
-        lines = [f"Graft {'Success' if report.success else 'Failed'}",
-                 f"Output: {report.output_path}"]
+        lines = [
+            f"Graft {'Success' if report.success else 'Failed'}",
+            f"Output: {report.output_path}",
+        ]
         for op in report.operations:
             lines.append(f"  + {op}")
         for warn in report.warnings:
@@ -1054,7 +1095,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Flashable image written: {info.output_path}")
 
     def build_flashable_merged(self):
-        from bios_recovery.manufacturers.common.bios_capsule import extract_flashable_image, restore_nvar_from_dump
+        from bios_recovery.manufacturers.common.bios_capsule import (
+            extract_flashable_image,
+            restore_nvar_from_dump,
+        )
 
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a capsule update (.CAP/.308/.217) first.")
@@ -1070,8 +1114,10 @@ class MainWindow(QMainWindow):
         self.capsule_merge_btn.setEnabled(False)
 
         def task():
-            base = extract_flashable_image(self.current_file,
-                                           output_path=self.current_file.rsplit(".", 1)[0] + "_flashable_merged_base.bin")
+            base = extract_flashable_image(
+                self.current_file,
+                output_path=self.current_file.rsplit(".", 1)[0] + "_flashable_merged_base.bin",
+            )
             if not base.success:
                 return base
             merged = base.output_path
@@ -1156,14 +1202,20 @@ class MainWindow(QMainWindow):
     def hp_unlock(self):
         if not self.current_file:
             return
-        self._run_in_thread(self.hp_unlocker.unlock, self._hp_unlock_done, self.current_file,
-                            self.current_file.rsplit(".", 1)[0] + "_unlocked.bin",
-                            button=self.hp_unlock_btn)
+        self._run_in_thread(
+            self.hp_unlocker.unlock,
+            self._hp_unlock_done,
+            self.current_file,
+            self.current_file.rsplit(".", 1)[0] + "_unlocked.bin",
+            button=self.hp_unlock_btn,
+        )
 
     def _hp_unlock_done(self, report):
-        lines = [f"Style: {report['style'] or 'unknown'}",
-                 f"Success: {report['success']}",
-                 f"Output: {report['output_path']}"]
+        lines = [
+            f"Style: {report['style'] or 'unknown'}",
+            f"Success: {report['success']}",
+            f"Output: {report['output_path']}",
+        ]
         lines.extend(f"  - {m}" for m in report["messages"])
         self.password_text.setPlainText("\n".join(lines))
         if not report["success"]:
@@ -1211,7 +1263,10 @@ class MainWindow(QMainWindow):
             f"=== Memory Devices: {len(info.memory_devices)} ===",
         ]
         for mem in info.memory_devices:
-            lines.append(f"  {mem.get('device_locator', '')}: {mem.get('manufacturer', '')} {mem.get('part_number', '')} SN:{mem.get('serial_number', '')}")
+            lines.append(
+                f"  {mem.get('device_locator', '')}: {mem.get('manufacturer', '')} "
+                f"{mem.get('part_number', '')} SN:{mem.get('serial_number', '')}"
+            )
         lines.append("")
         lines.append(f"Total structures: {len(info.structures)}")
         lines.extend(self._dmi_editor_summary())
@@ -1249,18 +1304,17 @@ class MainWindow(QMainWindow):
         uuid = self.dmi_edit_uuid.text().strip() or None
         mac = self.dmi_edit_mac.text().strip() or None
         if not (serial or uuid or mac):
-            QMessageBox.information(self, "Nothing to Edit",
-                                    "Fill in a serial, UUID or MAC first.")
+            QMessageBox.information(self, "Nothing to Edit", "Fill in a serial, UUID or MAC first.")
             return
         self.dmi_apply_btn.setEnabled(False)
         editor = DMIEditor()
-        self._run_in_thread(editor.set_identity, self._dmi_edit_done,
-                            self.current_file, None, serial, uuid, mac)
+        self._run_in_thread(
+            editor.set_identity, self._dmi_edit_done, self.current_file, None, serial, uuid, mac
+        )
 
     def _dmi_edit_done(self, rep):
         self.dmi_apply_btn.setEnabled(True)
-        lines = [f"Edit {'Success' if rep.success else 'Failed'}",
-                 f"Output: {rep.output_path}"]
+        lines = [f"Edit {'Success' if rep.success else 'Failed'}", f"Output: {rep.output_path}"]
         for op in rep.operations:
             lines.append(f"  + {op}")
         for warn in rep.warnings:
@@ -1301,8 +1355,10 @@ class MainWindow(QMainWindow):
         self.dvar_btn.setEnabled(True)
         lines = [f"Recovery {'Success' if rep.success else 'Failed'}", rep.message]
         for pw in rep.passwords:
-            lines.append(f"  @0x{pw.record_offset:x}: {pw.password!r} "
-                         f"(len {pw.length}, via {pw.recovered_from})")
+            lines.append(
+                f"  @0x{pw.record_offset:x}: {pw.password!r} "
+                f"(len {pw.length}, via {pw.recovered_from})"
+            )
         for n in rep.notes:
             lines.append(f"  {n}")
         self.password_text.setPlainText("\n".join(lines))
@@ -1312,7 +1368,9 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             return
         self.scan_btn.setEnabled(False)
-        self._run_in_thread(self.password_remover.find_password_in_dump, self._password_scan_done, self.current_file)
+        self._run_in_thread(
+            self.password_remover.find_password_in_dump, self._password_scan_done, self.current_file
+        )
 
     def _password_scan_done(self, found):
         self.scan_btn.setEnabled(True)
@@ -1332,7 +1390,12 @@ class MainWindow(QMainWindow):
             return
         self.remove_btn.setEnabled(False)
         output = self.current_file.rsplit(".", 1)[0] + "_nopass.bin"
-        self._run_in_thread(self.password_remover.remove_passwords, self._password_remove_done, self.current_file, output)
+        self._run_in_thread(
+            self.password_remover.remove_passwords,
+            self._password_remove_done,
+            self.current_file,
+            output,
+        )
 
     def _password_remove_done(self, report):
         self.remove_btn.setEnabled(True)
@@ -1368,9 +1431,12 @@ class MainWindow(QMainWindow):
         method_name = method_map.get(self.extract_method.currentIndex(), "AUTO")
 
         from bios_recovery.manufacturers.common.bios_extractor import ExtractionMethod
+
         method = ExtractionMethod[method_name]
 
-        self._run_in_thread(self.bios_extractor.extract, self._extract_done, self.current_file, None, method)
+        self._run_in_thread(
+            self.bios_extractor.extract, self._extract_done, self.current_file, None, method
+        )
 
     def _extract_done(self, result):
         self.extract_btn.setEnabled(True)
@@ -1400,7 +1466,7 @@ class MainWindow(QMainWindow):
         data = self.bios_analyzer.get_hex_view(self.current_file, offset, min(length, 0x10000))
         lines = []
         for i in range(0, len(data), 16):
-            chunk = data[i:i + 16]
+            chunk = data[i : i + 16]
             hex_str = " ".join(f"{b:02X}" for b in chunk)
             ascii_str = "".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in chunk)
             lines.append(f"{offset + i:08X}  {hex_str:<48}  {ascii_str}")
@@ -1425,7 +1491,6 @@ class MainWindow(QMainWindow):
         lines.append("Passwords are encoded for US QWERTY keyboard layout.")
         self.gen_text.setPlainText("\n".join(lines))
 
-
     def run_mea_analysis(self):
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Open a BIOS file first.")
@@ -1448,7 +1513,6 @@ class MainWindow(QMainWindow):
         self.info_text.setPlainText("\n".join(lines))
         self.statusBar().showMessage("ME Analyzer completed")
 
-
     def show_about(self):
         QMessageBox.about(
             self,
@@ -1461,8 +1525,10 @@ class MainWindow(QMainWindow):
             "Always create backups before flashing.",
         )
 
+
 def _apple_fsys_task(file_path):
     from bios_recovery.manufacturers.apple.apple_efi import fix_fsys_checksum, rom_info
+
     info = rom_info(file_path)
     rep = fix_fsys_checksum(file_path)
     rep.notes = [f"rom_info: {info}"]

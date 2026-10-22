@@ -30,9 +30,9 @@ _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
 class ToolProbe:
     path: str
     identified: bool = False
-    family: str = ""             # "MFIT" (CSME 16 Modular Flash Image Tool) | "FIT"
-    version: str = ""            # e.g. "16.1.25.2053"
-    platform: str = ""           # e.g. "LINUX64" when the banner names one
+    family: str = ""  # "MFIT" (CSME 16 Modular Flash Image Tool) | "FIT"
+    version: str = ""  # e.g. "16.1.25.2053"
+    platform: str = ""  # e.g. "LINUX64" when the banner names one
     error: str = ""
     banner: str = ""
     warnings: list = field(default_factory=list)
@@ -54,12 +54,24 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
         # Minimal environment: only what the loader needs, and every writable location
         # points at the probe's private folder, not the user's profile.
         env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "WINDIR") if k in os.environ}
-        env.update(QT_QPA_PLATFORM="offscreen", XDG_RUNTIME_DIR=work, HOME=work,
-                   TMPDIR=work, TEMP=work, TMP=work)
+        env.update(
+            QT_QPA_PLATFORM="offscreen",
+            XDG_RUNTIME_DIR=work,
+            HOME=work,
+            TMPDIR=work,
+            TEMP=work,
+            TMP=work,
+        )
         try:
             done = subprocess.run(
-                [os.path.abspath(path), "-h"], cwd=work, env=env, stdin=subprocess.DEVNULL,
-                capture_output=True, text=True, errors="replace", timeout=timeout,
+                [os.path.abspath(path), "-h"],
+                cwd=work,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
             )
             output = (done.stdout or "") + (done.stderr or "")
         except subprocess.TimeoutExpired:
@@ -105,9 +117,13 @@ def compatible_with_me(probe: ToolProbe, me_version: str) -> tuple[bool, str]:
     if tool_rule is None or me_rule is None:
         return False, "no release line covers this tool or ME version"
     if tool_rule is not me_rule:
-        return False, (f"tool {probe.version} belongs to {tool_rule.release}, ME {me_version} "
-                       f"needs {me_rule.release}; a mismatched FIT fails the build")
+        return False, (
+            f"tool {probe.version} belongs to {tool_rule.release}, ME {me_version} "
+            f"needs {me_rule.release}; a mismatched FIT fails the build"
+        )
     if me_rule.confidence == "ambiguous" or tool_rule.confidence == "ambiguous":
-        return False, (f"{me_rule.release} is ambiguous in the release table; "
-                       "the tool cannot be confirmed for this ME version")
+        return False, (
+            f"{me_rule.release} is ambiguous in the release table; "
+            "the tool cannot be confirmed for this ME version"
+        )
     return True, f"tool {probe.version} and ME {me_version} are both {me_rule.release}"

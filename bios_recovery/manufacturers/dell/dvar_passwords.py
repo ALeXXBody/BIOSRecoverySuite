@@ -27,7 +27,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 DVAR_STORE_SIGNATURE = b"DVAR"
 KEY_SLOTS = 20
 RECORD_LEN = 32
@@ -212,7 +211,9 @@ def recover_passwords(
     stores = find_dvar_stores(data)
     report.store_offsets = stores
     if not stores:
-        report.message = "No DVAR store found in this image (not a Dell DVAR platform xor it was scrubbed)"
+        report.message = (
+            "No DVAR store found in this image (not a Dell DVAR platform xor it was scrubbed)"
+        )
         return report
 
     windows = []
@@ -221,17 +222,17 @@ def recover_passwords(
 
     # Stage 1: collect candidate records and overlap-validated key derivations
     candidates: list[tuple[int, bytes]] = []
-    key_by_first: dict[int, bytes] = {}   # first char -> an overlap-validated key
+    key_by_first: dict[int, bytes] = {}  # first char -> an overlap-validated key
     for w_start, w_end in windows:
         for base in range(w_start, min(w_end, len(data) - RECORD_LEN)):
-            record = bytes(data[base:base + RECORD_LEN])
+            record = bytes(data[base : base + RECORD_LEN])
             if not (0x20 <= record[0] <= 0x7E):
                 continue
             if record == b"\xff" * RECORD_LEN:
                 continue
             candidates.append((base, record))
             if record[0] not in key_by_first:
-                k = _derive_key(record, from_pos=11)   # short-length derivation
+                k = _derive_key(record, from_pos=11)  # short-length derivation
                 if k and _key_plausible(k):
                     key_by_first[record[0]] = k
 
@@ -258,8 +259,12 @@ def recover_passwords(
                     pw = None  # short decodes are already handled by the direct path
         if pw:
             recovered[base] = RecoveredPassword(
-                password=pw, record_offset=base,
-                recovered_from=source, first_char=chr(record[0]), length=len(pw))
+                password=pw,
+                record_offset=base,
+                recovered_from=source,
+                first_char=chr(record[0]),
+                length=len(pw),
+            )
 
     report.passwords = sorted(recovered.values(), key=lambda r: r.record_offset)
     if report.passwords:

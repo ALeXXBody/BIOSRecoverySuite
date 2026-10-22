@@ -1,7 +1,5 @@
 """Regression tests for the BIOS analysis and region-detection engines."""
 
-import struct
-
 from bios_recovery.engines.bios_analyzer import BiosAnalyzer, BiosType
 
 
@@ -49,7 +47,9 @@ def test_me_version_detected(intel_ifd):
 
 
 def test_unknown_file_flagged():
-    import tempfile, os
+    import os
+    import tempfile
+
     path = os.path.join(tempfile.mkdtemp(), "random.bin")
     with open(path, "wb") as f:
         f.write(b"\x99" * 0x1000)
@@ -60,7 +60,10 @@ def test_unknown_file_flagged():
 
 
 def test_firmware_volume_header_parsed(intel_ifd):
-    """Verify the _FVH firmware volume is located with correct size (regression: FvLength is +0x20)."""
+    """The _FVH firmware volume is located with the correct size.
+
+    Regression check: FvLength is at +0x20.
+    """
     analyzer = BiosAnalyzer()
     result = analyzer.analyze(intel_ifd)
 
@@ -74,11 +77,12 @@ def test_hex_view(intel_ifd):
     data = BiosAnalyzer().get_hex_view(intel_ifd, 0, 16)
     assert data[:4] == b"\x5a\xa5\xf0\x0f"
 
+
 def _write_image(tmp_path, blobs):
     """Build a 64 KB 0xFF image with the given (offset, bytes) blobs written in."""
-    data = bytearray(b"\xFF" * 0x10000)
+    data = bytearray(b"\xff" * 0x10000)
     for offset, blob in blobs:
-        data[offset:offset + len(blob)] = blob
+        data[offset : offset + len(blob)] = blob
     path = tmp_path / "fv.bin"
     path.write_bytes(bytes(data))
     return str(path)

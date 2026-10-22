@@ -1,12 +1,10 @@
-import os
 """Check-for-updates dialog with download + silent installer hand-off."""
 
+import os
 import sys
 import webbrowser
 
 from PySide6.QtCore import QThread, Signal
-
-from bios_recovery.gui.workers import track
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -20,14 +18,16 @@ from PySide6.QtWidgets import (
 )
 
 from bios_recovery import __version__
+from bios_recovery.gui.workers import track
 from bios_recovery.utils import updater
 
 
 class CheckWorker(QThread):
     """Fetches the latest release info from GitHub."""
-    found = Signal(object)          # ReleaseInfo
-    not_found = Signal()            # API reachable, no newer version
-    failed = Signal(str)            # API unreachable / parse error
+
+    found = Signal(object)  # ReleaseInfo
+    not_found = Signal()  # API reachable, no newer version
+    failed = Signal(str)  # API unreachable / parse error
 
     def __init__(self):
         super().__init__()
@@ -48,6 +48,7 @@ class CheckWorker(QThread):
 
 class DownloadWorker(QThread):
     """Downloads the installer asset, reporting progress."""
+
     progress = Signal(int)
     done = Signal(str)
     failed = Signal(str)
@@ -141,13 +142,16 @@ class UpdateDialog(QDialog):
     def _on_update_found(self, release):
         self.release = release
         self.status_label.setText(
-            f"A new version is available: v{release.version} "
-            f"(you have v{__version__})"
+            f"A new version is available: v{release.version} (you have v{__version__})"
         )
         if release.notes:
             self.notes_text.setPlainText(release.notes)
             self.notes_text.setVisible(True)
-        can_install = sys.platform == "win32" and bool(release.installer_url) and getattr(sys, "frozen", False)
+        can_install = (
+            sys.platform == "win32"
+            and bool(release.installer_url)
+            and getattr(sys, "frozen", False)
+        )
         self.install_btn.setVisible(can_install)
         if self._auto_silent and can_install:
             self._start_download()
@@ -175,7 +179,9 @@ class UpdateDialog(QDialog):
         self.status_label.setText(f"Downloading v{self.release.version}...")
 
         dest = updater.default_installer_destination(self.release.version)
-        self._downloader = DownloadWorker(self.release.installer_url, dest, self.release.installer_sha256)
+        self._downloader = DownloadWorker(
+            self.release.installer_url, dest, self.release.installer_sha256
+        )
         self._downloader.progress.connect(self.progress.setValue)
         self._downloader.done.connect(self._on_download_done)
         self._downloader.failed.connect(self._on_download_failed)
@@ -187,8 +193,12 @@ class UpdateDialog(QDialog):
         try:
             updater.apply_installer_update(path)
         except OSError as e:
-            QMessageBox.warning(self, "Update", f"Could not start the installer automatically:\n{e}\n\n"
-                                                f"The installer was saved to:\n{path}")
+            QMessageBox.warning(
+                self,
+                "Update",
+                f"Could not start the installer automatically:\n{e}\n\n"
+                f"The installer was saved to:\n{path}",
+            )
             return
         # Hand off to the installer: quit this instance so files can be replaced.
         app = QApplication.instance()
@@ -199,5 +209,9 @@ class UpdateDialog(QDialog):
         self.progress.setVisible(False)
         self.install_btn.setEnabled(True)
         self.status_label.setText("Download failed.")
-        QMessageBox.warning(self, "Update", f"Download failed:\n{error}\n\n"
-                                            f"You can download the installer manually from the releases page.")
+        QMessageBox.warning(
+            self,
+            "Update",
+            f"Download failed:\n{error}\n\n"
+            f"You can download the installer manually from the releases page.",
+        )

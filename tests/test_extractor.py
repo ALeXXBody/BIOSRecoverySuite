@@ -1,7 +1,6 @@
 """Regression tests for the vendor BIOS package extractor."""
 
-from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
-from bios_recovery.manufacturers.common.bios_extractor import ExtractionMethod
+from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor, ExtractionMethod
 
 
 def test_dell_pfs_extraction(dell_pfs, tmp_path):
@@ -30,7 +29,17 @@ def test_auto_method_detection(intel_ifd, tmp_path):
 
 def test_method_enum_complete():
     """Every vendor extraction method mapped in GUI must exist in the enum."""
-    for name in ["AUTO", "DELL_PFS", "HP_INSIDE", "LENOVO_FL1", "LENOVO_EXE",
-                 "ASUS_EXE", "ACER_EXE", "TOSHIBA_EXE", "SAMSUNG_EXE",
-                 "SONY_VAIO", "UNIVERSAL"]:
+    for name in [
+        "AUTO",
+        "DELL_PFS",
+        "HP_INSIDE",
+        "LENOVO_FL1",
+        "LENOVO_EXE",
+        "ASUS_EXE",
+        "ACER_EXE",
+        "TOSHIBA_EXE",
+        "SAMSUNG_EXE",
+        "SONY_VAIO",
+        "UNIVERSAL",
+    ]:
         assert ExtractionMethod[name], f"missing enum member {name}"

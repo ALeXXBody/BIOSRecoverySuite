@@ -50,6 +50,8 @@ include = ["bios_recovery*"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Vendored third-party code (ME Analyzer) is kept as upstream ships it.
+extend-exclude = ["bios_recovery/third_party"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]

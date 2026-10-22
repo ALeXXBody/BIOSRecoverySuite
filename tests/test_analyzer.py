@@ -1,8 +1,8 @@
 """Unit tests for BIOS Recovery Suite."""
 
-import sys
 import os
 import struct
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,15 +19,15 @@ def _make_fake_bios_dump(size=0x1000000):
 
     FRBA = 0x100
     struct.pack_into("<I", data, 0x10, FRBA << 16)
-    data[FRBA + 0x08:FRBA + 0x0C] = struct.pack("<I", (0x100000 >> 12) | ((size >> 12) << 16))
-    data[FRBA + 0x10:FRBA + 0x14] = struct.pack("<I", (0x1000 >> 12) | ((0x100000 >> 12) << 16))
+    data[FRBA + 0x08 : FRBA + 0x0C] = struct.pack("<I", (0x100000 >> 12) | ((size >> 12) << 16))
+    data[FRBA + 0x10 : FRBA + 0x14] = struct.pack("<I", (0x1000 >> 12) | ((0x100000 >> 12) << 16))
 
     fpt_offset = 0x100000
-    data[fpt_offset:fpt_offset + 4] = b"$FPT"
+    data[fpt_offset : fpt_offset + 4] = b"$FPT"
     struct.pack_into("<I", data, fpt_offset + 0x04, 1)
-    data[fpt_offset + 0x20:fpt_offset + 0x24] = b"FTPR"
-    data[fpt_offset + 0x28:fpt_offset + 0x2C] = struct.pack("<I", 0x1000)
-    data[fpt_offset + 0x2C:fpt_offset + 0x30] = struct.pack("<I", 0x100000)
+    data[fpt_offset + 0x20 : fpt_offset + 0x24] = b"FTPR"
+    data[fpt_offset + 0x28 : fpt_offset + 0x2C] = struct.pack("<I", 0x1000)
+    data[fpt_offset + 0x2C : fpt_offset + 0x30] = struct.pack("<I", 0x100000)
 
     return bytes(data)
 

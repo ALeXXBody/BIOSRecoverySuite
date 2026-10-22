@@ -1,1 +1,35 @@
-from bios_recovery.platforms.ec.ec_patcher import *
+from bios_recovery.platforms.ec.ec_patcher import (
+    ECAnalysis,
+    ECController,
+    ECPatch,
+    ECPatcher,
+    ECPatchResult,
+    ECStatus,
+    Enum,
+    Optional,
+    SameFileError,
+    auto,
+    dataclass,
+    ensure_distinct,
+    field,
+    json,
+    os,
+)
+
+__all__ = [
+    "ECAnalysis",
+    "ECController",
+    "ECPatch",
+    "ECPatchResult",
+    "ECPatcher",
+    "ECStatus",
+    "Enum",
+    "Optional",
+    "SameFileError",
+    "auto",
+    "dataclass",
+    "ensure_distinct",
+    "field",
+    "json",
+    "os",
+]

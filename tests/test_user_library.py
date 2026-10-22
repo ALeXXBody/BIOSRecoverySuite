@@ -1,7 +1,6 @@
 """User-chosen folders for Intel tools and ME firmware (nothing is bundled)."""
 
 import os
-import shutil
 import stat
 
 import pytest
@@ -71,6 +70,7 @@ def test_scan_identifies_user_supplied_tool(tmp_path):
 @POSIX_ONLY
 def test_fit_info_uses_library_tool_when_compatible(tmp_path, capsys):
     from bios_recovery.main import _cli_main
+
     folder = tmp_path / "tools"
     folder.mkdir()
     tool = folder / "fit"
@@ -88,6 +88,7 @@ def test_fit_info_uses_library_tool_when_compatible(tmp_path, capsys):
 
 def test_library_cli_add_list_scan(tmp_path, capsys):
     from bios_recovery.main import _library_cli
+
     folder = tmp_path / "fw"
     folder.mkdir()
     assert _library_cli(["scan"]) == 0
@@ -208,7 +209,9 @@ def test_scan_never_runs_a_tool(tmp_path):
     folder = tmp_path / "tools"
     folder.mkdir()
     tool = folder / "fit"
-    tool.write_text(f"#!/bin/sh\necho ran >> '{marker}'\necho 'Flash Image Tool. Version: 15.0.35.1951'\n")
+    tool.write_text(
+        f"#!/bin/sh\necho ran >> '{marker}'\necho 'Flash Image Tool. Version: 15.0.35.1951'\n"
+    )
     tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     lib.add_folder(str(folder), "tools")
     lib.scan()
@@ -222,7 +225,9 @@ def test_identify_runs_once_and_caches_by_hash(tmp_path):
     folder = tmp_path / "tools"
     folder.mkdir()
     tool = folder / "fit"
-    tool.write_text(f"#!/bin/sh\necho x >> '{marker}'\necho 'Flash Image Tool. Version: 14.1.60.1790'\n")
+    tool.write_text(
+        f"#!/bin/sh\necho x >> '{marker}'\necho 'Flash Image Tool. Version: 14.1.60.1790'\n"
+    )
     tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     lib.add_folder(str(folder), "tools")
     assert lib.identify_tool(str(tool)).identified

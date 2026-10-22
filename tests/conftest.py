@@ -43,6 +43,7 @@ def uefi_patch_image(fixtures):
 @pytest.fixture(scope="session")
 def patcher():
     from bios_recovery.engines.uefi_patcher import UEFIPatcher
+
     return UEFIPatcher()
 
 
@@ -50,13 +51,16 @@ def patcher():
 def autopatch_image(fixtures):
     return fixtures["autopatch.bin"]
 
+
 @pytest.fixture(scope="session", autouse=True)
 def _qt_teardown():
     """Close windows and wait for workers before the interpreter tears Qt down."""
     yield
     try:
         from PySide6.QtWidgets import QApplication
+
         from bios_recovery.gui.workers import wait_for_workers
+
         wait_for_workers()
         app = QApplication.instance()
         if app is not None:

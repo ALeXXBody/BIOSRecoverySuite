@@ -62,8 +62,9 @@ def detect_capsule(data: bytes) -> CapsuleInfo:
         messages.append(
             f"Capsule size field {size_field:#x} does not match file size {len(data):#x}; refusing"
         )
-        return CapsuleInfo(success=False, header_size=header_size, size_field=size_field,
-                           messages=messages)
+        return CapsuleInfo(
+            success=False, header_size=header_size, size_field=size_field, messages=messages
+        )
     if image_size % 0x1000 != 0:
         messages.append(f"Capsule image size {image_size:#x} not page-aligned")
 
@@ -83,9 +84,7 @@ def detect_capsule(data: bytes) -> CapsuleInfo:
     )
 
 
-def extract_flashable_image(
-    input_path: str, output_path: str | None = None
-) -> CapsuleInfo:
+def extract_flashable_image(input_path: str, output_path: str | None = None) -> CapsuleInfo:
     """Strip the Aptio capsule header and write the bare flash image."""
     with open(input_path, "rb") as f:
         data = f.read()
@@ -94,7 +93,7 @@ def extract_flashable_image(
     if not info.success:
         return info
 
-    image = data[info.header_size:]
+    image = data[info.header_size :]
 
     # Some capsules carry a 32-byte hash right after the header fields.
     hdr_hash = data[0x28:0x48]
@@ -121,6 +120,7 @@ def extract_flashable_image(
 def _fv_list(blob: bytes) -> list[tuple[int, int]]:
     """Firmware volumes as (base, length), each with a verified header checksum."""
     from bios_recovery.core.bios_analyzer import BiosAnalyzer
+
     found = []
     pos = 0
     while True:
@@ -156,6 +156,7 @@ def restore_nvar_from_dump(
          dump (byte-identical record swap when sizes match).
     """
     from bios_recovery.core.safety import SameFileError, ensure_distinct
+
     try:
         ensure_distinct(capsule_image_path, output_path)
         ensure_distinct(dump_path, output_path)
@@ -183,13 +184,11 @@ def restore_nvar_from_dump(
             info.messages.append(f"Skipped FV @0x{base:x}: overlaps a region already restored")
             continue
         if (base, flen) in cap_set and base < 0x1040000:
-            image[base:base + flen] = dump[base:base + flen]
+            image[base : base + flen] = dump[base : base + flen]
             written.append((base, flen))
-            info.messages.append(
-                f"Restored NVRAM FV @0x{base:x} (0x{flen:x} bytes) from the dump"
-            )
+            info.messages.append(f"Restored NVRAM FV @0x{base:x} (0x{flen:x} bytes) from the dump")
         elif (base, flen) not in cap_set and base + flen <= len(image):
-            image[base:base + flen] = dump[base:base + flen]
+            image[base : base + flen] = dump[base : base + flen]
             written.append((base, flen))
             info.messages.append(
                 f"Restored machine FV @0x{base:x} (0x{flen:x} bytes; capsule omitted it)"
@@ -204,10 +203,10 @@ def restore_nvar_from_dump(
             if i < 0:
                 break
             pos = i + 4
-            total = int.from_bytes(blob[i + 4:i + 6], "little")
+            total = int.from_bytes(blob[i + 4 : i + 6], "little")
             if total < 0x10 or i + total > len(blob):
                 continue
-            nm = blob[i + 11:i + 0x40].split(b"\x00")[0]
+            nm = blob[i + 11 : i + 0x40].split(b"\x00")[0]
             if nm and nm.isascii():
                 names.add(nm)
         return names

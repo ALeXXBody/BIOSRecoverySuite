@@ -36,3 +36,6 @@ htmlcov/
 *.exe
 *.msi
 *.app
+
+# Local Windows build output (not source)
+BIOSRecoverySuite-windows/

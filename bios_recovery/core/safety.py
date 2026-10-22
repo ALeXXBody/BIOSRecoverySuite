@@ -18,11 +18,13 @@ def ensure_distinct(input_path: str, output_path: str | None) -> None:
         return
     if os.path.realpath(input_path) == os.path.realpath(output_path):
         raise SameFileError(
-            f"output path is the input file ({input_path}); choose a different output path")
+            f"output path is the input file ({input_path}); choose a different output path"
+        )
     if os.path.exists(output_path) and os.path.exists(input_path):
         try:
             if os.path.samefile(input_path, output_path):
                 raise SameFileError(
-                    f"output path is the input file ({input_path}); choose a different output path")
+                    f"output path is the input file ({input_path}); choose a different output path"
+                )
         except OSError:
             pass

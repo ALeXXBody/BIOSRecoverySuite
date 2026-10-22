@@ -69,16 +69,20 @@ def test_ambiguous_release_refuses_even_a_matching_tool():
 
 
 def test_hp_detection_needs_a_whole_word():
-    assert BiosExtractor()._detect_method(b"Hewlett HP BIOS" + b"\x00" * 0x100, "x.bin") == ExtractionMethod.HP_INSIDE
+    assert (
+        BiosExtractor()._detect_method(b"Hewlett HP BIOS" + b"\x00" * 0x100, "x.bin")
+        == ExtractionMethod.HP_INSIDE
+    )
     stray = b"chpcm and hpet tables" + b"\x00" * 0x100
     assert BiosExtractor()._detect_method(stray, "x.bin") != ExtractionMethod.HP_INSIDE
 
 
 def test_lzma_stream_round_trips_and_only_valid_headers_match(tmp_path):
     import lzma
+
     from bios_recovery.manufacturers.common.bios_extractor import ExtractionResult
 
-    payload = bytes(range(256)) * 5000 + b"END-OF-PAYLOAD"        # larger than 1 MB
+    payload = bytes(range(256)) * 5000 + b"END-OF-PAYLOAD"  # larger than 1 MB
     stream = lzma.compress(payload, format=lzma.FORMAT_ALONE)
     blob = b"\x00" * 0x40 + stream
     ex = BiosExtractor()
@@ -98,6 +102,7 @@ def test_lzma_header_with_absurd_dictionary_is_ignored():
 def test_vendor_tie_is_ambiguous_and_refuses_vendor_tools():
     from bios_recovery.core.traits import classify
     from bios_recovery.core.traits_matrix import tool_matrix
+
     t = classify(b"\x00" * 64 + b" ASUS " + b" Lenovo " + b"\x00" * 64)
     assert t.vendor == "ambiguous"
     assert not tool_matrix(t)["Lenovo Unlock"].applies
@@ -105,6 +110,7 @@ def test_vendor_tie_is_ambiguous_and_refuses_vendor_tools():
 
 def test_me_family_label_matches_analyzer_rule():
     from bios_recovery.core.traits import me_family_label
+
     assert me_family_label("15.0.3.1402") == "CSME 15"
     assert me_family_label("11.8.50.3470") == "CSME"
     assert me_family_label("7.1.20.1100") == "ME"
@@ -114,11 +120,11 @@ def test_me_family_label_matches_analyzer_rule():
 def _descriptor(fd_offset: int, frba: int = 0x40) -> bytearray:
     """A flash descriptor with the FRBA table at a real-world offset (0x40 from the descriptor)."""
     data = bytearray(b"\xff" * 0x400000)
-    data[fd_offset:fd_offset + 4] = b"\x5a\xa5\xf0\x0f"
-    struct.pack_into("<I", data, fd_offset + 0x04, (frba >> 4) << 16)          # FLMAP0: FRBA
+    data[fd_offset : fd_offset + 4] = b"\x5a\xa5\xf0\x0f"
+    struct.pack_into("<I", data, fd_offset + 0x04, (frba >> 4) << 16)  # FLMAP0: FRBA
     table = fd_offset + frba
-    struct.pack_into("<I", data, table + 4, (0x0002 << 16) | 0x0001)           # BIOS: 1..2 pages
-    struct.pack_into("<I", data, table + 8, (0x0005 << 16) | 0x0004)           # ME: 4..5 pages
+    struct.pack_into("<I", data, table + 4, (0x0002 << 16) | 0x0001)  # BIOS: 1..2 pages
+    struct.pack_into("<I", data, table + 8, (0x0005 << 16) | 0x0004)  # ME: 4..5 pages
     return data
 
 

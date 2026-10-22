@@ -12,10 +12,9 @@ success. The gate never writes to any file.
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass, field
 from typing import Optional
-
-import struct
 
 from bios_recovery.core.bios_analyzer import BiosAnalyzer, RegionInfo, RegionType
 
@@ -38,7 +37,7 @@ _KIND = {
 class ChangedSpan:
     start: int
     end: int
-    kind: str           # "me" | "descriptor" | "bios" | "other" | "unclaimed" | "mixed"
+    kind: str  # "me" | "descriptor" | "bios" | "other" | "unclaimed" | "mixed"
     region: str
 
     @property
@@ -122,7 +121,7 @@ def bpdt_blocks(data: bytes, bios_spans: list) -> list[tuple[int, int]]:
     """
     found = []
     for off in range(0, len(data) - 8, 0x1000):
-        if data[off:off + 4] != b"\xaa\x55\x00\x00":
+        if data[off : off + 4] != b"\xaa\x55\x00\x00":
             continue
         count = struct.unpack_from("<H", data, off + 4)[0]
         major = data[off + 6]
@@ -151,8 +150,7 @@ def _kind_at(offset: int, regions) -> tuple[str, str]:
     return "unclaimed", "unclaimed"
 
 
-def verify_rebuild(original_path: str, candidate_path: str,
-                   allow: tuple = ("me",)) -> VerifyResult:
+def verify_rebuild(original_path: str, candidate_path: str, allow: tuple = ("me",)) -> VerifyResult:
     with open(original_path, "rb") as f:
         a = f.read()
     with open(candidate_path, "rb") as f:
@@ -163,15 +161,27 @@ def verify_rebuild(original_path: str, candidate_path: str,
     # The descriptor's ME entry is often unused on real dumps; the analyzer's fallback
     # ME region runs to end of file and would claim the BIOS. Use the partition table.
     regions = [r for r in analysis.regions if r.region_type != RegionType.INTEL_ME]
-    declared = [r for r in analysis.regions if r.region_type == RegionType.INTEL_ME
-                and "FPT" not in (r.name or "")]
+    declared = [
+        r
+        for r in analysis.regions
+        if r.region_type == RegionType.INTEL_ME and "FPT" not in (r.name or "")
+    ]
     regions.extend(declared)
     fpt_bounds = me_bounds_from_fpt(a, analyzer)
     if fpt_bounds and not declared:
-        regions.append(RegionInfo(RegionType.INTEL_ME, fpt_bounds[0],
-                                  fpt_bounds[1] - fpt_bounds[0], "ME (partition table bounds)"))
-    bios_spans = [(r.offset, r.offset + r.size) for r in analysis.regions
-                  if r.region_type in (RegionType.BIOS, RegionType.FIRMWARE_VOLUME)]
+        regions.append(
+            RegionInfo(
+                RegionType.INTEL_ME,
+                fpt_bounds[0],
+                fpt_bounds[1] - fpt_bounds[0],
+                "ME (partition table bounds)",
+            )
+        )
+    bios_spans = [
+        (r.offset, r.offset + r.size)
+        for r in analysis.regions
+        if r.region_type in (RegionType.BIOS, RegionType.FIRMWARE_VOLUME)
+    ]
     for off, size in bpdt_blocks(a, bios_spans):
         regions.append(RegionInfo(RegionType.INTEL_ME, off, size, "ME BPDT header block"))
     analysis.regions = regions
@@ -199,19 +209,20 @@ def verify_rebuild(original_path: str, candidate_path: str,
     if result.refused_spans:
         kinds = sorted({s.kind for s in result.refused_spans})
         result.reasons.append(
-            f"{len(result.refused_spans)} span(s) in refused region(s): {', '.join(kinds)}")
+            f"{len(result.refused_spans)} span(s) in refused region(s): {', '.join(kinds)}"
+        )
     if len(a) != len(b):
         result.reasons.append("refusing: candidate has a different size")
 
     if result.changed_bytes == 0:
         result.reasons.append("no bytes changed")
 
-    result.accepted = (not result.refused_spans and len(a) == len(b)
-                       and result.changed_bytes > 0)
+    result.accepted = not result.refused_spans and len(a) == len(b) and result.changed_bytes > 0
     if result.accepted and result.boot_guard_tags:
         result.reasons.append(
             "Boot Guard manifests present: even ME-only changes can stop some boards from "
-            "booting. Keep the original image and a hardware programmer for recovery.")
+            "booting. Keep the original image and a hardware programmer for recovery."
+        )
     return result
 
 

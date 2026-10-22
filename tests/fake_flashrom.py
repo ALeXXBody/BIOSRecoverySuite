@@ -40,15 +40,24 @@ def main(argv):
     all_args = " ".join(argv)
 
     if "--list-supported" in all_args and "programmer" in all_args:
-        print("Programmers:\n  ch341a_spi      ...  \n  ft2232_spi      ...  \n  linux_spi       ...  \n  buspirate_spi   ...")
+        print(
+            "Programmers:\n  ch341a_spi      ...  \n  ft2232_spi      ...  \n"
+            "  linux_spi       ...  \n  buspirate_spi   ..."
+        )
         return 0
 
     if "--flashtest" in rest or "--list-supported" in rest or "--flash-name" in rest:
         if "--list-supported" in rest and "programmer" in rest:
-            print("Programmers:\n  ch341a_spi ...  \n  ft2232_spi ...  \n  linux_spi ...  \n  buspirate_spi ...")
+            print(
+                "Programmers:\n  ch341a_spi ...  \n  ft2232_spi ...  \n"
+                "  linux_spi ...  \n  buspirate_spi ..."
+            )
         else:
             dump()
-            print("Detected flash chip 'W25Q128JV @ 16 MB capacity: 32768 kB' +-----------------------------------------------------------------------------+")
+            print(
+                "Detected flash chip 'W25Q128JV @ 16 MB capacity: 32768 kB' "
+                "+-----------------------------------------------------------------------------+"
+            )
             print("Flashing is disabled on this fake binary.\n")
         return 0
 

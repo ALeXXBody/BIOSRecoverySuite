@@ -21,21 +21,23 @@ def _mk_fsys(serial: bytes, key_vars: dict = None) -> bytes:
     """0x800-store-shaped Fsys block with correct CRC32 (mirrors the scheme)."""
     blob = bytearray(b"\x00" * 0x800)
     blob[0:5] = FSYS_MARKER
-    struct.pack_into("<h", blob, 9, 0x800)      # stored size (int16)
+    struct.pack_into("<h", blob, 9, 0x800)  # stored size (int16)
     # 'ssn' variable: [0x03]["ssn"][len][bytes]
     s_var = b"\x03ssn" + bytes([len(serial)]) + serial
-    blob[0x10:0x10 + len(s_var)] = s_var
+    blob[0x10 : 0x10 + len(s_var)] = s_var
     hwc = b"\x03hwc" + bytes([8]) + b"LA1234AB"
-    blob[0x40:0x40 + len(hwc)] = hwc
+    blob[0x40 : 0x40 + len(hwc)] = hwc
     son = b"\x03son" + bytes([6]) + b"123456"
-    blob[0x80:0x80 + len(son)] = son
-    crc = binascii.crc32(bytes(blob[:0x800 - CRC32_SIZE])) & 0xFFFFFFFF
-    blob[0x800 - CRC32_SIZE:] = crc.to_bytes(CRC32_SIZE, "little")
+    blob[0x80 : 0x80 + len(son)] = son
+    crc = binascii.crc32(bytes(blob[: 0x800 - CRC32_SIZE])) & 0xFFFFFFFF
+    blob[0x800 - CRC32_SIZE :] = crc.to_bytes(CRC32_SIZE, "little")
     return bytes(blob)
 
 
 def _write(blob, name="dump.bin"):
-    import tempfile, os
+    import os
+    import tempfile
+
     p = os.path.join(tempfile.mkdtemp(), name)
     open(p, "wb").write(blob)
     return p
@@ -56,7 +58,7 @@ def test_detects_broken_checksum_and_fixes():
     blob = bytearray(b"\xff" * 0x100000)
     good = _mk_fsys(SERIAL.encode())
     bad = bytearray(good)
-    bad[0x10] ^= 0xFF   # corrupt data, CRC now wrong
+    bad[0x10] ^= 0xFF  # corrupt data, CRC now wrong
     blob[0x20000:0x20800] = bad
     p = _write(bytes(blob))
     fsys = parse_fsys_store(open(p, "rb").read())

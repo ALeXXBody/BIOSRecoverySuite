@@ -1,7 +1,6 @@
 """Settings page: folders, imports and scanning through the GUI."""
 
 import os
-import stat
 
 import pytest
 
@@ -11,6 +10,7 @@ from tests.fixture_builder import build_intel_ifd_image
 @pytest.fixture
 def qapp():
     from PySide6.QtWidgets import QApplication
+
     app = QApplication.instance() or QApplication([])
     yield app
 
@@ -24,11 +24,13 @@ def isolated(tmp_path, monkeypatch):
 
 def _page(qapp):
     from bios_recovery.gui.settings_page import SettingsPage
+
     return SettingsPage()
 
 
 def test_settings_tab_is_in_main_window(qapp):
     from bios_recovery.gui.main_window import MainWindow
+
     w = MainWindow()
     assert "Settings" in [w.tabs.tabText(i) for i in range(w.tabs.count())]
 

@@ -6,8 +6,15 @@ Nothing here writes a firmware image. Tool and firmware folders come from Settin
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QVBoxLayout, QWidget,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from bios_recovery.core.rebuild_verify import describe, verify_rebuild
@@ -38,8 +45,11 @@ class RebuildCheckPage(QWidget):
         title = QLabel("Rebuild Check")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         root.addWidget(title)
-        note = QLabel("Checks which of your Intel tools fit an image's ME firmware, and verifies a "
-                      "rebuilt image region by region. Only ME-region changes are accepted. Nothing is written.")
+        note = QLabel(
+            "Checks which of your Intel tools fit an image's ME firmware, and verifies a "
+            "rebuilt image region by region. Only ME-region changes are accepted. "
+            "Nothing is written."
+        )
         note.setWordWrap(True)
         note.setStyleSheet("color: #AAA;")
         root.addWidget(note)
@@ -62,7 +72,8 @@ class RebuildCheckPage(QWidget):
         vlayout.addLayout(self._path_row(self.candidate_edit, "Rebuilt:", self._browse_candidate))
         self.verify_button = QPushButton("Verify")
         self.verify_button.clicked.connect(
-            lambda: self.verify(self.original_edit.text(), self.candidate_edit.text()))
+            lambda: self.verify(self.original_edit.text(), self.candidate_edit.text())
+        )
         vlayout.addWidget(self.verify_button)
         self.verify_output = QPlainTextEdit()
         self.verify_output.setReadOnly(True)
@@ -103,7 +114,9 @@ class RebuildCheckPage(QWidget):
 
     # -- dialogs ----------------------------------------------------------------
     def _browse_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Choose image", "", "Firmware (*.bin *.rom *.fd);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose image", "", "Firmware (*.bin *.rom *.fd);;All files (*)"
+        )
         if path:
             self.image_edit.setText(path)
 
