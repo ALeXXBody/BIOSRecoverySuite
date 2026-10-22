@@ -88,21 +88,9 @@ class SPITab(QWidget):
         chip_row.addWidget(self.identify_btn)
         layout.addLayout(chip_row)
 
-        read_group = QGroupBox("Read Backup")
-        read_layout = QVBoxLayout(read_group)
-        read_row = QHBoxLayout()
-        read_row.addWidget(QLabel("Save dump to:"))
-        self.read_path = QLineEdit()
-        self.read_path.setPlaceholderText("Path for the full chip read (..._dump.bin)")
-        read_row.addWidget(self.read_path, 1)
-        read_browse = QPushButton("Browse...")
-        read_browse.clicked.connect(self._browse_save)
-        read_row.addWidget(read_browse)
-        read_layout.addLayout(read_row)
         self.read_btn = QPushButton("Read Chip (Backup)")
         self.read_btn.clicked.connect(self.read_chip)
-        read_layout.addWidget(self.read_btn)
-        layout.addWidget(read_group)
+        layout.addWidget(self.read_btn)
 
         write_group = QGroupBox("Write Image (DANGER - requires consent)")
         write_layout = QVBoxLayout(write_group)
@@ -174,13 +162,6 @@ class SPITab(QWidget):
     def _current_programmer(self) -> str:
         return self.prog_combo.currentText()
 
-    def _browse_save(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save chip dump", "chip_dump.bin", "Binary (*.bin)"
-        )
-        if path:
-            self.read_path.setText(path)
-
     def _log(self, text: str):
         self.log_text.appendPlainText(text)
 
@@ -236,9 +217,10 @@ class SPITab(QWidget):
         )
 
     def read_chip(self):
-        path = self.read_path.text().strip()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save chip backup", "chip_dump.bin", "Binary (*.bin);;All Files (*)"
+        )
         if not path:
-            QMessageBox.warning(self, "No Destination", "Set the path to save the chip dump.")
             return
         self.progress.setValue(0)
         self._log(f"Reading chip via {self._current_programmer()} ...")

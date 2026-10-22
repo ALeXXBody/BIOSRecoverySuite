@@ -219,9 +219,12 @@ def test_lenovo_tab_full_flow(window, uefi_patch_image, tmp_path):
     tab.run_full_autopatch()
 
 
-def test_spi_tab_paths(window, tmp_path):
+def test_spi_tab_paths(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
     tab = window.spi_tab
-    # missing paths -> warnings, no crash
+    # cancelled save dialog -> nothing starts
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
     tab.read_chip()
     tab.write_chip()
     tab.erase_chip()
