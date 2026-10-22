@@ -48,7 +48,7 @@ def test_write_requires_consent(flasher, tmp_path):
 def test_write_with_consent(flasher, tmp_path):
     image = str(tmp_path / "img.bin")
     with open(image, "wb") as f:
-        f.write(b"\xab" * 4096)
+        f.write(b"\xab" * (16 * 1024 * 1024))
     result = flasher.write_chip(image, "ch341a_spi", consent=True, verify=True)
     assert result.status == SPIStatus.SUCCESS
 

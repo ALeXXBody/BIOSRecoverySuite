@@ -46,7 +46,10 @@ def test_missing_folder_is_refused(tmp_path):
 def test_scan_finds_firmware_in_user_folder(tmp_path):
     folder = tmp_path / "fw"
     folder.mkdir()
-    (folder / "ME_image.bin").write_bytes(build_intel_ifd_image())
+    full = build_intel_ifd_image()
+    me_start = 0x1000
+    me_end = 0x400000
+    (folder / "ME_image.bin").write_bytes(full[me_start:me_end])
     (folder / "notes.txt").write_text("ignore me")
     lib.add_folder(str(folder))
     result = lib.scan()
@@ -104,8 +107,9 @@ def test_sub_partitions_and_duplicates_are_not_firmware(tmp_path):
     folder = tmp_path / "fw"
     (folder / "copy").mkdir(parents=True)
     full = build_intel_ifd_image()
-    (folder / "full.bin").write_bytes(full)
-    (folder / "copy" / "full_copy.bin").write_bytes(full)
+    me = full[0x1000:0x400000]
+    (folder / "full.bin").write_bytes(me)
+    (folder / "copy" / "full_copy.bin").write_bytes(me)
     # a sub-partition: manifest-like bytes but no partition table
     (folder / "OEMP.bin").write_bytes(b"\x00" * 0x100 + b"$MN2" + b"\x00" * 0x100)
     lib.add_folder(str(folder))
@@ -136,10 +140,17 @@ def test_import_refuses_non_tool_and_partial_firmware(tmp_path):
     assert res[0].copied_to == "" and "partition table" in res[0].refused
 
 
-def test_import_firmware_accepts_full_image(tmp_path):
+def test_import_firmware_refuses_a_full_dump(tmp_path):
     full = tmp_path / "me_full.bin"
     full.write_bytes(build_intel_ifd_image())
     res = lib.import_files([str(full)], "firmware")
+    assert res[0].copied_to == "" and "partition table" in res[0].refused
+
+def test_import_firmware_accepts_standalone_me(tmp_path):
+    full = build_intel_ifd_image()
+    me = tmp_path / "me_standalone.bin"
+    me.write_bytes(full[0x1000:0x400000])
+    res = lib.import_files([str(me)], "firmware")
     assert res[0].copied_to.startswith(os.path.join(lib.app_library_dir(), "firmware"))
     assert [f.me_version[:3] for f in lib.scan().firmware] == ["12."]
 

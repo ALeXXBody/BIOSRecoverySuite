@@ -161,6 +161,9 @@ def test_generate_passwords_every_generator(window):
         "sony_4x4": "73KR-3FP9-PVKH-K29R",
         "hp_mini": "CNU1234ABC",
         "asus_date": "2013-12-31",
+        "hp_ami": "A7AF422F",
+        "dell": "1234567-595B",
+        "dell_latitude": "5F3988D5E0ACE4BF-7QH8602",
     }
     for key in mp.GENERATORS:
         idx = window._gen_keys.index(key)

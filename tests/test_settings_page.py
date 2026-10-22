@@ -45,10 +45,13 @@ def test_add_and_remove_folders_by_kind(qapp, tmp_path):
     assert page.firmware_list.item(0).text() == "(none added)"
 
 
-def test_scan_fills_tables_through_run_task(qapp, tmp_path):
+def test_scan_fills_tables_through_run_task(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     folder = tmp_path / "fw" / "sub"
     folder.mkdir(parents=True)
-    (folder / "me.bin").write_bytes(build_intel_ifd_image())
+    (folder / "me.bin").write_bytes(build_intel_ifd_image()[0x1000:0x400000])
     page = _page(qapp)
     page.add_folder("firmware", str(tmp_path / "fw"))
     page.start_scan()
@@ -57,10 +60,13 @@ def test_scan_fills_tables_through_run_task(qapp, tmp_path):
     assert "1 firmware image" in page.scan_status.text()
 
 
-def test_import_through_page_copies_into_app_folder(qapp, tmp_path):
+def test_import_through_page_copies_into_app_folder(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     page = _page(qapp)
     full = tmp_path / "me.bin"
-    full.write_bytes(build_intel_ifd_image())
+    full.write_bytes(build_intel_ifd_image()[0x1000:0x400000])
     junk = tmp_path / "junk.bin"
     junk.write_bytes(b"\xff" * 0x1000)
     results = page.import_files("firmware", [str(full), str(junk)])
