@@ -1,8 +1,11 @@
 """Tests for the HP unlocker engine (schorschii / RC-unlocker mechanism)."""
 
 import os
+import struct
 
 from bios_recovery.engines.hp_unlocker import HPUnlocker
+
+BIOS_USER = b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r\x00\x00\x00"
 
 
 def _write(tmp_path, data: bytes):
@@ -14,6 +17,13 @@ def _write(tmp_path, data: bytes):
 def _read(path):
     with open(path, "rb") as f:
         return f.read()
+
+
+def _vss_entry(data_len, name_size=len(BIOS_USER), payload=b"\x00"):
+    # EDK2 VARIABLE_HEADER: StartId, State, Reserved, Attributes, NameSize, DataSize, VendorGuid
+    header = b"\xaa\x55" + bytes([0x3F, 0x00]) + struct.pack("<I", 0x7)
+    header += struct.pack("<II", name_size, data_len) + bytes(16)
+    return header + BIOS_USER + (payload * data_len)[:data_len]
 
 
 def test_new_style_usercred_unlock(tmp_path):
@@ -45,15 +55,10 @@ def test_new_style_usercred_unlock(tmp_path):
 
 
 def test_old_style_vss_biosuser_unlock(tmp_path):
-    # legacy HP: $VSS entries keyed 'BiosUser' with FF-wipeable payload
-    def vss_entry(payload_len):
-        entry = b"$VSS"
-        entry += b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r"
-        entry += bytes(payload_len)
-        entry += b"\xaaU"
-        return entry
-
-    data = b"\x11" * 0x200 + vss_entry(0x40) + b"\x22" * 0x30 + vss_entry(0x20) + b"\x33" * 0x100
+    # legacy HP: $VSS entries named 'BiosUser', each with its own DataSize
+    first = _vss_entry(0x40, payload=b"\x5a")
+    second = _vss_entry(0x20, payload=b"\x6b")
+    data = b"\x11" * 0x200 + first + b"\x22" * 0x30 + second + b"\x33" * 0x100
     src = _write(tmp_path, data)
 
     u = HPUnlocker()
@@ -66,22 +71,40 @@ def test_old_style_vss_biosuser_unlock(tmp_path):
     assert report["success"] and report["cleared"] == 2
 
     after = _read(out)
-    first_key = data.find(b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r")
-    end1 = data.find(b"\xaaU", first_key)
-    # reference semantics: wipe starts 22 bytes into the key entry
-    wiped = end1 - (first_key + 22)
-    assert wiped > 0
-    assert after[first_key : first_key + 22] == data[first_key : first_key + 22]
-    assert after[first_key + 22 : end1] == b"\xff" * wiped
+    first_data = 0x200 + 32 + len(BIOS_USER)
+    second_data = first_data + 0x40 + 0x30 + 32 + len(BIOS_USER)
+    assert after[: first_data] == data[: first_data]
+    assert after[first_data : first_data + 0x40] == b"\xff" * 0x40
+    assert after[first_data + 0x40 : second_data] == data[first_data + 0x40 : second_data]
+    assert after[second_data : second_data + 0x20] == b"\xff" * 0x20
+    assert after[second_data + 0x20 :] == data[second_data + 0x20 :]
 
-    # second entry wiped as well; final tail untouched
-    second_key = data.find(b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r", first_key + 2)
-    end2 = data.find(b"\xaaU", second_key)
-    assert after[second_key + 22 : end2] == b"\xff" * (end2 - second_key - 22)
-    assert after[end2:] == data[end2:]
-    # gap between the entries untouched
-    assert after[end1 : first_key - 4 - 0x40 + 0x40] == data[end1 : second_key - 22] or True
-    assert after[end1 : second_key + 22] == data[end1 : second_key + 22]
+
+def test_vss_wipe_is_bounded_by_data_size(tmp_path):
+    # a later AA 55 must not widen the wipe: only DataSize bytes change
+    entry = _vss_entry(0x10, payload=b"\x42")
+    tail = b"\xaa\x55" + b"\x99" * 0x2000
+    data = entry + tail
+    src = _write(tmp_path, data)
+    out = str(tmp_path / "hp_unlocked.bin")
+
+    report = HPUnlocker().unlock(src, out)
+    assert report["success"]
+    after = _read(out)
+    start = 32 + len(BIOS_USER)
+    assert after[start : start + 0x10] == b"\xff" * 0x10
+    assert after[start + 0x10 :] == data[start + 0x10 :]
+
+
+def test_vss_entry_with_wrong_name_size_is_not_wiped(tmp_path):
+    data = _vss_entry(0x10, name_size=0x40, payload=b"\x42")
+    src = _write(tmp_path, data)
+    out = str(tmp_path / "hp_unlocked.bin")
+
+    report = HPUnlocker().unlock(src, out)
+    assert not report["success"]
+    assert report["cleared"] == 0
+    assert not os.path.exists(out)
 
 
 def test_unlock_no_match_reports_failure(tmp_path):
@@ -89,5 +112,13 @@ def test_unlock_no_match_reports_failure(tmp_path):
     out = str(tmp_path / "x.bin")
     report = HPUnlocker().unlock(src, out)
     assert not report["success"]
-    assert os.path.exists(out)
+    assert not os.path.exists(out)
     assert "correct HP BIOS image" in report["messages"][0]
+
+
+def test_unlock_refuses_output_equal_to_input(tmp_path):
+    src = _write(tmp_path, _vss_entry(0x10, payload=b"\x42"))
+    report = HPUnlocker().unlock(src, src)
+    assert not report["success"]
+    assert "input file" in report["messages"][0]
+    assert _read(src) == _vss_entry(0x10, payload=b"\x42")

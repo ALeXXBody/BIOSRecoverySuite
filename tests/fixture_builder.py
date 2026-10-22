@@ -195,11 +195,14 @@ def build_intel_ifd_image(size: int = 0x1000000) -> bytes:
     data[table_addr + len(smbios_table):table_addr + len(smbios_table) + 2] = b"\x00\x00"
     data[eps_addr:eps_addr + 0x1F] = make_smbios_eps(table_addr, table_len, struct_count)
 
-    # AMI password variable (UTF-16LE "AMITSESetup") in a plausible NVRAM area
-    pwd_var = b"A\x00M\x00I\x00T\x00S\x00E\x00S\x00e\x00t\x00u\x00p\x00"
+    # AMI NVAR record for the password variable "AMITSESetup" (UTF-16LE name, valid, 12 data bytes)
+    pwd_name = b"A\x00M\x00I\x00T\x00S\x00E\x00S\x00e\x00t\x00u\x00p\x00\x00\x00"
+    pwd_data = b"\x5a" * 12
+    total = 11 + len(pwd_name) + len(pwd_data)
+    pwd_record = b"NVAR" + struct.pack("<H", total) + b"\xff\xff\xff" + b"\x80" + b"\xff"
+    pwd_record += pwd_name + pwd_data
     nvram = bios_ptr + 0x30000
-    data[nvram:nvram + len(pwd_var)] = pwd_var
-    data[nvram + len(pwd_var):nvram + len(pwd_var) + 12] = b"\x00" * 12
+    data[nvram:nvram + len(pwd_record)] = pwd_record
 
     return bytes(data)
 

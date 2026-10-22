@@ -5,17 +5,44 @@ IndiaFix/badcaps "HP Unlocker" / "RC Unlocker" drag-drop tools use):
 
 * Modern HP UEFI images: locate the UTF-16LE ``UserCred`` structure and reset
   its 100-byte credential block (0x00 with the 4 flag bytes at +26..+29 = 0xFF).
-* Legacy HP BIOS images: walk every ``$VSS`` variable entry keyed
-  ``BiosUser`` (UTF-16LE) and wipe its value region with 0xFF up to the
-  ``AA 55`` terminator.
+* Legacy HP BIOS images: find each ``$VSS`` variable named ``BiosUser`` and wipe
+  its data with 0xFF. The entry is read with the EDK2 ``VARIABLE_HEADER`` layout
+  (MdeModulePkg/Include/Guid/VariableFormat.h), and only its own ``DataSize`` bytes
+  are touched.
 
 Always flash back the original dump afterwards unless instructed otherwise.
 """
 
+from __future__ import annotations
+
+import struct
+
+from bios_recovery.core.safety import SameFileError, ensure_distinct
+
 _USER_CRED = b"U\x00s\x00e\x00r\x00C\x00r\x00e\x00d"
-_VSS_MAGIC = b"$VSS"
-_VSS_KEY = b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r"
-_VSS_END = b"\xaaU"
+_VSS_HEADER_SIZE = 32
+_VSS_START_ID = b"\xaa\x55"  # VARIABLE_DATA 0x55AA, little-endian
+_VSS_KEY = b"B\x00i\x00o\x00s\x00U\x00s\x00e\x00r\x00\x00\x00"  # "BiosUser" + NUL, UCS-2
+
+
+def _vss_entries(data: bytes | bytearray) -> list[tuple[int, int]]:
+    """Validated ``BiosUser`` variables as (data_offset, data_size).
+
+    The name must sit directly after a 32-byte VARIABLE_HEADER whose StartId is 0x55AA and
+    whose NameSize equals the name's length including its NUL. With ALIGNMENT 1 (IA-32 and
+    x64) the data follows the name with no padding. Entries that fail any check are skipped.
+    """
+    out: list[tuple[int, int]] = []
+    pos = data.find(_VSS_KEY)
+    while pos >= 0:
+        hdr = pos - _VSS_HEADER_SIZE
+        if hdr >= 0 and data[hdr : hdr + 2] == _VSS_START_ID and pos + len(_VSS_KEY) <= len(data):
+            name_size, data_size = struct.unpack_from("<II", data, hdr + 8)
+            data_start = pos + len(_VSS_KEY)
+            if name_size == len(_VSS_KEY) and 0 < data_size <= len(data) - data_start:
+                out.append((data_start, data_size))
+        pos = data.find(_VSS_KEY, pos + 1)
+    return out
 
 
 class HPUnlocker:
@@ -35,27 +62,31 @@ class HPUnlocker:
             out["style"] = "new"
             out["usercred_offset"] = cred
             return out
-        key = data.find(_VSS_KEY)
-        while key >= 0:
-            out["vss_entries"] += 1
-            out["vss_offsets"].append(key)
-            key = data.find(_VSS_KEY, key + 2)
+        entries = _vss_entries(data)
+        out["vss_entries"] = len(entries)
+        out["vss_offsets"] = [start for start, _ in entries]
         if out["vss_entries"]:
             out["style"] = "old"
         return out
 
     def unlock(self, image_path: str, output_path: str) -> dict:
         """Clear HP admin password storage. Returns a report dict."""
-        with open(image_path, "rb") as f:
-            data = bytearray(f.read())
-
         report = {
             "success": False,
             "style": None,
             "cleared": 0,
-            "output_path": output_path,
+            "output_path": "",
             "messages": [],
         }
+        try:
+            ensure_distinct(image_path, output_path)
+        except SameFileError as exc:
+            report["messages"].append(f"ERROR: {exc}")
+            return report
+
+        with open(image_path, "rb") as f:
+            original = f.read()
+        data = bytearray(original)
 
         loc = data.find(_USER_CRED)
         if loc >= 0:
@@ -71,20 +102,10 @@ class HPUnlocker:
             report["messages"].append(f"UserCred credential block cleared at 0x{loc:X}")
         else:
             report["style"] = "old"
-            search_from = 0
-            while True:
-                loc_start = data.find(_VSS_KEY, search_from + 2)
-                if loc_start < 0:
-                    break
-                end_marker = data.find(_VSS_END, loc_start)
-                loc_len = end_marker - loc_start - 22 if end_marker >= 0 else -1
-                if loc_len > 0:
-                    for i in range(loc_len):
-                        pos = loc_start + 22 + i
-                        if pos < len(data):
-                            data[pos] = 0xFF
-                    report["cleared"] += 1
-                search_from = loc_start
+            entries = _vss_entries(original)
+            for start, size in entries:
+                data[start : start + size] = b"\xff" * size
+            report["cleared"] = len(entries)
             if report["cleared"]:
                 report["success"] = True
                 report["messages"].append(f"Cleared {report['cleared']} $VSS/BiosUser entr(ies)")
@@ -93,6 +114,11 @@ class HPUnlocker:
                     "ERROR: unable to find HP BIOS password - is this a correct HP BIOS image?"
                 )
 
+        if bytes(data) == original:
+            report["messages"].append("Nothing was written: the image was already clear")
+            return report
+
         with open(output_path, "wb") as f:
             f.write(bytes(data))
+        report["output_path"] = output_path
         return report

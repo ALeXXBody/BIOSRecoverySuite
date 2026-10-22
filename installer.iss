@@ -2,7 +2,7 @@
 ; Compiled on CI with ISCC.exe after the PyInstaller build.
 
 #define MyAppName "BIOS Recovery Suite"
-#define MyAppVersion "0.4.14"
+#define MyAppVersion "0.4.15"
 #define MyAppPublisher "ALeXXBody"
 #define MyAppExeName "BIOSRecoverySuite.exe"
 

@@ -1,5 +1,8 @@
 """Regression tests for DMI extraction and password removal."""
 
+import os
+
+from bios_recovery.core.nvar import is_valid, iter_records
 from bios_recovery.core.password_remover import PasswordRemover
 from bios_recovery.engines.dmi_extractor import DMIExtractor
 
@@ -38,14 +41,38 @@ def test_password_removal_clears_variables(intel_ifd, tmp_path):
     report = remover.remove_passwords(intel_ifd, out)
 
     assert report.status.name == "SUCCESS"
+    with open(intel_ifd, "rb") as f:
+        before = f.read()
     with open(out, "rb") as f:
-        data = f.read()
-    target = b"A\x00M\x00I\x00T\x00S\x00E\x00S\x00e\x00t\x00u\x00p\x00"
-    assert target not in data, "password variable should be zeroed"
+        after = f.read()
 
-    # Re-scan the cleared image: it must no longer report the AMI variable.
-    found_after = PasswordRemover().find_password_in_dump(out)
-    assert "AMI_SETUP_PASSWORD" not in {f["type"] for f in found_after}
+    assert len(after) == len(before)
+    changed = [i for i in range(len(before)) if before[i] != after[i]]
+    assert changed, "the password record should be marked invalid"
+    records = [r for r in iter_records(after) if r.name == "AMITSESetup"]
+    assert records and not any(is_valid(r) for r in records)
+    assert all(r.name for r in iter_records(after)), "other records must still parse"
+
+
+def test_password_removal_does_not_write_unverified_markers(tmp_path):
+    src = tmp_path / "markers.bin"
+    src.write_bytes(b"\x00" * 0x2000 + b"cE!" + b"\x00" * 0x2000)
+    out = str(tmp_path / "nopass.bin")
+
+    report = PasswordRemover().remove_passwords(str(src), out)
+
+    assert report.status.name == "PARTIAL"
+    assert not os.path.exists(out)
+    assert src.read_bytes() == b"\x00" * 0x2000 + b"cE!" + b"\x00" * 0x2000
+
+
+def test_password_removal_refuses_output_equal_to_input(intel_ifd):
+    with open(intel_ifd, "rb") as f:
+        before = f.read()
+    report = PasswordRemover().remove_passwords(intel_ifd, intel_ifd)
+    assert report.status.name == "ERROR"
+    with open(intel_ifd, "rb") as f:
+        assert f.read() == before
 
 
 def test_dell_master_password_generation():
