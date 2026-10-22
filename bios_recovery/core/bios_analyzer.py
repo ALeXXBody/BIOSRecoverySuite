@@ -74,6 +74,17 @@ class BiosAnalysisResult:
         return len(self.regions)
 
 
+def decode_flreg(value: int) -> tuple[int, int]:
+    """(base, limit) in bytes, relative to the descriptor, from one FLREG register.
+
+    Per the Intel flash descriptor layout (and coreboot's ifdtool / intel_fw): base is
+    bits 12:0 and limit is bits 28:16, both in 4 KB pages, the limit inclusive.
+    """
+    base = (value & 0x1FFF) << 12
+    limit = (((value >> 16) & 0x1FFF) << 12) | 0xFFF
+    return base, limit
+
+
 class BiosAnalyzer:
     """Analyzes BIOS/UEFI firmware images to detect type, regions, and issues."""
 
@@ -228,8 +239,9 @@ class BiosAnalyzer:
             flreg = struct.unpack_from("<I", data, off)[0]
             # FLREG values are 4 KB pages relative to the descriptor, so a descriptor
             # that starts at 0x10 (16-byte header) shifts every region by that amount.
-            base = fd_offset + ((flreg & 0x7FFF) << 12)
-            limit = fd_offset + (((flreg >> 16) & 0x7FFF) << 12 | 0xFFF)
+            base_rel, limit_rel = decode_flreg(flreg)
+            base = fd_offset + base_rel
+            limit = fd_offset + limit_rel
             if base < limit and limit < len(data):
                 regions.append(
                     RegionInfo(

@@ -272,8 +272,8 @@ class IntelMECleaner:
         if frba_abs + 0x0C > N:
             return None
         me_flreg = struct.unpack_from("<I", data, frba_abs + 0x08)[0]
-        base = me_flreg & 0x7FFF
-        limit = (me_flreg >> 16) & 0x7FFF
+        base = me_flreg & 0x1FFF
+        limit = (me_flreg >> 16) & 0x1FFF
         if limit == 0 or base > limit:
             return None
         me_start = fd + base * 0x1000

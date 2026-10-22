@@ -19,6 +19,8 @@ import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
+from bios_recovery.core.bios_analyzer import decode_flreg
+
 
 def _locate_smbios(data: bytes):
     """(anchor, table_start, table_len) of the SMBIOS table, or None. See core.smbios."""
@@ -139,8 +141,7 @@ class DMIEditor:
             flreg3 = struct.unpack_from("<I", data, fd + 0x4C)[0]
         except struct.error:
             return None
-        gb_base = (flreg3 & 0x7FFF) << 12
-        gb_limit = ((flreg3 >> 16) & 0x7FFF) << 12 | 0xFFF
+        gb_base, gb_limit = decode_flreg(flreg3)
         if gb_base == 0 or gb_base > gb_limit or gb_limit > len(data):
             return None
         mac = data[gb_base : gb_base + 6]
@@ -217,8 +218,7 @@ class DMIEditor:
             else:
                 raw = mac.replace(":", "").replace("-", "")
                 flreg3 = struct.unpack_from("<I", data, fd + 0x4C)[0]
-                gb_base = (flreg3 & 0x7FFF) << 12
-                gb_limit = ((flreg3 >> 16) & 0x7FFF) << 12 | 0xFFF
+                gb_base, gb_limit = decode_flreg(flreg3)
                 if not (gb_base and gb_base <= gb_limit and gb_limit <= len(data)):
                     report.warnings.append("descriptor has no valid GbE region - MAC skipped")
                 else:
