@@ -30,7 +30,7 @@ from bios_recovery import __version__
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
 from bios_recovery.core.bios_repair import BiosRepairEngine
 from bios_recovery.core.dmi_clone import DMIClone
-from bios_recovery.core.dmi_extractor import DMIExtractor
+from bios_recovery.core.dmi_extractor import DMIExtractor, read_identity_file
 from bios_recovery.core.password_remover import PasswordRemover
 from bios_recovery.gui.ec_tab import ECTab
 from bios_recovery.gui.lenovo_tab import LenovoTab
@@ -990,17 +990,22 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             return
         self.dmi_extract_btn.setEnabled(False)
-        self._run_in_thread(self.dmi_extractor.extract_from_bios, self._dmi_done, self.current_file)
+        self._run_in_thread(read_identity_file, self._dmi_done, self.current_file)
 
-    def _dmi_done(self, info):
+    def _dmi_done(self, result):
+        info, nvram = result
         self.dmi_extract_btn.setEnabled(True)
         if info is None:
-            self.dmi_text.setPlainText(
-                "No valid SMBIOS table was found in this image.\n"
-                "Firmware that generates DMI data at boot, or keeps it in a vendor store, "
-                "has no table to read here."
-            )
-            return
+            lines = [
+                "No SMBIOS table was found in this image.",
+                "Some firmware keeps the identity in NVRAM variables instead; see below.",
+            ]
+        else:
+            lines = self._dmi_info_lines(info)
+        lines.extend(self._nvram_identity_lines(nvram))
+        self.dmi_text.setPlainText("\n".join(lines))
+
+    def _dmi_info_lines(self, info) -> list:
         lines = [
             "=== BIOS Information ===",
             f"  Vendor: {info.bios_vendor}",
@@ -1037,7 +1042,20 @@ class MainWindow(QMainWindow):
         lines.append("")
         lines.append(f"Total structures: {len(info.structures)}")
         lines.extend(self._dmi_editor_summary())
-        self.dmi_text.setPlainText("\n".join(lines))
+        return lines
+
+    @staticmethod
+    def _nvram_identity_lines(nvram) -> list:
+        if not nvram:
+            return []
+        out = ["", "=== NVRAM identity variables (AMI) ==="]
+        for item in nvram:
+            out.append(
+                f"  {item['name']}: {item['copies']} valid copy/copies, {item['size']:#x} bytes"
+            )
+            out.append(f"    {item['text']}")
+        return out
+
 
     def _dmi_editor_summary(self):
         if not self.current_file:

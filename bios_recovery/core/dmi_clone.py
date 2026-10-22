@@ -45,6 +45,27 @@ class DMIClone:
             "new": {"eps": n[0], "start": n[1], "end": n[2], "size": n[2] - n[1]} if n else None,
         }
 
+    def _clone_nvram_identity(self, old: bytes, new: bytearray, output_path: str) -> dict:
+        """AMI images keep the machine identity in NVRAM variables, not in an SMBIOS table.
+
+        The identity variables (MFG0, _DMI) are carried over only when every one of them
+        fits exactly in the new image; otherwise nothing is written.
+        """
+        from bios_recovery.core.nvar import carry_identity
+
+        data = bytearray(new)
+        rep = carry_identity(old, data)
+        if not rep.success:
+            return {"success": False, "message": f"Identity not carried: {rep.refused}"}
+        with open(output_path, "wb") as f:
+            f.write(bytes(data))
+        return {
+            "success": True,
+            "message": "Identity variables carried over: " + "; ".join(rep.messages),
+            "output_path": output_path,
+            "bytes": 0,
+        }
+
     def clone(self, old_path: str, new_path: str, output_path: str) -> dict:
         """Copy the DMI identity block from old dump into the new dump."""
         old = open(old_path, "rb").read()
@@ -53,10 +74,7 @@ class DMIClone:
         o = _locate_smbios(old)
         n = _locate_smbios(new)
         if not o or not n:
-            return {
-                "success": False,
-                "message": f"SMBIOS data not found in both dumps (old: {bool(o)}, new: {bool(n)})",
-            }
+            return self._clone_nvram_identity(old, new, output_path)
 
         block = old[o[1] : o[2]]
         if n[1] + len(block) > len(new):

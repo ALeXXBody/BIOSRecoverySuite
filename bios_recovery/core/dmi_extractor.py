@@ -1,5 +1,6 @@
 """DMI/SMBIOS extraction and editing engine."""
 
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
@@ -237,3 +238,38 @@ class DMIExtractor:
                 offset = idx + 1
 
         return results
+
+
+def _printable_text(blob: bytes, limit: int = 160) -> str:
+    """Readable runs of a variable's data, joined; the raw bytes are not shown."""
+    runs = [m.group().decode("ascii") for m in re.finditer(rb"[\x20-\x7e]{3,}", blob)]
+    text = " | ".join(runs)
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def nvram_identity(data: bytes) -> list:
+    """The identity variables (MFG0, _DMI) of an AMI image: copies, size and readable text."""
+    from bios_recovery.core.nvar import IDENTITY_NAMES, identity_copies
+
+    copies = identity_copies(data)
+    out = []
+    for name in IDENTITY_NAMES:
+        found = copies.get(name)
+        if found:
+            live = found[-1]
+            out.append(
+                {
+                    "name": name,
+                    "copies": len(found),
+                    "size": live.total,
+                    "text": _printable_text(live.data),
+                }
+            )
+    return out
+
+
+def read_identity_file(path: str) -> tuple:
+    """(SMBIOS info or None, NVRAM identity list) for an image. Read-only."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return DMIExtractor().extract_from_dump_bytes(data), nvram_identity(data)
