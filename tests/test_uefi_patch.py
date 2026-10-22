@@ -202,3 +202,66 @@ def test_global_scope_patch(patcher, uefi_patch_image, tmp_path):
     idx = original.find(TAMPER_MARKER)
     original[idx : idx + 9] = bytes.fromhex("4C4E564242534543FF")
     assert bytes(original) == data
+
+
+def test_identity_splice_leaves_image_unchanged(patcher, uefi_patch_image):
+    image = bytearray(_read(uefi_patch_image))
+    files = [f for f in patcher.iter_files(image) if f.storage is None]
+    for target in files:
+        before = bytes(image)
+        body = bytes(image[target.off : target.off + target.size])
+        patcher._splice_file_in_fv(image, target, body)
+        assert bytes(image) == before, f"identity splice changed bytes for {target.guid}"
+
+
+def test_splice_keeps_later_files_at_their_offsets(patcher, uefi_patch_image):
+    image = bytearray(_read(uefi_patch_image))
+    files = [f for f in patcher.iter_files(image) if f.storage is None]
+    original = bytes(image)
+    target = files[0]
+    grown = bytes(image[target.off : target.off + target.size]) + b"\xa5" * 0x13
+    patcher._splice_file_in_fv(image, target, grown)
+    after = [f for f in patcher.iter_files(image) if f.storage is None]
+    assert [f.guid for f in after] == [f.guid for f in files]
+    for before_f, after_f in zip(files[1:], after[1:]):
+        assert after_f.off % 8 == 0
+        assert bytes(image[after_f.off : after_f.off + after_f.size]) == original[
+            before_f.off : before_f.off + before_f.size
+        ]
+
+
+def test_splice_refuses_overflow(patcher, uefi_patch_image):
+    import pytest
+
+    from bios_recovery.platforms.intel.uefi_patcher import UEFIPatchError
+
+    image = bytearray(_read(uefi_patch_image))
+    target = [f for f in patcher.iter_files(image) if f.storage is None][0]
+    fv_end = next(
+        o + n for o, n, h, _ in patcher.find_fvs(image) if o + h <= target.off < o + n
+    )
+    too_big = bytes(image[target.off : target.off + target.size]) + b"\xa5" * (fv_end - target.off)
+    with pytest.raises(UEFIPatchError):
+        patcher._splice_file_in_fv(image, target, too_big)
+
+
+def test_lzma_section_header_carries_decoded_size(patcher):
+    from bios_recovery.platforms.intel.uefi_patcher import SectionNode
+
+    payload = bytes(range(256)) * 40
+    node = SectionNode(
+        stype=0x02, off=0, hdr_size=4, body_off=4, body_size=len(payload), data=bytearray(payload)
+    )
+    section = patcher._lzma_section_bytes(node)
+    decoded_size = int.from_bytes(section[4 + 20 + 5 : 4 + 20 + 13], "little")
+    assert decoded_size == len(payload)
+    stream = section[4 + 20 :]
+    assert lzma.decompress(stream, format=lzma.FORMAT_ALONE) == payload
+
+
+def test_file_alignment_follows_attribute_table(patcher):
+    assert patcher._file_alignment(0x00) == 8
+    assert patcher._file_alignment(0x08) == 16
+    assert patcher._file_alignment(0x10) == 128
+    assert patcher._file_alignment(0x18) == 512
+    assert patcher._file_alignment(0x38) == 65536

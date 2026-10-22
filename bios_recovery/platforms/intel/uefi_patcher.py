@@ -38,6 +38,8 @@ FFS_PAD_FILE = 0xF0
 FFS_ATTRIB_CHECKSUM = 0x40
 FFS_ATTRIB_LARGE_FILE = 0x01
 FFS_MIN_HEADER = 0x18
+_FFS_ALIGN_EXP = (0, 4, 7, 9, 10, 12, 15, 16)
+_FFS_ALIGN2_EXP = (17, 18, 19, 20, 21, 22, 23, 24)
 ERASE_POLARITY_BIT = 0x00000800
 GLOBAL_GUID = "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
 
@@ -179,6 +181,19 @@ class UEFIPatcher:
             idx += 4
         return out
 
+    @staticmethod
+    def _file_alignment(attrs_f: int) -> int:
+        """Start alignment of a file, from the FFS attribute bits (PI spec, FFS attributes).
+
+        Bits 3-5 index the power-of-two table; bit 1 selects the extended table used by
+        PI 1.6 files. Every file starts on an 8-byte boundary at least.
+        """
+        if attrs_f & 0x02:
+            exp = _FFS_ALIGN2_EXP[(attrs_f >> 3) & 0x07]
+        else:
+            exp = _FFS_ALIGN_EXP[(attrs_f >> 3) & 0x07]
+        return max(8, 1 << exp)
+
     def parse_fv_files(
         self,
         buf,
@@ -223,7 +238,7 @@ class UEFIPatcher:
                 ftype=hdr[0x12],
                 attrs=attrs_f,
                 state=state,
-                align=max(8, 1 << ((attrs_f >> 3) & 0x07)),
+                align=self._file_alignment(attrs_f),
                 storage=storage,
             )
             node.sections = self.parse_sections(buf, off + hdr_size, node, storage)
@@ -497,11 +512,15 @@ class UEFIPatcher:
         buf[off : off + fnode.hdr_size] = hdr
 
     def _lzma_section_bytes(self, node: SectionNode) -> bytes:
+        raw_data = bytes(node.data)
         payload = lzma.compress(
-            bytes(node.data),
+            raw_data,
             format=lzma.FORMAT_ALONE,
             filters=[{"id": lzma.FILTER_LZMA1, "preset": 9, "dict_size": 1 << 24}],
         )
+        # FORMAT_ALONE writes an unknown size (all 0xFF) in its 13-byte header. The firmware's
+        # LZMA decoder needs the real decoded size, so write it in place of the unknown marker.
+        payload = payload[:5] + struct.pack("<Q", len(raw_data)) + payload[13:]
         hdr_len = 4
         total = hdr_len + 20 + len(payload)
         if total <= 0xFFFFFF:
@@ -585,20 +604,26 @@ class UEFIPatcher:
         pos = fnode.off
         blob = bytearray()
         for raw, align, fstate in tail:
-            target = _align(pos, align)
-            if target > pos:
+            target = fv_off + _align(pos - fv_off, align)
+            gap = target - pos
+            if gap >= 0x18:
                 blob += self._make_pad_file(pos, target, fstate)
+                pos = target
+            elif gap:
+                blob += b"\xff" * gap
                 pos = target
             blob += raw
             pos += len(raw)
         end = fv_off + fv_len
-        blob += b"\xff" * (end - (fnode.off + len(blob)))
+        if pos > end:
+            raise UEFIPatchError("replacement does not fit in the firmware volume")
+        blob += b"\xff" * (end - pos)
         image[fnode.off : end] = blob
 
     def _make_pad_file(self, pos: int, target: int, state: int) -> bytes:
         size = target - pos
         if size < 0x18:
-            size = _align(pos + 0x18, 8) - pos
+            raise UEFIPatchError(f"pad of {size} bytes cannot hold a file header")
         hdr = bytearray(0x18)
         hdr[0:16] = b"\xff" * 16
         hdr[0x12] = FFS_PAD_FILE
