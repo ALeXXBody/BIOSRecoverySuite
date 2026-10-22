@@ -90,6 +90,18 @@ class IntelMECleaner:
                 messages=["No Intel ME region found in the image"],
             )
 
+        if truncate and self._find_fd_in_data(data) >= 0:
+            # Cutting a full flash image drops every region after the ME region, including
+            # the BIOS. Truncation is only meaningful for a standalone ME image.
+            return MeCleanReport(
+                status=MeCleanResult.ERROR,
+                messages=[
+                    "Truncation refused: this is a full flash image with a flash descriptor, "
+                    "and cutting it would remove the BIOS region. Truncation applies only to "
+                    "standalone ME images."
+                ],
+            )
+
         # The manifest may sit in the 4 KB block just before the partition base (CSME 15 layouts).
         me_version = self._get_me_version(data, max(0, me_start - 0x1000), me_end)
         if not me_version:
@@ -160,14 +172,19 @@ class IntelMECleaner:
             # The $CPD manifest of a CSE LT layout may sit in the block before the partition base.
             if b"$CPD" in data[max(0, me_start - 0x1000) : exp_end]:
                 if soft_disable:
-                    self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major)
-                    report.hap_bit_set = True
-                    report.soft_disable = True
-                    report.messages.append(
-                        "CSME 11+ 'CSE LT' layout detected (engine manifest in $CPD, "
-                        "not listed in FPT): partition cleaning is not applicable. "
-                        "HAP/AltMeDisable bit set instead."
-                    )
+                    if self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major):
+                        report.hap_bit_set = True
+                        report.soft_disable = True
+                        report.messages.append(
+                            "CSME 11+ 'CSE LT' layout detected (engine manifest in $CPD, "
+                            "not listed in FPT): partition cleaning is not applicable. "
+                            "HAP/AltMeDisable bit set instead."
+                        )
+                    else:
+                        report.messages.append(
+                            "CSME 11+ 'CSE LT' layout detected: the HAP/AltMeDisable bit could "
+                            "not be set (strap register not reachable); nothing soft-disabled"
+                        )
                 else:
                     report.status = MeCleanResult.ERROR
                     report.messages.append(
@@ -190,14 +207,23 @@ class IntelMECleaner:
             report.messages.append(f"Removed {partitions_removed} non-essential partitions")
 
         if soft_disable and ftpr_entry is not None:
-            self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major)
-            report.hap_bit_set = True
-            report.soft_disable = True
-            report.messages.append("HAP/AltMeDisable bit set for soft disable")
+            if self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major):
+                report.hap_bit_set = True
+                report.soft_disable = True
+                report.messages.append("HAP/AltMeDisable bit set for soft disable (read back)")
+            else:
+                report.messages.append(
+                    "HAP/AltMeDisable bit could not be set (flash descriptor not reachable); "
+                    "no soft disable applied"
+                )
 
         if descriptor_lock:
-            self._lock_me_descriptor(data, me_gen)
-            report.messages.append("ME descriptor write access removed")
+            if self._lock_me_descriptor(data, me_gen):
+                report.messages.append("ME descriptor write access removed (read back)")
+            else:
+                report.messages.append(
+                    "ME descriptor lock could not be applied (flash descriptor not reachable)"
+                )
 
         if truncate and me_gen in (MeGeneration.GEN2, MeGeneration.GEN3) and ftpr_entry is not None:
             self._truncate_me(data, me_start, entries, ftpr_entry)
@@ -261,14 +287,15 @@ class IntelMECleaner:
     ) -> Optional[tuple[int, int, MeGeneration]]:
         """ME region from the descriptor's FLREG2 entry.
 
-        FLMAP0 (fd+0x04) gives FRBA in 16-byte units from the descriptor start; the FLREG
-        table is at FRBA and ME is its third entry (FRBA+8). Base and limit are 4 KB pages.
+        FLMAP0 (fd+0x04) gives FRBA in 16-byte units from the start of the image (ifdtool
+        find_frba); the FLREG table is at FRBA and ME is its third entry (FRBA+8). Base and
+        limit are 4 KB pages from the start of the image.
         """
         N = len(data)
         if fd + 0x08 > N:
             return None
         flmap0 = struct.unpack_from("<I", data, fd + 0x04)[0]
-        frba_abs = fd + ((flmap0 >> 16) & 0xFF) * 0x10
+        frba_abs = ((flmap0 >> 16) & 0xFF) * 0x10
         if frba_abs + 0x0C > N:
             return None
         me_flreg = struct.unpack_from("<I", data, frba_abs + 0x08)[0]
@@ -276,8 +303,8 @@ class IntelMECleaner:
         limit = (me_flreg >> 16) & 0x7FFF
         if limit == 0 or base > limit:
             return None
-        me_start = fd + base * 0x1000
-        me_end = min(fd + (limit + 1) * 0x1000, N)
+        me_start = base * 0x1000
+        me_end = min((limit + 1) * 0x1000, N)
         if me_start >= me_end:
             return None
         if not self._has_region_content(data, me_start, me_end):
@@ -447,33 +474,27 @@ class IntelMECleaner:
         me_end: int,
         gen: MeGeneration,
         me_version: int,
-    ) -> None:
+    ) -> bool:
+        """Set the HAP (ME 11+) or AltMeDisable (older) strap bit. Returns True only if the
+        bit reads back set after the write."""
         fd_offset = self._find_fd_in_data(data)
         if fd_offset < 0:
-            return
+            return False
 
         flmap1 = self._read_flmap1(data, fd_offset)
         if flmap1 is None:
-            return
-        fpsba = (flmap1 >> 12) & 0xFF0
-        fpsba_abs = fd_offset + fpsba
+            return False
+        fpsba_abs = ((flmap1 >> 16) & 0xFF) << 4  # absolute file offset (ifdtool find_fpsba)
 
         if me_version >= 11:
-            if fpsba_abs + 0x100 <= len(data):
-                try:
-                    pchstrp0 = struct.unpack_from("<I", data, fpsba_abs)[0]
-                    pchstrp0 |= 1 << 16
-                    struct.pack_into("<I", data, fpsba_abs, pchstrp0)
-                except struct.error:
-                    pass
+            off, bit = fpsba_abs, 1 << 16
         else:
-            if fpsba_abs + 0x30 <= len(data):
-                try:
-                    pchstrp10 = struct.unpack_from("<I", data, fpsba_abs + 0x28)[0]
-                    pchstrp10 |= 1 << 7
-                    struct.pack_into("<I", data, fpsba_abs + 0x28, pchstrp10)
-                except struct.error:
-                    pass
+            off, bit = fpsba_abs + 0x28, 1 << 7
+        if off + 4 > len(data):
+            return False
+        value = struct.unpack_from("<I", data, off)[0] | bit
+        struct.pack_into("<I", data, off, value)
+        return bool(struct.unpack_from("<I", data, off)[0] & bit)
 
     def _read_flmap1(self, data: bytes, fd_offset: int) -> Optional[int]:
         """FLMAP1 is at fd+0x08 on real images (magic at 0x00 or 0x10).
@@ -495,27 +516,27 @@ class IntelMECleaner:
             return 0x10
         return -1
 
-    def _lock_me_descriptor(self, data: bytearray, gen: MeGeneration) -> None:
+    def _lock_me_descriptor(self, data: bytearray, gen: MeGeneration) -> bool:
+        """Write the ME master (FLMSTR2) entry. Returns True only if it reads back as written."""
         fd_offset = self._find_fd_in_data(data)
         if fd_offset < 0:
-            return
+            return False
 
         flmap1 = self._read_flmap1(data, fd_offset)
         if flmap1 is None:
-            return
-        fmba = (flmap1 & 0xFF) * 0x10
-        fmba_abs = fd_offset + fmba
+            return False
+        fmba_abs = (flmap1 & 0xFF) * 0x10  # absolute file offset (ifdtool find_fmba)
 
-        if fmba_abs + 0x0C <= len(data):
-            if gen == MeGeneration.GEN3:
-                struct.pack_into("<I", data, fmba_abs + 0x04, 0x00400500)
-            else:
-                try:
-                    flmstr2 = struct.unpack_from("<I", data, fmba_abs + 0x04)[0]
-                    flmstr2 = (flmstr2 | 0x04040000) & 0x0404FFFF
-                    struct.pack_into("<I", data, fmba_abs + 0x04, flmstr2)
-                except struct.error:
-                    pass
+        off = fmba_abs + 0x04  # FLMSTR2
+        if off + 4 > len(data):
+            return False
+        if gen == MeGeneration.GEN3:
+            expected = 0x00400500
+        else:
+            current = struct.unpack_from("<I", data, off)[0]
+            expected = (current | 0x04040000) & 0x0404FFFF
+        struct.pack_into("<I", data, off, expected)
+        return struct.unpack_from("<I", data, off)[0] == expected
 
     def _truncate_me(
         self, data: bytearray, me_start: int, entries: list, ftpr_entry: tuple

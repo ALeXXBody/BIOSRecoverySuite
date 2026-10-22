@@ -218,11 +218,11 @@ class BiosAnalyzer:
         if fd_offset + 0x20 > len(data):
             return regions
 
-        # FLMAP0 is the second dword of the descriptor (FLVALSIG is the first);
-        # FRBA is bits 23:16 in 16-byte units, relative to the descriptor start.
+        # FLMAP0 is the second dword of the descriptor (FLVALSIG is the first).
+        # FRBA is bits 23:16 in 16-byte units and is an absolute file offset, as in
+        # coreboot ifdtool (find_frba) and me_cleaner; the FLREG pages are absolute too.
         flmap0 = struct.unpack_from("<I", data, fd_offset + 0x04)[0]
-        frba = ((flmap0 >> 16) & 0xFF) << 4
-        frba_abs = fd_offset + frba
+        frba_abs = ((flmap0 >> 16) & 0xFF) << 4
 
         if frba_abs + 0x14 > len(data):
             return regions
@@ -239,11 +239,8 @@ class BiosAnalyzer:
             if off + 4 > len(data):
                 break
             flreg = struct.unpack_from("<I", data, off)[0]
-            # FLREG values are 4 KB pages relative to the descriptor, so a descriptor
-            # that starts at 0x10 (16-byte header) shifts every region by that amount.
-            base_rel, limit_rel = decode_flreg(flreg)
-            base = fd_offset + base_rel
-            limit = fd_offset + limit_rel
+            # FLREG values are 4 KB pages from the start of the image (ifdtool get_region).
+            base, limit = decode_flreg(flreg)
             if base < limit and limit < len(data):
                 regions.append(
                     RegionInfo(

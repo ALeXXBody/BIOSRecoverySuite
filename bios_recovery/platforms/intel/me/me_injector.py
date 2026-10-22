@@ -12,8 +12,14 @@ This engine:
   * rewrites the region in place, leaving the descriptor untouched.
 """
 
+import os
+import tempfile
+
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
 from bios_recovery.core.me_manifest import detect_me_version_best as detect_me_version_in_blob
+from bios_recovery.core.rebuild_verify import verify_rebuild
+from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
 
 
 class MEInjector:
@@ -33,10 +39,19 @@ class MEInjector:
         }
 
     def inject(self, image_path: str, clean_me_path: str, output_path: str) -> dict:
+        try:
+            ensure_distinct(image_path, output_path)
+        except SameFileError as exc:
+            return {"success": False, "message": str(exc)}
+
         with open(image_path, "rb") as f:
-            image = bytearray(f.read())
+            original = f.read()
+        image = bytearray(original)
         with open(clean_me_path, "rb") as f:
             clean = f.read()
+
+        if not clean:
+            return {"success": False, "message": "clean ME image is empty; nothing written"}
 
         result = BiosAnalyzer().analyze(image_path)
         me = next((r for r in result.regions if r.region_type.name == "INTEL_ME"), None)
@@ -44,6 +59,18 @@ class MEInjector:
             return {
                 "success": False,
                 "message": "target image has no Intel ME region (no flash descriptor?)",
+            }
+
+        # Only a region the flash descriptor declares may be overwritten. A region found by
+        # a fallback scan is not a boundary we can prove, so it is refused.
+        cleaner = IntelMECleaner()
+        fd = cleaner._find_fd_in_data(image)
+        declared = cleaner._me_region_from_flreg(image, fd) if fd >= 0 else None
+        if declared is None or (declared[0], declared[1]) != (me.offset, me.offset + me.size):
+            return {
+                "success": False,
+                "message": "the ME region is not declared by the flash descriptor; "
+                "refusing to overwrite a guessed range",
             }
 
         clean_version = detect_me_version_in_blob(clean)
@@ -67,8 +94,37 @@ class MEInjector:
         new_region[: len(clean)] = clean
         image[me.offset : me.offset + me.size] = new_region
 
-        with open(output_path, "wb") as f:
-            f.write(bytes(image))
+        if bytes(image) == original:
+            return {
+                "success": True,
+                "message": f"ME region at 0x{me.offset:X} already matches the clean image; "
+                "nothing written",
+                "output_path": "",
+                "old_version": cur_version,
+                "new_version": clean_version,
+            }
+
+        # Write to a temporary file beside the output, check that only ME bytes changed, and
+        # move it into place only if the check accepts it. A failed check leaves no output.
+        out_dir = os.path.dirname(os.path.abspath(output_path))
+        fd_tmp, tmp_path = tempfile.mkstemp(prefix=".inject_", suffix=".tmp", dir=out_dir)
+        try:
+            with os.fdopen(fd_tmp, "wb") as f:
+                f.write(bytes(image))
+            check = verify_rebuild(image_path, tmp_path, allow=("me",))
+            if not check.accepted:
+                os.remove(tmp_path)
+                return {
+                    "success": False,
+                    "message": "the rebuilt image changed bytes outside the ME region; nothing "
+                    "written: " + "; ".join(check.reasons or ["refused by the region check"]),
+                }
+            os.replace(tmp_path, output_path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+
         msg = f"ME region at 0x{me.offset:X} ({me.size} bytes) replaced with clean image" + (
             f" (v{clean_version})" if clean_version else ""
         )

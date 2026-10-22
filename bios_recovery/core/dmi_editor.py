@@ -132,16 +132,23 @@ class DMIEditor:
             return 0x10
         return None
 
+    @staticmethod
+    def _gbe_region(data: bytes, fd: int) -> tuple[int, int]:
+        """GbE (FLREG3) bounds. FRBA is an absolute file offset from FLMAP0 (ifdtool find_frba),
+        so the FLREG table is not at a fixed offset from the descriptor."""
+        flmap0 = struct.unpack_from("<I", data, fd + 0x04)[0]
+        frba = ((flmap0 >> 16) & 0xFF) << 4
+        return decode_flreg(struct.unpack_from("<I", data, frba + 0x0C)[0])
+
     def _read_mac(self, data: bytes):
         """Read the LAN MAC only when a validated Intel descriptor GbE region exists."""
         fd = self._find_fd(data)
         if fd is None:
             return None  # AMD-layout boards: no descriptor/GbE region
         try:
-            flreg3 = struct.unpack_from("<I", data, fd + 0x4C)[0]
+            gb_base, gb_limit = self._gbe_region(data, fd)
         except struct.error:
             return None
-        gb_base, gb_limit = decode_flreg(flreg3)
         if gb_base == 0 or gb_base > gb_limit or gb_limit > len(data):
             return None
         mac = data[gb_base : gb_base + 6]
@@ -217,8 +224,10 @@ class DMIEditor:
                 )
             else:
                 raw = mac.replace(":", "").replace("-", "")
-                flreg3 = struct.unpack_from("<I", data, fd + 0x4C)[0]
-                gb_base, gb_limit = decode_flreg(flreg3)
+                try:
+                    gb_base, gb_limit = self._gbe_region(bytes(data), fd)
+                except struct.error:
+                    gb_base = gb_limit = 0
                 if not (gb_base and gb_base <= gb_limit and gb_limit <= len(data)):
                     report.warnings.append("descriptor has no valid GbE region - MAC skipped")
                 else:

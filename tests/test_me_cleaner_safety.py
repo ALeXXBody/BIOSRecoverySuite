@@ -47,14 +47,15 @@ def test_clean_refuses_output_over_input(tmp_path):
 
 
 def test_flreg_is_read_from_the_frba_table(tmp_path):
-    # Real layout: descriptor at 0x10, FRBA 0x40 (from FLMAP0 at fd+4), ME entry = FRBA+8.
+    # Real layout: descriptor at 0x10, FRBA 0x40 from the start of the image (FLMAP0 at fd+4,
+    # as ifdtool find_frba), ME entry = FRBA+8. All offsets are absolute.
     fd = 0x10
     data = bytearray(b"\xff" * 0x400000)
     data[fd : fd + 4] = b"\x5a\xa5\xf0\x0f"
     struct.pack_into("<I", data, fd + 0x04, 0x00040003)  # FRBA = 0x40
-    frba = fd + 0x40
+    frba = 0x40
     struct.pack_into("<I", data, frba + 0x08, 0x03FF0001)  # ME: base 1 page, limit 0x3FF
-    data[fd + 0x1000 : fd + 0x1010] = b"\x00" * 0x10  # the region is not blank
+    data[0x1000:0x1010] = b"\x00" * 0x10  # the region is not blank
     me_start, me_end, _gen = _cleaner()._me_region_from_flreg(data, fd)
-    assert me_start == fd + 0x1000
+    assert me_start == 0x1000
     assert me_end == len(data)  # limit runs past the image: clamped to its size

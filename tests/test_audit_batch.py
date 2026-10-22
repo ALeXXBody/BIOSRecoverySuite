@@ -142,11 +142,12 @@ def test_me_family_label_matches_analyzer_rule():
 
 
 def _descriptor(fd_offset: int, frba: int = 0x40) -> bytearray:
-    """A flash descriptor with the FRBA table at a real-world offset (0x40 from the descriptor)."""
+    """A flash descriptor. FRBA is an absolute file offset (ifdtool find_frba), so the FLREG
+    table sits at frba whatever the descriptor's own offset is."""
     data = bytearray(b"\xff" * 0x400000)
     data[fd_offset : fd_offset + 4] = b"\x5a\xa5\xf0\x0f"
     struct.pack_into("<I", data, fd_offset + 0x04, (frba >> 4) << 16)  # FLMAP0: FRBA
-    table = fd_offset + frba
+    table = frba
     struct.pack_into("<I", data, table + 4, (0x0002 << 16) | 0x0001)  # BIOS: 1..2 pages
     struct.pack_into("<I", data, table + 8, (0x0005 << 16) | 0x0004)  # ME: 4..5 pages
     return data
@@ -157,8 +158,8 @@ def test_descriptor_regions_use_real_frba_layout(fd_offset):
     data = _descriptor(fd_offset)
     regions = {r.region_type.name: r for r in BiosAnalyzer()._parse_intel_ifd(bytes(data))}
     bios = regions["BIOS"]
-    assert bios.offset == fd_offset + 0x1000
+    assert bios.offset == 0x1000
     assert bios.size == 0x2000
     me = regions["INTEL_ME"]
-    assert me.offset == fd_offset + 0x4000
+    assert me.offset == 0x4000
     assert me.size == 0x2000
