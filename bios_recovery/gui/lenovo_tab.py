@@ -350,10 +350,10 @@ class LenovoTab(QWidget):
         )
 
     def derive_from_pair(self):
-        orig, _ = QFileDialog.getOpenFileName(
-            self, "Original (unpatched) dump", "", "Binary (*.bin);;All Files (*)"
-        )
+        # The loaded file is the original; only the autopatched output is picked.
+        orig = self.current_dump
         if not orig:
+            QMessageBox.warning(self, "No Original", "Open the original dump first (File > Open).")
             return
         patched, _ = QFileDialog.getOpenFileName(
             self, "Autopatched dump", "", "Binary (*.bin);;All Files (*)"

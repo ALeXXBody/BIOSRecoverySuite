@@ -73,17 +73,6 @@ def test_actions_need_a_loaded_image(qapp):
     assert page.output.toPlainText().count("Open a BIOS file first") == 3
 
 
-def test_refresh_shows_the_loaded_image(qapp, tmp_path):
-    from bios_recovery.gui.me_region_page import MERegionPage
-
-    current = {"path": None}
-    page = MERegionPage(image_provider=lambda: current["path"])
-    assert page.image_label.text() == ""
-    current["path"] = str(tmp_path / "x.bin")
-    page.refresh()
-    assert page.image_label.text() == str(tmp_path / "x.bin")
-
-
 def test_spi_page_hex_view_reads_the_shared_image(qapp, tmp_path):
     from bios_recovery.gui.spi_tab import SPITab
 
@@ -112,7 +101,6 @@ def test_one_open_serves_every_page(qapp, tmp_path, monkeypatch):
 
     assert w.current_file == str(img)
     assert w.me_page._image() == str(img)
-    assert w.me_page.image_label.text() == str(img)
     assert w.spi_tab._image() == str(img)
     assert w.ec_tab.current_dump == str(img)
     assert w.lenovo_tab.current_dump == str(img)
@@ -121,3 +109,22 @@ def test_one_open_serves_every_page(qapp, tmp_path, monkeypatch):
         for owner in (w, w.ec_tab, w.lenovo_tab):
             assert not hasattr(owner, name)
     assert w.file_label.toolTip() == str(img)
+
+
+def test_audit_removed_duplicates(qapp):
+    """The audit's removals stay removed: one place for each action."""
+    from PySide6.QtWidgets import QPushButton
+
+    from bios_recovery.gui.main_window import MainWindow
+
+    w = MainWindow()
+    labels = [b.text() for b in w.findChildren(QPushButton)]
+    assert "Analyze" not in labels
+    assert not hasattr(w, "repair_password_ck")
+    assert not hasattr(w.me_page, "image_label") and not hasattr(w.spi_tab, "image_label")
+    tool_menu = [a for a in w.menuBar().actions() if a.text() == "&Tools"][0].menu()
+    assert [a.text() for a in tool_menu.actions()] == ["Run &Analysis", "&ME Analyzer"]
+    overview_buttons = [b.text() for b in w.main_tab.findChildren(QPushButton)]
+    assert "Capsule → Flashable Image" not in overview_buttons
+    repair_buttons = [b.text() for b in w.repair_tab.findChildren(QPushButton)]
+    assert "Capsule → Flashable Image" in repair_buttons

@@ -44,13 +44,6 @@ class SPITab(QWidget):
     def _build(self):
         layout = QVBoxLayout(self)
 
-        self.image_label = QLineEdit()
-        self.image_label.setReadOnly(True)
-        self.image_label.setPlaceholderText("Open a BIOS file (File > Open) to write or view it")
-        image_row = QHBoxLayout()
-        image_row.addWidget(QLabel("Image:"))
-        image_row.addWidget(self.image_label, 1)
-        layout.addLayout(image_row)
 
         hex_row = QHBoxLayout()
         hex_row.addWidget(QLabel("Hex view  Offset:"))
@@ -127,10 +120,6 @@ class SPITab(QWidget):
         self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
         layout.addWidget(self.log_text, 1)
-
-    def refresh(self) -> None:
-        """Show the image loaded in the window."""
-        self.image_label.setText(self._image() or "")
 
     def view_hex(self):
         path = (self._image() or "").strip()

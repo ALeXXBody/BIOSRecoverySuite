@@ -154,9 +154,6 @@ class MainWindow(QMainWindow):
         self.platform_badge.setVisible(False)
         header.addWidget(self.platform_badge)
 
-        self.analyze_btn = QPushButton("Analyze")
-        self.analyze_btn.clicked.connect(self.run_analysis)
-        header.addWidget(self.analyze_btn)
         layout.addLayout(header)
 
         self.tabs = SidebarTabs()
@@ -207,15 +204,6 @@ class MainWindow(QMainWindow):
 
         tool_menu = menubar.addMenu("&Tools")
         tool_menu.addAction("Run &Analysis", self.run_analysis)
-        tool_menu.addAction("&Repair BIOS", lambda: self.tabs.setCurrentWidget(self.repair_tab))
-        tool_menu.addAction("&Clean ME", lambda: self.tabs.setCurrentWidget(self.me_page))
-        tool_menu.addAction("&Extract DMI", lambda: self.tabs.setCurrentWidget(self.dmi_tab))
-        tool_menu.addAction(
-            "Remove &Passwords", lambda: self.tabs.setCurrentWidget(self.password_tab)
-        )
-        tool_menu.addAction("SPI &Flasher", lambda: self.tabs.setCurrentWidget(self.spi_tab))
-        tool_menu.addAction("&EC Patching", lambda: self.tabs.setCurrentWidget(self.ec_tab))
-        tool_menu.addAction("&Lenovo Unlock", lambda: self.tabs.setCurrentWidget(self.lenovo_tab))
         tool_menu.addAction("&ME Analyzer", self.run_mea_analysis)
 
         help_menu = menubar.addMenu("&Help")
@@ -256,23 +244,6 @@ class MainWindow(QMainWindow):
             self._cards[title] = body
         layout.addLayout(cards)
 
-        caps_layout = QHBoxLayout()
-        self.capsule_btn = QPushButton("Capsule → Flashable Image")
-        self.capsule_btn.setToolTip(
-            "Strip the Aptio capsule header (.CAP/.308/.217) and write the bare "
-            "flash image, ready to burn to the SPI chip with an external programmer."
-        )
-        self.capsule_btn.clicked.connect(self.build_flashable_image)
-        caps_layout.addWidget(self.capsule_btn)
-        self.capsule_merge_btn = QPushButton("Merge Dump onto Capsule")
-        self.capsule_merge_btn.setToolTip(
-            "Build a flashable image from the capsule and restore machine NVRAM "
-            "records (serials etc.) from a saved dump."
-        )
-        self.capsule_merge_btn.clicked.connect(self.build_flashable_merged)
-        caps_layout.addWidget(self.capsule_merge_btn)
-        caps_layout.addStretch(1)
-        layout.addLayout(caps_layout)
 
         regions_group = QGroupBox("Detected Regions")
         regions_layout = QVBoxLayout(regions_group)
@@ -382,23 +353,35 @@ class MainWindow(QMainWindow):
 
         options_group = QGroupBox("Repair Options")
         options_layout = QVBoxLayout(options_group)
-        me_hint = QLabel("ME region cleaning is done on the ME Region page, with its own options.")
-        me_hint.setStyleSheet("color: #7F849C;")
-        options_layout.addWidget(me_hint)
         self.repair_checksum_ck = QCheckBox("Fix FPT Checksum")
         self.repair_checksum_ck.setChecked(True)
         self.repair_size_ck = QCheckBox("Verify Size Alignment")
         self.repair_size_ck.setChecked(True)
-        self.repair_password_ck = QCheckBox("Also clear BIOS password structures")
-        self.repair_password_ck.setChecked(True)
         options_layout.addWidget(self.repair_checksum_ck)
         options_layout.addWidget(self.repair_size_ck)
-        options_layout.addWidget(self.repair_password_ck)
         layout.addWidget(options_group)
 
         self.repair_btn = QPushButton("Run Auto Repair")
         self.repair_btn.clicked.connect(self.run_repair)
         layout.addWidget(self.repair_btn)
+
+        caps_layout = QHBoxLayout()
+        self.capsule_btn = QPushButton("Capsule → Flashable Image")
+        self.capsule_btn.setToolTip(
+            "Strip the Aptio capsule header (.CAP/.308/.217) and write the bare "
+            "flash image, ready to burn to the SPI chip with an external programmer."
+        )
+        self.capsule_btn.clicked.connect(self.build_flashable_image)
+        caps_layout.addWidget(self.capsule_btn)
+        self.capsule_merge_btn = QPushButton("Merge Dump onto Capsule")
+        self.capsule_merge_btn.setToolTip(
+            "Build a flashable image from the capsule and restore machine NVRAM "
+            "records (serials etc.) from a saved dump."
+        )
+        self.capsule_merge_btn.clicked.connect(self.build_flashable_merged)
+        caps_layout.addWidget(self.capsule_merge_btn)
+        caps_layout.addStretch(1)
+        layout.addLayout(caps_layout)
 
         graft_row = QHBoxLayout()
         self.graft_btn = QPushButton("Auto Graft from Donor...")
@@ -658,8 +641,6 @@ class MainWindow(QMainWindow):
         self.current_file = path
         self.file_label.setText(os.path.basename(path))
         self.file_label.setToolTip(path)
-        self.me_page.refresh()
-        self.spi_tab.refresh()
         self.ec_tab.set_file(path)
         self.lenovo_tab.set_file(path)
         self._clear_results()
@@ -719,12 +700,10 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             return
         path = self.current_file
-        button = getattr(self, "analyze_btn", None)
         self._run_in_thread(
             self.bios_analyzer.analyze,
             lambda result: self._analysis_done_for(path, result),
             path,
-            button=button,
         )
 
     def _analysis_done_for(self, path, result):
@@ -746,8 +725,6 @@ class MainWindow(QMainWindow):
         traits = classify(self._read_current_file_bytes())
         self._apply_traits(traits)
         self._update_overview_cards(result, traits)
-        if hasattr(self, "analyze_btn"):
-            self.analyze_btn.setEnabled(True)
         self.tabs.setCurrentWidget(self.main_tab)
 
     def _read_current_file_bytes(self):
@@ -858,7 +835,6 @@ class MainWindow(QMainWindow):
             output,
             self.repair_checksum_ck.isChecked(),
             self.repair_size_ck.isChecked(),
-            self.repair_password_ck.isChecked(),
         )
 
     def _repair_done(self, report):

@@ -50,19 +50,10 @@ class MERegionPage(QWidget):
         self.cleaner = IntelMECleaner()
         self.injector = MEInjector()
         self._build()
-        self.refresh()
 
     # -- layout -----------------------------------------------------------------
     def _build(self):
         root = QVBoxLayout(self)
-
-        image_row = QHBoxLayout()
-        image_row.addWidget(QLabel("Image:"))
-        self.image_label = QLineEdit()
-        self.image_label.setReadOnly(True)
-        self.image_label.setPlaceholderText("Open a BIOS file (File > Open) to use this page")
-        image_row.addWidget(self.image_label, 1)
-        root.addLayout(image_row)
 
         inspect_row = QHBoxLayout()
         self.info_btn = QPushButton("Show ME Info")
@@ -133,10 +124,6 @@ class MERegionPage(QWidget):
         root.addWidget(self.output, 1)
 
     # -- shared state -----------------------------------------------------------
-    def refresh(self):
-        """Show the image currently loaded in the window."""
-        self.image_label.setText(self._image() or "")
-
     def _current(self) -> Optional[str]:
         path = self._image()
         if not path:
