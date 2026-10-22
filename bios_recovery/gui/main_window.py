@@ -995,7 +995,11 @@ class MainWindow(QMainWindow):
     def _dmi_done(self, info):
         self.dmi_extract_btn.setEnabled(True)
         if info is None:
-            self.dmi_text.setPlainText("No SMBIOS data found in this image.")
+            self.dmi_text.setPlainText(
+                "No valid SMBIOS table was found in this image.\n"
+                "Firmware that generates DMI data at boot, or keeps it in a vendor store, "
+                "has no table to read here."
+            )
             return
         lines = [
             "=== BIOS Information ===",

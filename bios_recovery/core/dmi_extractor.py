@@ -72,82 +72,19 @@ class DMIExtractor:
     }
 
     def extract_from_bios(self, file_path: str) -> Optional[DMIInfo]:
+        """DMI identity from an image, or None when no valid SMBIOS table is in it."""
         with open(file_path, "rb") as f:
             data = f.read()
+        return self.extract_from_dump_bytes(data)
 
-        smbios_data = self._find_smbios_in_image(data)
-        if smbios_data is None:
-            return self._extract_from_dump(data)
+    def extract_from_dump_bytes(self, data: bytes) -> Optional[DMIInfo]:
+        from bios_recovery.core.smbios import find_table
 
-        return self._parse_smbios(smbios_data)
-
-    def extract_from_dump(self, dump_path: str) -> Optional[DMIInfo]:
-        with open(dump_path, "rb") as f:
-            data = f.read()
-        return self._parse_smbios(data)
-
-    def _find_smbios_in_image(self, data: bytes) -> Optional[bytes]:
-        for sig in self.SMBIOS_SIGNATURES:
-            idx = data.find(sig)
-            if idx >= 0:
-                if idx + self.SMBIOS_ENTRY_SIZE <= len(data):
-                    return self._parse_smbios_entry(data, idx)
-
-        return self._scan_for_smbios_structures(data)
-
-    def _parse_smbios_entry(self, data: bytes, offset: int) -> Optional[bytes]:
-        if data[offset : offset + 4] == b"_SM_":
-            table_length = struct.unpack_from("<H", data, offset + 22)[0]
-            table_addr = struct.unpack_from("<I", data, offset + 24)[0]
-
-            if table_addr > 0 and table_length > 0:
-                if table_addr + table_length <= len(data):
-                    return data[table_addr : table_addr + table_length]
-                if table_addr < 0x100000:
-                    return data[table_addr : table_addr + table_length]
-
-        if data[offset : offset + 5] == b"_DMI_":
-            table_length = struct.unpack_from("<H", data, offset + 5)[0]
-            table_addr = struct.unpack_from("<I", data, offset + 7)[0]
-            if table_addr + table_length <= len(data):
-                return data[table_addr : table_addr + table_length]
-
-        return None
-
-    def _scan_for_smbios_structures(self, data: bytes) -> Optional[bytes]:
-        for i in range(0, min(len(data), 0x100000)):
-            if data[i] == 0x00 and i + 2 < len(data):
-                if data[i + 1] == 0x00 and data[i + 2] in self.SMBIOS_TYPES:
-                    null_count = 0
-                    for j in range(i, min(i + 0x100, len(data))):
-                        if data[j] == 0x00:
-                            null_count += 1
-                            if null_count >= 2:
-                                return data[i:]
-                        else:
-                            null_count = 0
-        return None
-
-    def _extract_from_dump(self, data: bytes) -> Optional[DMIInfo]:
-        dmi_data = bytearray()
-        i = 0
-        while i < min(len(data), 0x100000):
-            if data[i] in self.SMBIOS_TYPES and i + 4 < len(data):
-                struct_length = data[i + 1]
-                if 4 <= struct_length <= 256 and i + struct_length <= len(data):
-                    dmi_data.extend(data[i : i + struct_length])
-                    i += struct_length
-                    while i < len(data) and i < i + 0x100:
-                        if data[i] == 0x00 and data[i + 1] == 0x00 if i + 1 < len(data) else False:
-                            i += 2
-                            break
-                        i += 1
-                    continue
-            i += 1
-
-        if dmi_data:
-            return self._parse_smbios(bytes(dmi_data))
-        return None
+        found = find_table(data)
+        if found is None:
+            return None
+        _anchor, start, length = found
+        return self._parse_smbios(data[start : start + length])
 
     def _parse_smbios(self, data: bytes) -> DMIInfo:
         info = DMIInfo(raw_smbios=data)

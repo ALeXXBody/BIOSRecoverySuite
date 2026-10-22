@@ -21,20 +21,10 @@ from typing import Optional
 
 
 def _locate_smbios(data: bytes):
-    """Locate the EPS; returns (eps_off, table_addr, table_len) or None."""
-    idx = 0
-    while True:
-        idx = data.find(b"_SM_", idx)
-        if idx < 0:
-            return None
-        if idx + 0x1F > len(data):
-            idx += 4
-            continue
-        table_len = struct.unpack_from("<H", data, idx + 0x16)[0]
-        table_addr = struct.unpack_from("<I", data, idx + 0x18)[0]
-        if 0 < table_addr < len(data) and 0 < table_len and table_addr + table_len <= len(data):
-            return (idx, table_addr, table_len)
-        idx += 4
+    """(anchor, table_start, table_len) of the SMBIOS table, or None. See core.smbios."""
+    from bios_recovery.core.smbios import find_table
+
+    return find_table(data)
 
 
 @dataclass
@@ -101,7 +91,7 @@ class DMIEditor:
             data = f.read()
         eps = _locate_smbios(data)
         if not eps:
-            return {"found": False, "message": "SMBIOS entry point (_SM_) not found"}
+            return {"found": False, "message": "no valid SMBIOS table found"}
 
         _, table_addr, table_len = eps
         out = {
@@ -172,7 +162,7 @@ class DMIEditor:
             data = bytearray(f.read())
         eps = _locate_smbios(bytes(data))
         if not eps:
-            report.message = "SMBIOS entry point (_SM_) not found - edit refused"
+            report.message = "no valid SMBIOS table found - edit refused"
             return report
         _, table_addr, table_len = eps
         structures = list(_smbios_structures(bytes(data), table_addr, table_len))
