@@ -1,6 +1,7 @@
 """Tests for the UEFIPatch-compatible pattern engine and DXE replacement."""
 
 import lzma
+import os
 
 from bios_recovery.platforms.intel.uefi_patcher import UEFIPatcher
 from tests.fixture_builder import (
@@ -104,7 +105,8 @@ def test_apply_is_noop_for_nonmatching_groups(patcher, uefi_patch_image, tmp_pat
     out = str(tmp_path / "patched.bin")
     report = patcher.apply(uefi_patch_image, out, group_keys=["xx30_wlan_whitelist"])
     assert report["matches_total"] == 0
-    assert _read(out) == _read(uefi_patch_image)
+    assert not report["success"]
+    assert not os.path.exists(out)
 
 
 def test_dxe_replacement_roundtrip(patcher, uefi_patch_image, tmp_path):

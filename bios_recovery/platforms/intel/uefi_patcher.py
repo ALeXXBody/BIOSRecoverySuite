@@ -24,6 +24,9 @@ import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
+from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.verified_write import write_verified
+
 FV_SIGNATURE = b"_FVH"
 FFS2_GUID = "8C8CE578-8A3D-4F1C-9935-896185C32DD3"
 FFS3_GUID = "5473C07A-3DCB-4DCA-BD6F-1E9689E7349A"
@@ -38,10 +41,20 @@ FFS_PAD_FILE = 0xF0
 FFS_ATTRIB_CHECKSUM = 0x40
 FFS_ATTRIB_LARGE_FILE = 0x01
 FFS_MIN_HEADER = 0x18
+FFS_LARGE_HEADER = 0x20
+_EXECUTABLE_FILE_TYPES = frozenset((0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0C, 0x0D))
+SEC_TE = 0x12
+SEC_RAW = 0x19
+MAX_LZMA_OUTPUT = 64 * 1024 * 1024
 _FFS_ALIGN_EXP = (0, 4, 7, 9, 10, 12, 15, 16)
 _FFS_ALIGN2_EXP = (17, 18, 19, 20, 21, 22, 23, 24)
 ERASE_POLARITY_BIT = 0x00000800
 GLOBAL_GUID = "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
+
+
+def _known_file_type(ftype: int) -> bool:
+    """PI file types: 0x01-0x0D, OEM 0xC0-0xDF, debug 0xE0-0xEF, pad 0xF0."""
+    return 0x01 <= ftype <= 0x0D or 0xC0 <= ftype <= 0xEF or ftype == FFS_PAD_FILE
 
 
 def guid_to_bytes(guid: str) -> bytes:
@@ -178,10 +191,30 @@ class UEFIPatcher:
                     fv_len = struct.unpack_from("<Q", data, fv_start + 0x20)[0]
                     hdr_len = struct.unpack_from("<H", data, fv_start + 0x30)[0]
                     attrs = struct.unpack_from("<I", data, fv_start + 0x2C)[0]
-                    if 0 < fv_len <= len(data) - fv_start and hdr_len >= 0x48:
+                    if (
+                        0 < fv_len <= len(data) - fv_start
+                        and 0x48 <= hdr_len <= fv_len
+                        and self._fv_header_checksum_ok(data, fv_start, hdr_len)
+                    ):
                         out.append((fv_start, fv_len, hdr_len, attrs))
             idx += 4
         return out
+
+    @staticmethod
+    def _fv_header_checksum_ok(data, fv_start: int, hdr_len: int) -> bool:
+        """The 16-bit words of a firmware volume header sum to zero (PI)."""
+        if hdr_len < 0x48 or fv_start + hdr_len > len(data):
+            return False
+        return sum(struct.unpack_from(f"<{hdr_len // 2}H", data, fv_start)) & 0xFFFF == 0
+
+    @staticmethod
+    def _ffs_header_checksum_ok(buf, off: int, hdr_size: int) -> bool:
+        """Header checksum of an FFS file: State and both integrity bytes are excluded (PI)."""
+        probe = bytearray(buf[off : off + hdr_size])
+        probe[0x10] = 0
+        probe[0x11] = 0
+        probe[0x17] = 0
+        return (-sum(probe)) & 0xFF == buf[off + 0x10]
 
     @staticmethod
     def _file_alignment(attrs_f: int) -> int:
@@ -212,18 +245,26 @@ class UEFIPatcher:
         resync_tries = 0
         while off + FFS_MIN_HEADER <= end:
             hdr = buf[off : off + FFS_MIN_HEADER]
-            free = (all(b == 0x00 for b in hdr)) if polarity else (all(b == 0xFF for b in hdr))
-            if free:
+            erased = 0xFF if polarity else 0x00
+            if all(b == erased for b in hdr):
                 break
             state = hdr[0x17]
             eff = (~state & 0xFF) if polarity else state
             attrs_f = hdr[0x13]
             size = hdr[0x14] | (hdr[0x15] << 8) | (hdr[0x16] << 16)
             hdr_size = FFS_MIN_HEADER
-            if (attrs_f & FFS_ATTRIB_LARGE_FILE) and size == 0xFFFFFF:
+            if (attrs_f & FFS_ATTRIB_LARGE_FILE) and size in (0, 0xFFFFFF):
+                if off + FFS_LARGE_HEADER > end:
+                    break
                 size = struct.unpack_from("<Q", buf, off + 0x18)[0]
-                hdr_size = 0x20
-            valid = (eff & 0x06) == 0x06 and size >= hdr_size and off + size <= end
+                hdr_size = FFS_LARGE_HEADER
+            valid = (
+                (eff & 0x06) == 0x06
+                and size >= hdr_size
+                and off + size <= end
+                and self._ffs_header_checksum_ok(buf, off, hdr_size)
+                and _known_file_type(hdr[0x12])
+            )
             if not valid:
                 # step over pad-file bodies / unknown gaps and try to resync
                 resync_tries += 1
@@ -249,12 +290,18 @@ class UEFIPatcher:
         return files
 
     def parse_sections(
-        self, buf, base: int, parent_file: FileNode, storage: Optional[SectionNode]
+        self,
+        buf,
+        base: int,
+        parent_file: FileNode,
+        storage: Optional[SectionNode],
+        end: Optional[int] = None,
     ) -> list:
         """Parse a section chain inside `buf`; base = chain offset within buf."""
         out = []
         off = base
-        end = len(buf)
+        if end is None:
+            end = len(buf)
         while off + 4 <= end:
             size = buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16)
             stype = buf[off + 3]
@@ -282,11 +329,15 @@ class UEFIPatcher:
                 payload = bytes(buf[off + data_off : off + size])
                 if node.guid == LZMA_GUID:
                     node.comp = "lzma"
+                    decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
                     try:
-                        node.data = bytearray(lzma.decompress(payload, format=lzma.FORMAT_ALONE))
+                        decoded = decomp.decompress(payload, max_length=MAX_LZMA_OUTPUT)
                     except lzma.LZMAError:
+                        decoded = None
+                    if decoded is None or not decomp.eof:
                         node.kind = "unknown"
                     else:
+                        node.data = bytearray(decoded)
                         child_storage = node
                         kids = self.parse_sections(node.data, 0, parent_file, child_storage)
                         if kids:
@@ -311,7 +362,9 @@ class UEFIPatcher:
                 if ctype == 0:
                     node.kind = "sections"
                     # uncompressed payload stays inside the same buffer
-                    node.children = self.parse_sections(buf, body_off + 5, parent_file, storage)
+                    node.children = self.parse_sections(
+                        buf, body_off + 5, parent_file, storage, end=off + size
+                    )
                 else:
                     node.comp = {1: "efi", 2: "tiano"}.get(ctype, "unknown")
                     node.kind = "unknown"
@@ -411,7 +464,7 @@ class UEFIPatcher:
                         idx = region.find(fb)
                         while idx >= 0:
                             count += 1
-                            idx = region.find(fb, idx + 1)
+                            idx = region.find(fb, idx + len(fb))
                 per_line.append(count)
                 total += count
             result[g["key"]] = {
@@ -423,13 +476,20 @@ class UEFIPatcher:
         return result
 
     def apply(self, input_path: str, output_path: str, group_keys: Optional[list] = None) -> dict:
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            raise UEFIPatchError(str(exc)) from exc
         with open(input_path, "rb") as f:
             image = bytearray(f.read())
+        original = bytes(image)
+        original_structure = self._structure(image)
 
         wanted = set(group_keys) if group_keys else {g["key"] for g in self.groups}
         dirty_storages = {}  # id(buffer) -> owner SectionNode
         dirty_files = set()
         report = {"applied": [], "messages": [], "success": True}
+        unmatched = []
 
         for g in self.groups:
             if g["key"] not in wanted:
@@ -455,6 +515,7 @@ class UEFIPatcher:
             if hits:
                 report["applied"].append({"group": g["key"], "patches": hits})
             else:
+                unmatched.append(g["key"])
                 report["messages"].append(
                     f"group '{g['key']}': no patterns matched (image unchanged by this group)"
                 )
@@ -485,11 +546,26 @@ class UEFIPatcher:
             if spliced:
                 dirty_files.discard(fnode)
 
-        with open(output_path, "wb") as f:
-            f.write(bytes(image))
-        report["output_path"] = output_path
+        if self._structure(image) != original_structure:
+            raise UEFIPatchError("patched image failed the structure check; nothing written")
+
         report["matches_total"] = sum(a["patches"] for a in report["applied"])
+        changed = bytes(image) != original
+        if changed:
+            write_verified(output_path, bytes(image))
+            report["output_path"] = output_path
+        else:
+            report["output_path"] = ""
+            report["messages"].append("no bytes changed; no output written")
+        requested_missing = unmatched if group_keys else []
+        report["success"] = changed and not requested_missing
         return report
+
+    def _structure(self, image) -> tuple:
+        """Firmware volume extents and the sorted GUIDs of the non-pad files."""
+        fvs = tuple((off, length) for off, length, _hdr, _attrs in self.find_fvs(image))
+        files = tuple(sorted(f.guid for f in self.iter_files(image) if f.ftype != FFS_PAD_FILE))
+        return fvs, files
 
     # ------------------------------------------------------------------ #
     #  rebuild helpers                                                   #
@@ -548,6 +624,8 @@ class UEFIPatcher:
             new_body += raw
             new_body += b"\xff" * (_align(len(raw), 4) - len(raw))
         new_size = fnode.hdr_size + len(new_body)
+        if new_size > 0xFFFFFF and fnode.hdr_size < FFS_LARGE_HEADER:
+            raise UEFIPatchError("recompressed file exceeds 16 MiB and has no large-file header")
 
         hdr = bytearray(image[fnode.off : fnode.off + fnode.hdr_size])
         state = hdr[0x17]
@@ -690,7 +768,18 @@ class UEFIPatcher:
         except Exception:
             return False
 
-    def build_replacement_file(self, target: FileNode, driver_bytes: bytes) -> bytes:
+    @staticmethod
+    def _raw_body(target: FileNode, driver_bytes: bytes, allow_raw: bool) -> bytes:
+        if not allow_raw and target.ftype in _EXECUTABLE_FILE_TYPES:
+            raise UEFIPatchError(
+                "payload is neither a PE32, TE nor FFS image; an executable file type cannot "
+                "carry it as a RAW section (pass allow_raw to override)"
+            )
+        return struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([SEC_RAW]) + driver_bytes
+
+    def build_replacement_file(
+        self, target: FileNode, driver_bytes: bytes, allow_raw: bool = False
+    ) -> bytes:
         """Wrap or adopt driver_bytes as a complete FFS file replacing target."""
         state = target.state
         attrs = target.attrs & ~FFS_ATTRIB_LARGE_FILE
@@ -701,7 +790,7 @@ class UEFIPatcher:
                 blob = bytearray(driver_bytes[:0x18])
                 body = driver_bytes[0x18:size3]
             else:
-                body = struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([0x19]) + driver_bytes
+                body = self._raw_body(target, driver_bytes, allow_raw)
                 size = 0x18 + len(body)
                 blob = bytearray(0x18)
                 blob[0:16] = guid_to_bytes(target.guid)
@@ -714,9 +803,10 @@ class UEFIPatcher:
                 body = (
                     struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([SEC_PE32]) + driver_bytes
                 )
+            elif driver_bytes[:2] == b"VZ":
+                body = struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([SEC_TE]) + driver_bytes
             else:
-                # unknown payload: keep it verbatim in a RAW section
-                body = struct.pack("<I", 4 + len(driver_bytes))[:3] + bytes([0x19]) + driver_bytes
+                body = self._raw_body(target, driver_bytes, allow_raw)
             size = 0x18 + len(body)
             blob = bytearray(0x18)
             blob[0:16] = guid_to_bytes(target.guid)
@@ -725,6 +815,8 @@ class UEFIPatcher:
             blob[0x15] = (size >> 8) & 0xFF
             blob[0x16] = (size >> 16) & 0xFF
 
+        if len(blob) + len(body) > 0xFFFFFF:
+            raise UEFIPatchError("replacement exceeds 16 MiB; large-file headers are not written")
         blob[0x13] = attrs
         blob[0x17] = state
         probe = bytearray(blob[:0x18])
@@ -738,10 +830,28 @@ class UEFIPatcher:
             blob[0x11] = 0xAA
         return bytes(blob[:0x18]) + bytes(body)
 
+    def _top_level_files(self, image) -> list:
+        """(offset, guid, bytes) of every non-pad file outside a compressed container."""
+        return [
+            (f.off, f.guid, bytes(image[f.off : f.off + f.size]))
+            for f in sorted(self.iter_files(image), key=lambda n: n.off)
+            if f.storage is None and f.ftype != FFS_PAD_FILE
+        ]
+
     def replace_ffs_file(
-        self, image_path: str, output_path: str, target_guid: str, driver_path: str
+        self,
+        image_path: str,
+        output_path: str,
+        target_guid: str,
+        driver_path: str,
+        allow_raw: bool = False,
     ) -> dict:
         """Replace the FFS file with target_guid by the provided driver binary."""
+        try:
+            ensure_distinct(image_path, output_path)
+            ensure_distinct(driver_path, output_path)
+        except SameFileError as exc:
+            return {"success": False, "message": str(exc)}
         with open(image_path, "rb") as f:
             image = bytearray(f.read())
         with open(driver_path, "rb") as f:
@@ -753,18 +863,36 @@ class UEFIPatcher:
                 target = f
                 break
         if target is None:
-            return {"success": False, "message": f"no FFS file with GUID {target_guid} found"}
+            return {
+                "success": False,
+                "skipped": True,
+                "message": f"no FFS file with GUID {target_guid} found",
+            }
         if target.storage is not None:
             return {
                 "success": False,
                 "message": "target file lives inside a compressed container; not supported yet",
             }
 
-        new_file = self.build_replacement_file(target, driver_bytes)
-        self._splice_file_in_fv(image, target, new_file)
+        try:
+            new_file = self.build_replacement_file(target, driver_bytes, allow_raw=allow_raw)
+            before = self._top_level_files(image)
+            self._splice_file_in_fv(image, target, new_file)
+        except UEFIPatchError as exc:
+            return {"success": False, "message": str(exc)}
 
-        with open(output_path, "wb") as f:
-            f.write(bytes(image))
+        after = self._top_level_files(image)
+        if [g for _, g, _ in after] != [g for _, g, _ in before]:
+            return {"success": False, "message": "replacement changed the file list; not written"}
+        for (off, _guid, data), (_, _, new_data) in zip(before, after):
+            expected = new_file if off == target.off else data
+            if new_data != expected:
+                return {
+                    "success": False,
+                    "message": "replacement moved or altered another file; not written",
+                }
+
+        write_verified(output_path, bytes(image))
         return {
             "success": True,
             "message": f"replaced FFS file {target_guid}",
@@ -781,7 +909,7 @@ class UEFIPatcher:
         for fnode in self.iter_files(image):
             name = None
             for node in self._walk_nodes(fnode.sections):
-                if isinstance(node, SectionNode) and node.stype == 0x16:
+                if isinstance(node, SectionNode) and node.stype == 0x15:
                     buf = fnode.storage.data if fnode.storage is not None else image
                     body = bytes(buf[node.body_off : node.body_off + node.body_size])
                     try:
@@ -850,7 +978,13 @@ class UEFIPatcher:
         Faithful to the reference autopatcher: a target FV matches when its
         first 48 bytes (ZeroVector + FileSystemGuid + FvLength) are identical,
         AND its total size and header checksum equal the replacement's. The
-        volume is then overwritten in place (sizes must match)."""
+        replacement must be exactly that size, so it cannot run into the next
+        volume. Nothing is written unless the replacement is applied and checked."""
+        try:
+            ensure_distinct(image_path, output_path)
+            ensure_distinct(vol_path, output_path)
+        except SameFileError as exc:
+            return {"success": False, "message": str(exc)}
         with open(image_path, "rb") as f:
             image = bytearray(f.read())
         with open(vol_path, "rb") as f:
@@ -859,58 +993,70 @@ class UEFIPatcher:
             return {"success": False, "message": "volume image too small"}
 
         pattern = vol[:48]
-        vol_size = int.from_bytes(vol[0x20:0x23], "little")  # FvLength, low 3 bytes
+        vol_size = int.from_bytes(vol[0x20:0x28], "little")  # FvLength, all 64 bits
         vol_checksum = int.from_bytes(vol[0x32:0x34], "little")
-
-        def _finish(res):
-            with open(output_path, "wb") as f:
-                f.write(bytes(image))
-            return res
+        vol_hdr_len = int.from_bytes(vol[0x30:0x32], "little")
+        if vol_size != len(vol) or not self._fv_header_checksum_ok(vol, 0, vol_hdr_len):
+            return {
+                "success": False,
+                "skipped": True,
+                "message": "replacement volume is not a well-formed firmware volume - skipped",
+            }
 
         pos = image.find(pattern)
         if pos < 0:
-            return _finish(
-                {
-                    "success": False,
-                    "message": "no matching firmware volume found in image (NVRAM layout differs)",
-                    "skipped": True,
-                }
-            )
+            return {
+                "success": False,
+                "message": "no matching firmware volume found in image (NVRAM layout differs)",
+                "skipped": True,
+            }
         # FvLength low 3 bytes live at FV header offset 0x20..0x22 (little)
         tgt_size = int.from_bytes(image[pos + 0x20 : pos + 0x23], "little")
         tgt_checksum = int.from_bytes(image[pos + 0x32 : pos + 0x34], "little")
         if tgt_size != vol_size:
-            return _finish(
-                {
-                    "success": False,
-                    "skipped": True,
-                    "message": f"volume size mismatch (image {tgt_size} vs "
-                    f"replacement {vol_size}) - skipped",
-                }
-            )
-        if tgt_checksum != vol_checksum:
-            return _finish(
-                {
-                    "success": False,
-                    "skipped": True,
-                    "message": f"volume header checksum mismatch (image 0x{tgt_checksum:x} vs "
-                    f"replacement 0x{vol_checksum:x}) - skipped",
-                }
-            )
-        image[pos : pos + len(vol)] = vol
-        return _finish(
-            {
-                "success": True,
-                "message": f"NVRAM volume replaced at 0x{pos:X}",
-                "output_path": output_path,
-                "offset": pos,
+            return {
+                "success": False,
+                "skipped": True,
+                "message": f"volume size mismatch (image {tgt_size} vs "
+                f"replacement {vol_size}) - skipped",
             }
-        )
+        if tgt_checksum != vol_checksum:
+            return {
+                "success": False,
+                "skipped": True,
+                "message": f"volume header checksum mismatch (image 0x{tgt_checksum:x} vs "
+                f"replacement 0x{vol_checksum:x}) - skipped",
+            }
+        if pos + len(vol) > len(image):
+            return {
+                "success": False,
+                "skipped": True,
+                "message": "volume extends past the end of the image - skipped",
+            }
+        image[pos : pos + len(vol)] = vol
+        if not self._fv_header_checksum_ok(image, pos, vol_hdr_len):
+            return {"success": False, "message": "volume header failed the post-write check"}
+
+        write_verified(output_path, bytes(image))
+        return {
+            "success": True,
+            "message": f"NVRAM volume replaced at 0x{pos:X}",
+            "output_path": output_path,
+            "offset": pos,
+        }
 
     def run_autopatch(self, image_path: str, output_path: str, include_nvram: bool = True) -> dict:
         """Full badcaps-style flow: DXE driver replacement, then NVRAM clean."""
         import shutil
 
+        try:
+            ensure_distinct(image_path, output_path)
+        except SameFileError as exc:
+            return {
+                "steps": [{"step": "output", "ok": False, "message": str(exc)}],
+                "success": False,
+                "output_path": "",
+            }
         shutil.copyfile(image_path, output_path)
         report = {"steps": [], "success": True}
         patches_dir = os.path.dirname(self.patches_path)
@@ -960,7 +1106,10 @@ class UEFIPatcher:
                 )
 
         report["output_path"] = output_path
-        report["success"] = any(s["ok"] for s in report["steps"])
+        required = [s for s in report["steps"] if not s.get("skipped")]
+        report["success"] = any(s["ok"] for s in report["steps"]) and all(
+            s["ok"] for s in required
+        )
         return report
 
     # ------------------------------------------------------------------ #

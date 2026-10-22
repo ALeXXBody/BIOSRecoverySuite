@@ -97,7 +97,7 @@ class BiosAnalyzer:
     AMI_APTIO_SIGNATURE = b"_AMI"
 
     def analyze(self, file_path: str) -> BiosAnalysisResult:
-        if not os.path.exists(file_path):
+        if not os.path.isfile(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         with open(file_path, "rb") as f:
@@ -206,12 +206,14 @@ class BiosAnalyzer:
         if fd_offset < 0:
             return regions
 
+        # The descriptor is FLREG0 (0..0xFFF) even when its signature sits at 0x10.
         regions.append(
             RegionInfo(
                 region_type=RegionType.FLASH_DESCRIPTOR,
-                offset=fd_offset,
+                offset=0,
                 size=0x1000,
                 name="Flash Descriptor",
+                details={"signature_offset": fd_offset},
             )
         )
 
@@ -373,24 +375,27 @@ class BiosAnalyzer:
     @staticmethod
     def _manifest_me_version(data: bytes) -> str:
         """Most common version among the ME/CSME manifests in the image (FPT not decodable)."""
-        from collections import Counter
+        from bios_recovery.core.me_manifest import engine_version
 
-        from bios_recovery.core.me_manifest import iter_manifest_versions
-
-        versions = Counter(v for v, _base in iter_manifest_versions(data))
-        return versions.most_common(1)[0][0] if versions else ""
+        return engine_version(data)
 
     def _decode_me_version(self, data: bytes, me_region: RegionInfo) -> str:
-        from bios_recovery.utils.me_manifest import detect_me_version_best
+        from bios_recovery.core.me_manifest import engine_version
 
         search_end = min(me_region.offset + me_region.size, len(data))
         region = data[me_region.offset : search_end]
-        return detect_me_version_best(region)
+        return engine_version(region)
 
     def _get_me_type(self, data: bytes, regions: list[RegionInfo]) -> str:
+        from bios_recovery.core.me_manifest import engine_is_txe
+
         version = self._get_me_version(data, regions)
         if not version:
             return ""
+        me_regions = [r for r in regions if r.region_type in (RegionType.INTEL_ME, RegionType.TXE)]
+        scopes = [data[r.offset : r.offset + r.size] for r in me_regions] or [data]
+        if any(engine_is_txe(scope) for scope in scopes):
+            return "TXE"
         try:
             major = int(version.split(".")[0])
         except (ValueError, IndexError):
@@ -411,8 +416,10 @@ class BiosAnalyzer:
             issues.append("No recognizable firmware regions found")
 
         fd_region = [r for r in regions if r.region_type == RegionType.FLASH_DESCRIPTOR]
-        if fd_region and fd_region[0].offset not in (0, 0x10):
-            issues.append(f"Flash Descriptor at unusual offset 0x{fd_region[0].offset:X}")
+        if fd_region:
+            sig = fd_region[0].details.get("signature_offset", 0)
+            if sig not in (0, 0x10):
+                issues.append(f"Flash Descriptor at unusual offset 0x{sig:X}")
 
         me_regions = [r for r in regions if r.region_type == RegionType.INTEL_ME]
         for me_r in me_regions:
@@ -490,7 +497,7 @@ class BiosAnalyzer:
         if len(data) < 0x10000:
             warnings.append("File is smaller than 64KB - may be an incomplete dump")
         fd_region = [r for r in regions if r.region_type == RegionType.FLASH_DESCRIPTOR]
-        if fd_region and fd_region[0].offset == 0x10:
+        if fd_region and fd_region[0].details.get("signature_offset") == 0x10:
             warnings.append(
                 "Flash Descriptor at 0x10: a 16-byte header precedes the chip image (not an error)"
             )

@@ -17,6 +17,7 @@ Vendors / formats covered:
 """
 
 import struct
+import time
 
 # --------------------------------------------------------------------- #
 #  shared building blocks (from dogbert's scripts)                       #
@@ -109,6 +110,58 @@ def keyboard_enc_to_ascii(in_key) -> str:
     return "".join(KEYBOARD_DICT[c] for c in in_key if c in KEYBOARD_DICT)
 
 
+# dogbert pwgen-samsung.py keyboardDict. Markers name keys with no printable character.
+_SAMSUNG_SCANCODE_NAMES = {
+    54: "<RSHIFT>",
+    55: "<NUMPAD/*>",
+    59: "<F1>",
+    60: "<F2>",
+    61: "<F3>",
+    62: "<F4>",
+    63: "<F5>",
+    64: "<F6>",
+    65: "<F7>",
+    66: "<F8>",
+    67: "<F9>",
+    68: "<F9>",
+    87: "<F11>",
+    88: "<F12>",
+    71: "<NUMPAD7/HOME>",
+    72: "<NUMPAD8/UP>",
+    73: "<NUMPAD9/PGUP>",
+    74: "<NUMPAD->",
+    75: "<NUMPAD4/LEFT>",
+    76: "<NUMPAD5>",
+    77: "<NUMPAD6/RIGHT>",
+    78: "<NUMPAD+>",
+    79: "<NUMPAD1/END>",
+    80: "<NUMPAD2/DOWN>",
+    81: "<NUMPAD3/PGDN>",
+    82: "<NUMPAD0/INS>",
+    83: "<NUMPAD./DEL>",
+    84: "<NUMPAD/DELIMITER>",
+    156: "<NUMPAD/ENTER>",
+    92: "<KP4/Left>",
+    1: "<ESCAPE>",
+    0xC7: "<HOME>",
+    174: "<VOLDOWN>",
+    212: "<CAMERA>",
+    226: "<LAlt>",
+    227: "<LGUI>",
+}
+SAMSUNG_SCANCODE_DICT = {**KEYBOARD_SCANCODE_DICT, **_SAMSUNG_SCANCODE_NAMES}
+
+
+def samsung_scancode_to_text(in_key) -> str:
+    """dogbert keyboardEncToAscii: stops at the first NUL, names unknown keys by scancode."""
+    out = ""
+    for c in in_key:
+        if c == 0:
+            return out
+        out += SAMSUNG_SCANCODE_DICT.get(c, "<U-0x%02x/%d>" % (c, c))
+    return out
+
+
 def bad_crc16(pwd, salt: int = 0) -> int:
     """Phoenix's buggy CRC-16 (both top MSBs always zero, polynomial 0x2001)."""
     h = salt
@@ -137,6 +190,9 @@ def generate_crc16_table() -> list:
 # --------------------------------------------------------------------- #
 
 
+PHOENIX_SEARCH_BUDGET_S = 15.0
+
+
 def _brute_force_deterministic(
     hash_val: int,
     salt: int = 0,
@@ -144,11 +200,16 @@ def _brute_force_deterministic(
     chars_only: bool = True,
     min_len: int = 3,
     max_len: int = 8,
+    deadline: float = None,
 ) -> str:
     """Deterministic DFS variant of dogbert's randomized brute force.
 
-    Returns a keyboard-encoded password whose buggy-CRC16 equals hash_val."""
+    Returns a keyboard-encoded password whose buggy-CRC16 equals hash_val, or "" when the
+    whole keyspace up to max_len has no match. Raises TimeoutError past deadline
+    (a time.monotonic() value)."""
     if digits_only:
+        # dogbert pwgen-5dec.py digitsOnly slices keys [0:9], which leaves out '0'. The '0'
+        # key is kept here: every candidate is checked against the hash, so it adds no false hits.
         keys = [k for k in KEYBOARD_DICT if KEYBOARD_DICT[k].isdigit()][:10]
     elif chars_only:
         keys = [k for k in KEYBOARD_DICT if KEYBOARD_DICT[k].isalpha()]
@@ -160,33 +221,47 @@ def _brute_force_deterministic(
     from itertools import product
 
     for length in range(min_len, max_len + 1):
-        for combo in product(keys, repeat=length):
-            # incremental check is unnecessary: product yields quickly enough
+        for n, combo in enumerate(product(keys, repeat=length)):
+            if deadline is not None and n & 0xFFFF == 0 and time.monotonic() > deadline:
+                raise TimeoutError("phoenix search time limit reached")
             if bad_crc16(combo, salt) == hash_val:
                 return keyboard_enc_to_ascii(combo)
     return ""
 
 
-def phoenix_5dec(code: str) -> dict:
-    """5-decimal-digit hashes: Phoenix generic, HP/Compaq, FSI variants."""
+def phoenix_5dec(code: str, budget_s: float = PHOENIX_SEARCH_BUDGET_S) -> dict:
+    """5-decimal-digit hashes: Phoenix generic, HP/Compaq, FSI variants.
+
+    The seven searches share one time budget. A search that runs out of time reports
+    "not found within time limit" rather than a password.
+    """
     code = (code or "").strip().replace("[", "").replace("]", "")
-    h = int(code)
+    try:
+        h = int(code)
+    except ValueError:
+        raise ValueError("Phoenix hash must be a decimal number, e.g. 12345") from None
+    deadline = time.monotonic() + budget_s
+
+    def search(value: int, **kwargs) -> str:
+        try:
+            return _brute_force_deterministic(value, deadline=deadline, **kwargs)
+        except TimeoutError:
+            return "not found within time limit"
+
     return {
-        "Phoenix generic": _brute_force_deterministic(h, 0),
-        "HP/Compaq Phoenix": _brute_force_deterministic(h, salt=17232),
-        "FSI Phoenix (generic)": _brute_force_deterministic(
-            h, salt=65, digits_only=True, min_len=3, max_len=7
-        ),
-        "FSI Phoenix (L model)": _brute_force_deterministic(
+        "Phoenix generic": search(h, salt=0),
+        "HP/Compaq Phoenix": search(h, salt=17232),
+        "FSI Phoenix (generic)": search(h, salt=65, digits_only=True, min_len=3, max_len=7),
+        "FSI Phoenix (L model)": search(
             h + 1, salt=ord("L"), digits_only=True, min_len=3, max_len=7
         ),
-        "FSI Phoenix (P model)": _brute_force_deterministic(
+        "FSI Phoenix (P model)": search(
             h + 1, salt=ord("P"), digits_only=True, min_len=3, max_len=7
         ),
-        "FSI Phoenix (S model)": _brute_force_deterministic(
+        "FSI Phoenix (S model)": search(
             h + 1, salt=ord("S"), digits_only=True, min_len=3, max_len=7
         ),
-        "FSI Phoenix (X model)": _brute_force_deterministic(
+        "FSI Phoenix (X model)": search(
             h + 1, salt=ord("X"), digits_only=True, min_len=3, max_len=7
         ),
     }
@@ -273,6 +348,8 @@ def fsi_6x4dec(code: str) -> str:
 
 def insyde_8dec(in_hash: str) -> str:
     in_hash = (in_hash or "").strip().replace("-", "")
+    if len(in_hash) < 8:
+        raise ValueError("Insyde hash must be 8 characters")
     salt = "Iou|hj&Z"
     pwd = ""
     for i in range(8):
@@ -381,6 +458,8 @@ def _samsung_decrypt(hash_bytes, key: int, matrix) -> list:
 def samsung(code: str) -> list[dict]:
     """12/18-hex-digit hash -> candidate passwords for key 1 and key 2."""
     code = (code or "").strip().replace("-", "").replace(" ", "").upper()
+    if len(code) < 4 or not all(c in "0123456789ABCDEF" for c in code):
+        raise ValueError("Samsung hash must be 12 or 18 hexadecimal digits")
     hash_bytes = [int(code[2 * i] + code[2 * i + 1], 16) for i in range(1, len(code) // 2)]
     key = int(code[0:2], 16) % 5
     out = []
@@ -391,7 +470,7 @@ def samsung(code: str) -> list[dict]:
                 "label": name,
                 "hex": "".join("%02x" % x for x in dec),
                 "ascii": "".join(chr(x) if 32 <= x < 127 else "" for x in dec),
-                "scancode": keyboard_enc_to_ascii(dec),
+                "scancode": samsung_scancode_to_text(dec),
             }
         )
     return out
@@ -406,21 +485,22 @@ def sony_4x4(code: str) -> str:
     code = (code or "").replace("-", "").replace(" ", "").upper()
     otp_chars = "9DPK7V2F3RT6HX8J"
     pwd_chars = "47592836"
+    if len(code) != 16 or any(c not in otp_chars for c in code):
+        raise ValueError("Sony code must be 16 characters from 9DPK7V2F3RT6HX8J")
 
-    # decodeHash: bytes are prepended, little-endian style
+    # dogbert decodeHash prepends each decoded byte, so code byte c lands at byte 7-c
     dec = 0
-    for c in range(len(code) // 2):
-        dec = (
-            (otp_chars.find(code[2 * c]) * 16 + otp_chars.find(code[2 * c + 1])) << (8 * c)
-        ) | dec
-    b = dec.to_bytes(8, "little")
+    for c in range(8):
+        dec |= (otp_chars.find(code[2 * c]) * 16 + otp_chars.find(code[2 * c + 1])) << (
+            8 * (7 - c)
+        )
 
     p, q = 2795287379, 3544934711
     e = 41
     phi = (p - 1) * (q - 1)
     d = pow(e, -1, phi)
 
-    c_val = struct.unpack("<Q", b)[0]
+    c_val = dec
     dp, dq = d % (p - 1), d % (q - 1)
     qinv = pow(q, -1, p)
     m1 = pow(c_val, dp, p)
@@ -484,6 +564,8 @@ _HP_MINI_TABLE2["x"] = "R"
 
 def hp_mini(code: str) -> str:
     code = (code or "").strip()
+    if not code or any(c.lower() not in _HP_MINI_TABLE1 for c in code):
+        raise ValueError("HP Mini serial must use only letters and digits")
     pw1 = "".join(_HP_MINI_TABLE1[c.lower()] for c in code)
     pw2 = "".join(_HP_MINI_TABLE2[c.lower()] for c in code)
     if pw1 == pw2:
@@ -541,7 +623,10 @@ def _asus_init_table(i1: int = 11, i2: int = 19, i3: int = 6) -> list:
 
 def asus_date(date_str: str) -> str:
     date_str = (date_str or "").strip().replace("/", "-").replace(".", "-")
-    date = int(date_str.replace("-", ""), 16)
+    digits = date_str.replace("-", "")
+    if len(digits) != 8 or not digits.isdigit():
+        raise ValueError("ASUS date must be YYYY-MM-DD")
+    date = int(digits, 16)
     chksum = date
     table = _asus_init_table()
     password = ""

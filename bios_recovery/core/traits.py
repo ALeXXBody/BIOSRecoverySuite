@@ -204,15 +204,11 @@ def classify(data: bytes) -> Traits:
         # light-weight manifest probe (no heavy per-region detection here)
         fam = ""
         try:
-            from collections import Counter
+            from bios_recovery.core.me_manifest import engine_is_txe, engine_version
 
-            from bios_recovery.core.me_manifest import iter_manifest_versions
-
-            mvs = iter_manifest_versions(data)
-            if mvs:
-                # The engine version is the most common manifest version, as in the analyzer.
-                t.me_version = Counter(v for v, _base in mvs).most_common(1)[0][0]
-                fam = me_family_label(t.me_version)
+            t.me_version = engine_version(data)
+            if t.me_version:
+                fam = "TXE" if engine_is_txe(data) else me_family_label(t.me_version)
         except Exception:
             fam = ""
         t.me_family = fam

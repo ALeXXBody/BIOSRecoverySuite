@@ -8,6 +8,11 @@ known by running it with -h, so that happens only when the user asks to identify
 a specific file. The result is cached by the file's SHA-256, so a later scan does
 not run the file again unless its contents change.
 
+Identifying a tool, or importing one, runs that file once with -h as the current
+user. The child gets a scrubbed environment and a temporary working folder, but
+no sandbox: in a root session it runs as root. Identify and import only files you
+trust.
+
 Config location:
   Windows:  %APPDATA%\\BIOSRecoverySuite\\library.json
   Linux:    ~/.config/bios-recovery/library.json
@@ -19,16 +24,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
 from dataclasses import dataclass, field
 from typing import Optional
 
+from bios_recovery.core.safety import write_file_atomic
+
 MAX_DEPTH = 6
 MAX_FIRMWARE_BYTES = 64 * 1024 * 1024
 MAX_TOOL_BYTES = 256 * 1024 * 1024
 KINDS = ("tools", "firmware")
+_FIRMWARE_SUFFIXES = (".bin", ".rom", ".fd", ".cap")
+_SAFE_NAME_PART = re.compile(r"[A-Za-z0-9._-]+")
 
 
 def config_dir() -> str:
@@ -77,6 +87,18 @@ def _strings(values) -> list:
     return [v for v in values if isinstance(v, str) and v]
 
 
+def _keep_damaged_copy(path: str) -> None:
+    """Copy a damaged config to <path>.damaged, or <path>.damaged.N if that is taken."""
+    target, n = path + ".damaged", 1
+    while os.path.exists(target):
+        target = f"{path}.damaged.{n}"
+        n += 1
+    try:
+        shutil.copyfile(path, target)
+    except OSError:
+        pass
+
+
 def load_library() -> Library:
     """Read the config. A missing file is an empty library; a damaged file is kept aside."""
     path = config_path()
@@ -88,7 +110,7 @@ def load_library() -> Library:
         if not isinstance(data, dict):
             raise ValueError("config is not an object")
     except (OSError, ValueError):
-        shutil.copyfile(path, path + ".damaged")
+        _keep_damaged_copy(path)
         return Library()
     lib = Library(
         tools_folders=_strings(data.get("tools_folders", []))
@@ -132,6 +154,8 @@ def save_library(lib: Library) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, config_path())
     except BaseException:
         if os.path.exists(tmp):
@@ -188,6 +212,9 @@ def release_line(version: str) -> str:
 
 def tool_file_name(family: str, version: str, platform: str, ext: str = "") -> str:
     """Identity-bearing name for an imported tool: FIT_15.0.35.1951_Linux."""
+    for part in (family, version, platform):
+        if not _SAFE_NAME_PART.fullmatch(part):
+            raise ValueError(f"not usable in a file name: {part!r}")
     return f"{family}_{version}_{platform}{ext}"
 
 
@@ -257,19 +284,23 @@ def _looks_like_tool_name(name: str) -> bool:
 def identify_tool(path: str, timeout: int = 20):
     """Run a user-chosen tool once with -h and cache its identity by SHA-256.
 
-    Runs a private copy, so the file in the library is never changed.
+    Runs a private copy made from the same bytes that were hashed, so the cache
+    key always matches the code that ran. The file in the library is never changed.
     """
     from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
 
     if not os.path.isfile(path):
         raise ValueError(f"not a file: {path}")
-    if os.path.getsize(path) > MAX_TOOL_BYTES:
+    with open(path, "rb") as f:
+        blob = f.read(MAX_TOOL_BYTES + 1)
+    if len(blob) > MAX_TOOL_BYTES:
         raise ValueError("file is too large to be a flash image tool")
-    digest = _sha256_file(path)
+    digest = hashlib.sha256(blob).hexdigest()
     lib = load_library()
     with tempfile.TemporaryDirectory(prefix="fitid_") as work:
         copy = os.path.join(work, os.path.basename(path))
-        shutil.copyfile(path, copy)
+        with open(copy, "wb") as f:
+            f.write(blob)
         if os.name != "nt":
             os.chmod(copy, os.stat(copy).st_mode | stat.S_IXUSR)
         probe = probe_tool(copy, timeout=timeout)
@@ -318,42 +349,50 @@ def scan(folders: Optional[list] = None) -> ScanResult:
                 continue
             seen_paths.add(real)
             name = os.path.basename(path).lower()
-            size = os.path.getsize(path)
-            if _looks_like_tool_name(name):
-                if size > MAX_TOOL_BYTES:
+            wanted = _looks_like_tool_name(name) or name.endswith(_FIRMWARE_SUFFIXES)
+            try:
+                if not os.path.isfile(path):
+                    if wanted:
+                        result.skipped.append(f"not a regular file: {path}")
                     continue
-                digest = _sha256_file(path)
-                known = lib.identified.get(digest)
-                result.tools.append(
-                    ToolEntry(
-                        path=path,
-                        family=known["family"] if known else "unidentified",
-                        version=known["version"] if known else "",
-                        platform=file_platform(path),
-                        release=release_line(known["version"]) if known else "unknown",
-                        sha256=digest,
-                        identified=bool(known),
+                size = os.path.getsize(path)
+                if _looks_like_tool_name(name):
+                    if size > MAX_TOOL_BYTES:
+                        continue
+                    digest = _sha256_file(path)
+                    known = lib.identified.get(digest)
+                    result.tools.append(
+                        ToolEntry(
+                            path=path,
+                            family=known["family"] if known else "unidentified",
+                            version=known["version"] if known else "",
+                            platform=file_platform(path),
+                            release=release_line(known["version"]) if known else "unknown",
+                            sha256=digest,
+                            identified=bool(known),
+                        )
                     )
-                )
-                continue
-            if 0 < size <= MAX_FIRMWARE_BYTES and name.endswith((".bin", ".rom", ".fd", ".cap")):
-                with open(path, "rb") as f:
-                    data = f.read()
-                digest = hashlib.sha256(data).hexdigest()
-                if digest in seen_content:
                     continue
-                seen_content.add(digest)
-                # A full ME image carries its partition table. Sub-partitions (OEMP, IOMP,
-                # PCH configuration...) carry manifest tags too but no partition table.
-                if not BiosAnalyzer()._fpt_positions(data):
-                    continue
-                versions = iter_manifest_versions(data)
-                if versions:
-                    counts: dict = {}
-                    for v, _base in versions:
-                        counts[v] = counts.get(v, 0) + 1
-                    best = max(counts, key=counts.get)
-                    result.firmware.append(FirmwareEntry(path, best, size))
+                if 0 < size <= MAX_FIRMWARE_BYTES and name.endswith(_FIRMWARE_SUFFIXES):
+                    with open(path, "rb") as f:
+                        data = f.read()
+                    digest = hashlib.sha256(data).hexdigest()
+                    if digest in seen_content:
+                        continue
+                    seen_content.add(digest)
+                    # A full ME image carries its partition table. Sub-partitions (OEMP, IOMP,
+                    # PCH configuration...) carry manifest tags too but no partition table.
+                    if not BiosAnalyzer()._fpt_positions(data):
+                        continue
+                    versions = iter_manifest_versions(data)
+                    if versions:
+                        counts: dict = {}
+                        for v, _base in versions:
+                            counts[v] = counts.get(v, 0) + 1
+                        best = max(counts, key=counts.get)
+                        result.firmware.append(FirmwareEntry(path, best, size))
+            except OSError as exc:
+                result.skipped.append(f"could not read {path}: {exc.strerror or exc}")
     return result
 
 
@@ -369,6 +408,26 @@ def _looks_like_me_image(data: bytes) -> bool:
     from bios_recovery.core.bios_analyzer import BiosAnalyzer
 
     return bool(BiosAnalyzer()._fpt_positions(data))
+
+
+def _reserve_name(folder: str, name: str) -> str:
+    """Create an empty file for ``name`` in ``folder``, numbered _1, _2... if taken."""
+    base, ext = os.path.splitext(name)
+    n = 0
+    while True:
+        candidate = os.path.join(folder, name if n == 0 else f"{base}_{n}{ext}")
+        try:
+            os.close(os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+            return candidate
+        except FileExistsError:
+            n += 1
+
+
+def _remove_reserved(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def import_files(paths: list, kind: str) -> list:
@@ -422,14 +481,13 @@ def import_files(paths: list, kind: str) -> list:
             versions = [v for v, _ in iter_manifest_versions(blob)]
             me = max(set(versions), key=versions.count) if versions else "unknown"
             name = f"ME_{me}_{os.path.basename(src)}"
-        dest = os.path.join(target_dir, name)
-        base, ext2 = os.path.splitext(dest)
-        n = 1
-        while os.path.exists(dest):
-            dest = f"{base}_{n}{ext2}"
-            n += 1
-        with open(dest, "wb") as f:
-            f.write(blob)
+        dest = _reserve_name(target_dir, name)
+        try:
+            write_file_atomic(dest, blob)
+        except OSError as exc:
+            _remove_reserved(dest)
+            result.refused = f"could not save the copy: {exc.strerror or exc}"
+            continue
         if kind == "tools" and os.name != "nt":
             os.chmod(dest, os.stat(dest).st_mode | stat.S_IXUSR)
         result.copied_to = dest

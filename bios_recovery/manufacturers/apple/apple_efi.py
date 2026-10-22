@@ -23,8 +23,14 @@ import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
+from bios_recovery.core.safety import SameFileError, ensure_distinct
+
 FSYS_MARKER = b"Fsys\x01"
 CRC32_SIZE = 4
+# UEFITool documents the SysF entry data length as UINT16; the entry width used by
+# _scan_string (one byte) is not verified against a real Fsys sample. Serial writes stay
+# refused until it is (see set_serial_number).
+SERIAL_LAYOUT_VERIFIED = False
 
 _SERIAL_MARKERS = (b"\x03ssn", b"\x03SSN", b"\x04ssnp")
 _HWC_MARKERS = (b"\x03hwc",)
@@ -84,9 +90,9 @@ def parse_fsys_store(data: bytes) -> FsysStoreInfo:
     if base < 0:
         return info
     info.base_address = base
-    # stored size: int16 LE at base + 9
+    # stored size: uint16 LE at base + 9
     try:
-        info.size = struct.unpack_from("<h", data, base + 9)[0]
+        info.size = struct.unpack_from("<H", data, base + 9)[0]
     except struct.error:
         return info
     if info.size <= 4 or base + info.size > len(data) or info.size > 0x800 + 4:
@@ -148,9 +154,20 @@ def rom_info(file_path: str) -> dict:
     }
 
 
+def _same_file_refusal(file_path: str, output_path: Optional[str], rep: AppleReport) -> bool:
+    try:
+        ensure_distinct(file_path, output_path)
+    except SameFileError as exc:
+        rep.message = str(exc)
+        return True
+    return False
+
+
 def fix_fsys_checksum(file_path: str, output_path: Optional[str] = None) -> AppleReport:
     """Recompute and rewrite the Fsys CRC32 when invalid; verify after the write."""
     rep = AppleReport()
+    if _same_file_refusal(file_path, output_path, rep):
+        return rep
     with open(file_path, "rb") as f:
         data = bytearray(f.read())
 
@@ -199,6 +216,8 @@ def replace_fsys_store(
     """Transplant a donor 0x800h Fsys store into the image (equal size required),
     then repair the CRC32."""
     rep = AppleReport()
+    if _same_file_refusal(file_path, output_path, rep):
+        return rep
     with open(file_path, "rb") as f:
         data = bytearray(f.read())
     with open(donor_store_path, "rb") as f:
@@ -207,6 +226,16 @@ def replace_fsys_store(
     fsys = parse_fsys_store(bytes(data))
     if not fsys.found:
         rep.message = "No Fsys store in the target image"
+        return rep
+
+    donor_fsys = parse_fsys_store(donor)
+    if not (
+        donor_fsys.found
+        and donor_fsys.base_address == 0
+        and donor_fsys.size == len(donor)
+        and donor_fsys.checksum_valid
+    ):
+        rep.message = "donor is not a valid Fsys store (marker, size or CRC32 fails) - refused"
         return rep
 
     if len(donor) != fsys.size:
@@ -249,8 +278,16 @@ def set_serial_number(
     output_path: Optional[str] = None,
 ) -> AppleReport:
     """Patch the Fsys ssn variable — **equal-length in-place swap only** — and
-    repair the store CRC32."""
+    repair the store CRC32. Refused while the entry layout is unverified."""
     rep = AppleReport()
+    if not SERIAL_LAYOUT_VERIFIED:
+        rep.message = (
+            "Fsys serial layout unverified: the entry length width is not confirmed against a "
+            "real Apple Fsys store, so no serial is written - refused"
+        )
+        return rep
+    if _same_file_refusal(file_path, output_path, rep):
+        return rep
     with open(file_path, "rb") as f:
         data = bytearray(f.read())
 

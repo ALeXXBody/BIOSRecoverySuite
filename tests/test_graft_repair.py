@@ -1,6 +1,7 @@
 """Tests for donor-graft auto repair."""
 
 import struct
+import uuid
 
 from bios_recovery.core.bios_repair import BiosRepairEngine
 from bios_recovery.engines.bios_capsule import APTIO_CAPSULE_GUID_LE
@@ -12,9 +13,11 @@ FV_LEN = 0x20000
 def _mk_fv(body: bytes) -> bytes:
     """A firmware volume with a valid EFI_FIRMWARE_VOLUME_HEADER.
 
-    The header words sum to zero, as the UEFI spec requires.
+    The header words sum to zero, as the UEFI spec requires. The file system GUID
+    is FFS2, so the volume is an FFS volume, as real firmware volumes are.
     """
     fv = bytearray(b"\xff" * FV_LEN)
+    fv[0x10:0x20] = uuid.UUID("8C8CE578-8A3D-4F1C-9935-896185C32DD3").bytes_le
     struct.pack_into("<Q", fv, 0x20, FV_LEN)
     fv[0x28:0x2C] = b"_FVH"
     struct.pack_into("<H", fv, 0x30, 0x48)  # HeaderLength
@@ -122,7 +125,7 @@ def test_graft_leaves_different_content_alone(tmp_path):
 
     eng = BiosRepairEngine()
     rep = eng.auto_graft_from_donor(target_path, donor_path)
-    merged = open(rep.output_path, "rb").read()
-    assert b"OLD-VERSION" in merged  # left untouched
+    assert not rep.success
+    assert not rep.output_path  # nothing grafted, so nothing written
     assert not any("Grafted" in op for op in rep.operations)
     assert any("left untouched" in w for w in rep.warnings)

@@ -59,6 +59,9 @@ class PasswordRemover:
     AMI_CLEARABLE_VAR_NAMES = ("AMITSESetup", "SVP")
     AMI_REPORT_ONLY_VAR_NAMES = ("Setup", "Password")
 
+    # Generic words that appear in ordinary firmware text; reported with low confidence.
+    GENERIC_WORD_PATTERNS = (b"Admin", b"admin")
+
     KNOWN_PASSWORD_PATTERNS = {
         PasswordType.AMI_SETUP_PASSWORD: [
             b"AMITSESetup",
@@ -109,7 +112,7 @@ class PasswordRemover:
         for pw in report.found_passwords:
             pw.setdefault("clearable", False)
 
-        self._clear_passwords(data, report)
+        self._clear_passwords(data, report, password_types)
 
         if bytes(data) == original:
             report.messages.append("Nothing was written: no change to the image")
@@ -221,15 +224,26 @@ class PasswordRemover:
                     last_match = idx
                 offset = idx + 1
 
-    def _clear_passwords(self, data: bytearray, report: PasswordRemovalReport) -> None:
+    def _clear_passwords(
+        self,
+        data: bytearray,
+        report: PasswordRemovalReport,
+        password_types: Optional[list[PasswordType]] = None,
+    ) -> None:
         """Mark each verified password record invalid, the way NVRAM marks a superseded record.
 
         The record's bytes are left intact, so the store stays well formed. Entries that were
-        not verified as a password store are never written.
+        not verified as a password store are never written. When password_types is given,
+        only candidates of those types are considered.
         """
+        selected = [
+            pw
+            for pw in report.found_passwords
+            if password_types is None or pw["type"] in password_types
+        ]
         cleared = 0
         unverified = 0
-        for pw in report.found_passwords:
+        for pw in selected:
             if not pw.get("clearable"):
                 unverified += 1
                 continue
@@ -242,7 +256,7 @@ class PasswordRemover:
 
         if cleared:
             report.status = PasswordRemovalResult.SUCCESS
-        elif report.found_passwords:
+        elif selected:
             report.status = PasswordRemovalResult.PARTIAL
         else:
             report.status = PasswordRemovalResult.NOT_FOUND
@@ -253,38 +267,24 @@ class PasswordRemover:
             )
 
     def generate_dell_master_password(self, service_tag: str, suffix: str) -> list[str]:
-        passwords = []
-        suffixes = [suffix] if suffix else ["595B", "D35B", "2A7B", "A95B", "1D3B", "6FF1", "1F66"]
+        """Refused: no published Dell master-password algorithm is implemented here.
 
-        for s in suffixes:
-            tag = service_tag.upper()
-            full = tag + s
-            try:
-                val = int(full, 36)
-                hash_val = val & 0xFFFFFFFF
-                password = f"{hash_val % 100000000:08d}"
-                passwords.append(password)
-            except ValueError:
-                pass
-
-        return passwords
+        dogbert's dell.c uses an MD5-style block transform with custom tables. Nothing in this
+        repository reproduces it, so no password is produced rather than a guess.
+        """
+        return []
 
     def generate_hp_master_password(self, code: str) -> str:
-        try:
-            val = int(code)
-            return f"{(val * 3 + 7) % 100000000:08d}"
-        except ValueError:
-            return ""
+        """Refused: no published HP master-password algorithm is implemented here."""
+        return ""
 
     def generate_insyde_master_password(self, code: str) -> str:
+        """Insyde H2O master password from the 8-character hash (dogbert pwgen-insyde.py)."""
+        from bios_recovery.utils.master_passwords import insyde_8dec
+
         try:
-            val = int(code)
-            result = ""
-            for _ in range(8):
-                result = str(val % 10) + result
-                val //= 10
-            return result
-        except ValueError:
+            return insyde_8dec(code)
+        except (IndexError, ValueError):
             return ""
 
     def find_password_in_dump(self, file_path: str) -> list[dict]:
@@ -306,6 +306,9 @@ class PasswordRemover:
                             "pattern": pattern.hex(),
                             "offset": f"{idx:#x}",
                             "context": data[max(0, idx - 8) : idx + len(pattern) + 8].hex(),
+                            "confidence": (
+                                "low" if pattern in self.GENERIC_WORD_PATTERNS else "normal"
+                            ),
                         }
                     )
                     offset = idx + 1

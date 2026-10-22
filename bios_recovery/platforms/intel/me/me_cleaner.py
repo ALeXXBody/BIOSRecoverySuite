@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
+from bios_recovery.core.me_manifest import engine_is_txe, engine_version
 from bios_recovery.core.safety import SameFileError, ensure_distinct
 
 
@@ -45,6 +46,7 @@ class IntelMECleaner:
 
     FPT_SIGNATURE = b"$FPT"
     FPT_ENTRY_SIZE = 0x20
+    FPT_HEADER_VERSION = 0x20
     ME_ANALIGHTIC_WORKAROUND_ME7 = 7
     MAX_SUPPORTED_ME_VERSION = 19
 
@@ -70,7 +72,7 @@ class IntelMECleaner:
         remove_modules: bool = True,
         descriptor_lock: bool = False,
     ) -> MeCleanReport:
-        if not os.path.exists(input_path):
+        if not os.path.isfile(input_path):
             return MeCleanReport(
                 status=MeCleanResult.ERROR,
                 messages=[f"File not found: {input_path}"],
@@ -82,6 +84,19 @@ class IntelMECleaner:
 
         with open(input_path, "rb") as f:
             data = bytearray(f.read())
+        original_len = len(data)
+
+        fd = self._find_fd_in_data(data)
+        declared = self._declared_me_span(data, fd) if fd >= 0 else None
+        if declared is not None and declared[1] > len(data):
+            return MeCleanReport(
+                status=MeCleanResult.ERROR,
+                messages=[
+                    f"ME region declared by the flash descriptor ends at {declared[1]:#x}, past "
+                    f"the end of the {len(data):#x}-byte image (truncated dump?); refusing to "
+                    "modify a partial region"
+                ],
+            )
 
         me_start, me_end, me_gen = self._find_me_region(data)
         if me_start < 0:
@@ -109,7 +124,7 @@ class IntelMECleaner:
             from bios_recovery.core.bios_analyzer import BiosAnalyzer
 
             me_version = BiosAnalyzer().analyze(input_path).me_version
-        me_type = self._get_me_type(me_version)
+        me_type = self._get_me_type(me_version, data[me_start:me_end])
         original_size = me_end - me_start
 
         if not me_version:
@@ -190,6 +205,7 @@ class IntelMECleaner:
                     report.messages.append(
                         "CSE LT layout cannot be partition-cleaned; no action taken"
                     )
+                    return report
             else:
                 report.status = MeCleanResult.ERROR
                 if not entries:
@@ -200,9 +216,16 @@ class IntelMECleaner:
         else:
             partitions_removed = 0
             if remove_modules and me_gen in (MeGeneration.GEN2, MeGeneration.GEN3):
-                partitions_removed = self._remove_non_essential_partitions(
-                    data, fpt_offset, entries, ftpr_entry
-                )
+                if data[fpt_offset + 0x08] != self.FPT_HEADER_VERSION:
+                    report.messages.append(
+                        f"Partition removal skipped: FPT header version "
+                        f"{data[fpt_offset + 0x08]:#x} is not supported, so the partition "
+                        "table cannot be updated safely"
+                    )
+                else:
+                    partitions_removed = self._remove_non_essential_partitions(
+                        data, fpt_offset, entries, ftpr_entry, me_start
+                    )
             report.partitions_removed = partitions_removed
             report.messages.append(f"Removed {partitions_removed} non-essential partitions")
 
@@ -237,6 +260,12 @@ class IntelMECleaner:
         report.partitions_removed = report.partitions_removed or 0
         report.messages.append(f"ME version: {me_version} ({me_type})")
 
+        if fd >= 0 and len(data) != original_len:
+            return MeCleanReport(
+                status=MeCleanResult.ERROR,
+                messages=["A full flash image changed size; nothing written"],
+            )
+
         if output_path is None:
             output_path = input_path.rsplit(".", 1)[0] + "_cleaned.bin"
 
@@ -248,13 +277,10 @@ class IntelMECleaner:
 
     def _find_me_region(self, data: bytes) -> tuple[int, int, MeGeneration]:
         N = len(data)
-        # (a) Standalone ME/TXE region image: $FPT at 0x00 or 0x10
-        if data[0x10:0x14] == b"$FPT":
-            me_start = 0x10
-            gen = self._detect_generation(data, me_start, N)  # whole file is the region
-            return me_start, N, gen
-        if data[:4] == b"$FPT":
-            gen = self._detect_generation(data, 0, N)
+        # (a) Standalone ME/TXE region image: $FPT at 0x00 or 0x10. The region base is 0 in
+        # both cases; a table at 0x10 is a header offset inside the region (me_cleaner).
+        if data[:4] == b"$FPT" or data[0x10:0x14] == b"$FPT":
+            gen = self._detect_generation(data, 0, N)  # whole file is the region
             return 0, N, gen
 
         # (b) Standalone ME/TXE update image ($MN2/$MAN near the start)
@@ -282,10 +308,8 @@ class IntelMECleaner:
         # (e) No descriptor at all, but a valid FPT somewhere (raw ME region dump)
         return -1, -1, MeGeneration.UNKNOWN
 
-    def _me_region_from_flreg(
-        self, data: bytes, fd: int
-    ) -> Optional[tuple[int, int, MeGeneration]]:
-        """ME region from the descriptor's FLREG2 entry.
+    def _declared_me_span(self, data: bytes, fd: int) -> Optional[tuple[int, int]]:
+        """(start, end) of the ME region from the descriptor's FLREG2, end not clamped to the file.
 
         FLMAP0 (fd+0x04) gives FRBA in 16-byte units from the start of the image (ifdtool
         find_frba); the FLREG table is at FRBA and ME is its third entry (FRBA+8). Base and
@@ -303,8 +327,16 @@ class IntelMECleaner:
         limit = (me_flreg >> 16) & 0x7FFF
         if limit == 0 or base > limit:
             return None
-        me_start = base * 0x1000
-        me_end = min((limit + 1) * 0x1000, N)
+        return base * 0x1000, (limit + 1) * 0x1000
+
+    def _me_region_from_flreg(
+        self, data: bytes, fd: int
+    ) -> Optional[tuple[int, int, MeGeneration]]:
+        """ME region from the descriptor's FLREG2 entry, clamped to the image."""
+        span = self._declared_me_span(data, fd)
+        if span is None:
+            return None
+        me_start, me_end = span[0], min(span[1], len(data))
         if me_start >= me_end:
             return None
         if not self._has_region_content(data, me_start, me_end):
@@ -372,17 +404,17 @@ class IntelMECleaner:
             end = max(end, base + off + size)
         if end and end <= len(data):
             return end
-        return self._fpt_region_end(data, fpt_off)
+        return self._fpt_region_end(data, fpt_off, base)
 
-    def _fpt_region_end(self, data: bytes, fpt_off: int) -> int:
-        """Best-effort end of the region that owns the FPT at fpt_off."""
+    def _fpt_region_end(self, data: bytes, fpt_off: int, base: int) -> int:
+        """Best-effort end of the region that owns the FPT at fpt_off (same base as above)."""
         entries = struct.unpack_from("<I", data, fpt_off + 0x04)[0]
         end = fpt_off + 0x20 + entries * 0x20
         for i in range(min(entries, 64)):
             off = fpt_off + 0x20 + i * 0x20
             name, offset, size = data[off : off + 4], *struct.unpack_from("<II", data, off + 0x08)
             if name == b"FTPR" and size != 0xFFFFFFFF:
-                rel_end = fpt_off - 0x10 + offset + size
+                rel_end = base + offset + size
                 end = max(end, min(rel_end, len(data)))
         return end
 
@@ -410,8 +442,10 @@ class IntelMECleaner:
                     break
                 entry_name = data[entry_off : entry_off + 4]
                 entry_off_v, _ = struct.unpack_from("<II", data, entry_off + 0x08)
-                if entry_name in (b"CODE", b"NFTP", b"BRIN"):
-                    return MeGeneration.GEN2 if entry_name != b"BRIN" else MeGeneration.GEN1
+                if entry_name in (b"CODE", b"BRIN"):
+                    return MeGeneration.GEN1
+                if entry_name == b"NFTP":
+                    return MeGeneration.GEN2
                 if entry_name == b"FTPR":
                     abs_off = me_start + entry_off_v
                     if abs_off + 4 <= len(data):
@@ -439,8 +473,12 @@ class IntelMECleaner:
             entry_off = fpt_offset + 0x20 + i * 0x20
             if entry_off + 0x20 > len(data):
                 break
-            name = data[entry_off : entry_off + 4]
+            name = bytes(data[entry_off : entry_off + 4])
             offset, size = struct.unpack_from("<II", data, entry_off + 0x08)
+            # Zero offset or size means no data (me_cleaner skips these too); offset 0 would
+            # otherwise erase the partition table itself.
+            if offset == 0 or size == 0:
+                continue
             abs_offset = me_start + offset
             if abs_offset + size <= me_end:
                 entries.append((name, abs_offset, size))
@@ -452,20 +490,58 @@ class IntelMECleaner:
         fpt_offset: int,
         entries: list[tuple[bytes, int, int]],
         ftpr_entry: tuple,
+        me_start: int = 0,
     ) -> int:
-        removed = 0
+        """Erase the removable partitions and drop their table entries. Returns the count."""
+        removed = []
         ftpr_name, ftpr_off, ftpr_size = ftpr_entry
         ftpr_end = ftpr_off + ftpr_size
+        table_count = min(struct.unpack_from("<I", data, fpt_offset + 0x04)[0], 64)
+        table_end = fpt_offset + self.FPT_ENTRY_SIZE * (table_count + 1)
         for name, offset, size in entries:
             if name in (b"FTPR", b"EFFS"):
                 continue
             # A partition that overlaps FTPR is never touched.
             if offset < ftpr_end and offset + size > ftpr_off:
                 continue
+            # Nor is anything that overlaps the partition table itself.
+            if offset < table_end:
+                continue
             end = min(offset + size, len(data))
             data[offset:end] = b"\xff" * (end - offset)
-            removed += 1
-        return removed
+            removed.append((name, offset, size))
+        self._drop_fpt_entries(data, fpt_offset, me_start, removed)
+        return len(removed)
+
+    def _drop_fpt_entries(
+        self,
+        data: bytearray,
+        fpt_offset: int,
+        me_start: int,
+        erased: list[tuple[bytes, int, int]],
+    ) -> None:
+        """Remove the table entries of erased partitions, then fix the count and header checksum.
+
+        Entries stay in their original order. The checksum is the two's complement of the
+        header sum with the checksum byte (fpt+0x0B) zeroed (me_cleaner; MEAnalyzer FPT_Header).
+        """
+        if not erased:
+            return
+        count = min(struct.unpack_from("<I", data, fpt_offset + 0x04)[0], 64)
+        table = fpt_offset + self.FPT_ENTRY_SIZE
+        records = [bytes(data[table + i * 0x20 : table + (i + 1) * 0x20]) for i in range(count)]
+        gone = set(erased)
+        kept = []
+        for rec in records:
+            name = rec[0:4]
+            offset, size = struct.unpack_from("<II", rec, 0x08)
+            if (name, me_start + offset, size) not in gone:
+                kept.append(rec)
+        data[table : table + count * 0x20] = b"".join(kept) + b"\xff" * ((count - len(kept)) * 0x20)
+        struct.pack_into("<I", data, fpt_offset + 0x04, len(kept))
+        header = bytearray(data[fpt_offset : fpt_offset + self.FPT_ENTRY_SIZE])
+        header[0x0B] = 0
+        data[fpt_offset + 0x0B] = (0x100 - sum(header)) & 0xFF
 
     def _set_hap_bit(
         self,
@@ -497,17 +573,12 @@ class IntelMECleaner:
         return bool(struct.unpack_from("<I", data, off)[0] & bit)
 
     def _read_flmap1(self, data: bytes, fd_offset: int) -> Optional[int]:
-        """FLMAP1 is at fd+0x08 on real images (magic at 0x00 or 0x10).
-
-        Older synthetic layouts stored it at fd+0x14; accept that as fallback.
-        """
-        n = len(data)
-        for off in (0x08, 0x14):
-            if fd_offset + off + 4 <= n:
-                v = struct.unpack_from("<I", data, fd_offset + off)[0]
-                if v not in (0, 0xFFFFFFFF):
-                    return v
-        return None
+        """FLMAP1 at fd+0x08 (ifdtool struct fdbar; me_cleaner reads it there). No fallback:
+        an unset or unreadable FLMAP1 means the strap and master offsets are unknown."""
+        if fd_offset + 0x0C > len(data):
+            return None
+        v = struct.unpack_from("<I", data, fd_offset + 0x08)[0]
+        return None if v in (0, 0xFFFFFFFF) else v
 
     def _find_fd_in_data(self, data: bytes) -> int:
         if data[:4] == b"\x5a\xa5\xf0\x0f":
@@ -551,7 +622,9 @@ class IntelMECleaner:
     def _is_already_clean(self, data: bytes, me_start: int, me_end: int) -> bool:
         fpt_off = self._find_fpt(data, me_start, me_end)
         if fpt_off < 0:
-            return True
+            # Without a partition table, only an erased region counts as clean.
+            region = bytes(data[me_start:me_end])
+            return region.count(0xFF) == len(region)
 
         non_ff_count = 0
         check_end = min(me_end, me_start + 0x10000)
@@ -567,28 +640,15 @@ class IntelMECleaner:
         minor, hotfix, build) at manifest+0x24 — i.e. tag+0x08. Auxiliary modules carry
         their own manifests, so the first match is not necessarily the engine.
         """
-        from collections import Counter
+        # Manifests of auxiliary modules sit past the table, so the window is wider than the region.
+        exp_end = min(me_start + 0x1000000, len(data))
+        return engine_version(bytes(data[me_start:exp_end]))
 
-        n = len(data)
-        exp_end = min(me_start + 0x1000000, n)  # manifests of auxiliary modules sit past the table
-        counts: Counter = Counter()
-        for tag in (b"$MN2", b"$MAN"):
-            pos = me_start
-            while pos < exp_end:
-                idx = data.find(tag, pos, exp_end)
-                if idx < 0:
-                    break
-                base = idx - 0x1C
-                if base >= 0 and base + 0x2C <= n:
-                    major, minor, hotfix, build = struct.unpack_from("<HHHH", data, base + 0x24)
-                    if 0 < major < 100 and minor < 200 and build < 100000:
-                        counts[f"{major}.{minor}.{hotfix}.{build}"] += 1
-                pos = idx + 4
-        return counts.most_common(1)[0][0] if counts else ""
-
-    def _get_me_type(self, version: str) -> str:
+    def _get_me_type(self, version: str, region: bytes = b"") -> str:
         if not version:
             return "Unknown"
+        if engine_is_txe(region):
+            return "TXE"
         try:
             major = int(version.split(".")[0])
         except (ValueError, IndexError):
@@ -603,6 +663,8 @@ class IntelMECleaner:
             return f"CSME {major}"
 
     def get_me_info(self, file_path: str) -> dict:
+        if not os.path.isfile(file_path):
+            return {"found": False, "reason": f"Not a file: {file_path}"}
         with open(file_path, "rb") as f:
             data = f.read()
 
@@ -625,7 +687,7 @@ class IntelMECleaner:
         return {
             "found": True,
             "version": version,
-            "type": self._get_me_type(version),
+            "type": self._get_me_type(version, data[me_start:me_end]),
             "generation": gen.name,
             "offset": f"{me_start:#x}",
             "size": f"{me_end - me_start:#x}",

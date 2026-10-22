@@ -28,8 +28,6 @@ class MEAResult:
 
 
 def _find_python():
-    if getattr(sys, "frozen", False):
-        return sys.executable
     return sys.executable
 
 
@@ -46,12 +44,14 @@ def run_mea_analyzer(
     os.makedirs(work_dir, exist_ok=True)
 
     python_exe = _find_python()
+    # Absolute path: MEA reads a leading "-" in the input name as an option.
+    input_abs = os.path.abspath(input_file)
     if getattr(sys, "frozen", False):
         # The exe's own dispatch (--mea-child in main._run_mea_child) loads MEA.py
         args = [
             python_exe,
             "--mea-child",
-            input_file,
+            input_abs,
             "-skip",
             "-exit",
             "-json",
@@ -63,7 +63,7 @@ def run_mea_analyzer(
         args = [
             python_exe,
             MEA_PATH,
-            input_file,
+            input_abs,
             "-skip",
             "-exit",
             "-json",
@@ -119,21 +119,24 @@ def run_mea_analyzer(
         except Exception:
             json_data = None
 
-    success = proc.returncode == 0 or json_data is not None
+    # MEA exits 0 on files it does not recognise, so the JSON report is the only success signal.
+    success = json_data is not None
+    error = ""
+    if not success:
+        error = "No JSON output" + (f" (return code {proc.returncode})" if proc.returncode else "")
     res = MEAResult(
         success=success,
         output_json_path=json_path if os.path.exists(json_path) else None,
         json_data=json_data,
         stdout=proc.stdout or "",
         stderr=proc.stderr or "",
-        error=""
-        if success
-        else (f"Return code {proc.returncode}" if proc.returncode != 0 else "No JSON output"),
+        error=error,
     )
 
     if json_data and isinstance(json_data, dict):
         file_key = next(
-            (k for k in json_data if k == os.path.basename(input_file) or k == input_file), None
+            (k for k in json_data if k in (os.path.basename(input_file), input_file, input_abs)),
+            None,
         )
         if file_key and isinstance(json_data[file_key], dict) and "Messages" in json_data[file_key]:
             try:

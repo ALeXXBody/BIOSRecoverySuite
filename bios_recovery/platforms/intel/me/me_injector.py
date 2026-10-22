@@ -16,7 +16,7 @@ import os
 import tempfile
 
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
-from bios_recovery.core.me_manifest import detect_me_version_best as detect_me_version_in_blob
+from bios_recovery.core.me_manifest import engine_version as detect_me_version_in_blob
 from bios_recovery.core.rebuild_verify import verify_rebuild
 from bios_recovery.core.safety import SameFileError, ensure_distinct
 from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
@@ -26,6 +26,8 @@ class MEInjector:
     """Replaces the ME region of a BIOS image with a clean firmware image."""
 
     def analyze(self, image_path: str) -> dict:
+        if not os.path.isfile(image_path):
+            return {"found": False, "offset": None, "size": 0, "version": "", "error": "not a file"}
         with open(image_path, "rb") as f:
             data = f.read()
         result = BiosAnalyzer().analyze(image_path)
@@ -43,6 +45,9 @@ class MEInjector:
             ensure_distinct(image_path, output_path)
         except SameFileError as exc:
             return {"success": False, "message": str(exc)}
+        for path in (image_path, clean_me_path):
+            if not os.path.isfile(path):
+                return {"success": False, "message": f"not a file: {path}"}
 
         with open(image_path, "rb") as f:
             original = f.read()

@@ -75,18 +75,13 @@ def test_password_removal_refuses_output_equal_to_input(intel_ifd):
         assert f.read() == before
 
 
-def test_dell_master_password_generation():
-    pw = PasswordRemover()
-    passwords = pw.generate_dell_master_password("ABC1234", "595B")
-    assert passwords, "should generate at least one password"
-    for p in passwords:
-        assert len(p) == 8
-        assert p.isdigit()
+def test_dell_master_password_is_refused():
+    # no published Dell algorithm is implemented, so no guessed password is returned
+    assert PasswordRemover().generate_dell_master_password("ABC1234", "595B") == []
 
 
-def test_hp_master_password_generation():
-    pw = PasswordRemover()
-    assert int(pw.generate_hp_master_password("12345")) == 37042
+def test_hp_master_password_is_refused():
+    assert PasswordRemover().generate_hp_master_password("12345") == ""
 
 
 def test_insyde_master_password_generation():

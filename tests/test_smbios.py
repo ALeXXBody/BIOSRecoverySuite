@@ -11,8 +11,11 @@ def _entry_2x(table_len: int, table_addr: int) -> bytes:
     eps = bytearray(0x1F)
     eps[0:4] = b"_SM_"
     eps[5] = 0x1F
+    eps[0x10:0x15] = b"_DMI_"
     struct.pack_into("<H", eps, 0x16, table_len)
     struct.pack_into("<I", eps, 0x18, table_addr)
+    eps[0x15] = (0x100 - sum(eps[0x10:0x1F]) % 0x100) % 0x100
+    eps[4] = (0x100 - sum(eps) % 0x100) % 0x100
     return bytes(eps)
 
 
@@ -22,6 +25,7 @@ def _entry_3x(table_len: int, table_addr: int) -> bytes:
     eps[6] = 0x18
     struct.pack_into("<I", eps, 0x0C, table_len)
     struct.pack_into("<Q", eps, 0x10, table_addr)
+    eps[5] = (0x100 - sum(eps) % 0x100) % 0x100
     return bytes(eps)
 
 

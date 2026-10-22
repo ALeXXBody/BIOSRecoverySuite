@@ -1,5 +1,6 @@
 """Manufacturer profiles for BIOS structure, password, and DMI locations."""
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
@@ -27,6 +28,8 @@ class Manufacturer(Enum):
     SUPERCORE = auto()
 
 
+# Password patterns are informational. No writer uses them, and none has been checked
+# against vendor firmware; a run of zero bytes matches erased space as well.
 @dataclass
 class PasswordRegion:
     name: str
@@ -291,21 +294,36 @@ class ManufacturerProfiles:
         return self._profiles.get(manufacturer)
 
     def detect_manufacturer(self, data: bytes) -> Manufacturer:
-        for manufacturer, profile in self._profiles.items():
-            for sig in profile.bios_signatures:
-                if sig in data[:0x1000]:
-                    return manufacturer
-
         text = self._extract_ascii(data[:0x10000])
-        text_lower = text.lower()
+        for manufacturer, profile in self._profiles.items():
+            tokens = [sig.decode("ascii", errors="ignore") for sig in profile.bios_signatures]
+            if self._qualifies(text, tokens, ignore_case=False):
+                return manufacturer
 
         for m in Manufacturer:
             if m == Manufacturer.UNKNOWN:
                 continue
-            if m.name.lower() in text_lower:
+            if self._qualifies(text, [m.name.replace("_", " ")], ignore_case=True):
                 return m
 
         return Manufacturer.UNKNOWN
+
+    @staticmethod
+    def _qualifies(text: str, tokens: list[str], ignore_case: bool) -> bool:
+        """True when whole-word tokens match the vendor text.
+
+        Short tokens such as "HP" or "IBM" occur in arbitrary data, so one of them
+        is not enough: a manufacturer needs two distinct tokens or one of four
+        characters or more.
+        """
+        flags = re.IGNORECASE if ignore_case else 0
+        hits = {
+            t.lower()
+            for t in tokens
+            if t
+            and re.search(rf"(?<![A-Za-z0-9]){re.escape(t)}(?![A-Za-z0-9])", text, flags)
+        }
+        return len(hits) >= 2 or any(len(t) >= 4 for t in hits)
 
     def _extract_ascii(self, data: bytes) -> str:
         result = bytearray()

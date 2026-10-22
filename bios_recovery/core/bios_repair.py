@@ -1,14 +1,25 @@
 """BIOS repair engine - repairs common BIOS issues."""
 
 import os
+import struct
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
-from bios_recovery.core.bios_analyzer import BiosAnalyzer, BiosType
+from bios_recovery.core.bios_analyzer import BiosAnalyzer, BiosType, RegionType
 from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.verified_write import write_verified
 from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
+from bios_recovery.platforms.intel.uefi_patcher import (
+    FFS2_GUID,
+    FFS3_GUID,
+    FFS_ATTRIB_LARGE_FILE,
+    FFS_LARGE_HEADER,
+    guid_to_bytes,
+)
+
+_FFS_FILESYSTEM_GUIDS = {guid_to_bytes(FFS2_GUID), guid_to_bytes(FFS3_GUID)}
 
 
 class RepairType(Enum):
@@ -148,8 +159,7 @@ class BiosRepairEngine:
 
         # Only real byte changes count as repairs; the report lists only those.
         if bytes(data) != original:
-            with open(report.output_path, "wb") as f:
-                f.write(data)
+            write_verified(report.output_path, bytes(data))
         else:
             report.success = False
             report.operations = []
@@ -160,7 +170,15 @@ class BiosRepairEngine:
     def _fix_fpt_checksum(self, data: bytearray, report: RepairReport) -> None:
         from bios_recovery.core.bios_analyzer import BiosAnalyzer
 
-        positions = BiosAnalyzer()._fpt_positions(bytes(data))
+        found = BiosAnalyzer()._fpt_positions(bytes(data))
+        me_ranges = self._declared_me_ranges(bytes(data))
+        positions = [
+            p
+            for p in found
+            if any(lo <= p and p + 0x20 <= lo + size for lo, size in me_ranges)
+        ]
+        if found and not positions:
+            report.warnings.append("FPT header outside the declared ME region was not modified")
         if not positions:
             return
         fpt_offset = positions[0]
@@ -233,7 +251,9 @@ class BiosRepairEngine:
             f"Image size {current:#x} is not a standard size; nearest is {closest:#x}"
         )
 
-    def fix_size(self, input_path: str, target_size: int, output_path: str) -> RepairReport:
+    def fix_size(
+        self, input_path: str, target_size: int, output_path: str, allow_truncate: bool = False
+    ) -> RepairReport:
         if target_size <= 0:
             return RepairReport(success=False, warnings=["target size must be positive"])
         try:
@@ -244,28 +264,42 @@ class BiosRepairEngine:
             data = f.read()
         before = len(data)
 
+        if before == target_size:
+            return RepairReport(
+                success=False,
+                warnings=[f"Already {before} bytes; no change, no output written"],
+            )
+        warnings = []
         if len(data) < target_size:
             padded = bytearray(target_size)
             padded[: len(data)] = data
             for i in range(len(data), target_size):
                 padded[i] = 0xFF
             data = bytes(padded)
-        elif len(data) > target_size:
+        else:
+            tail = data[target_size:]
+            erased = set(tail) == {0xFF}
+            if not erased and not allow_truncate:
+                return RepairReport(
+                    success=False,
+                    output_path=output_path,
+                    warnings=[
+                        f"Refused to truncate {before:#x} bytes to {target_size:#x}: the "
+                        f"discarded tail holds non-erased data (pass allow_truncate to override)"
+                    ],
+                )
+            if not erased:
+                warnings.append(
+                    f"Discarded {len(tail):#x} non-erased bytes at 0x{target_size:x} and above"
+                )
             data = data[:target_size]
 
-        with open(output_path, "wb") as f:
-            f.write(data)
-
-        if before == target_size:
-            return RepairReport(
-                success=True,
-                output_path=output_path,
-                warnings=[f"Already {before} bytes; no change"],
-            )
+        write_verified(output_path, data)
         return RepairReport(
             success=True,
             output_path=output_path,
             operations=[f"Resized from {before} to {target_size} bytes"],
+            warnings=warnings,
         )
 
     def doctor(self, input_path: str) -> RepairReport:
@@ -408,9 +442,32 @@ class BiosRepairEngine:
              and the donor's copy of the region validates. Refuse everything
              else (bounds mismatch, unknown format, different chip size) with
              an explicit report message instead of writing guessed bytes.
+
+        Only FFS volumes are grafted. NVRAM and other variable stores hold
+        machine data, so they are never copied from a donor. No output is
+        written when nothing was grafted.
         """
         report = RepairReport(success=False, issue=RepairType.AUTO)
+        if output_path is None:
+            output_path = input_path.rsplit(".", 1)[0] + "_grafted.bin"
+        try:
+            ensure_distinct(input_path, output_path)
+            ensure_distinct(donor_path, output_path)
+        except SameFileError as exc:
+            report.warnings.append(str(exc))
+            return report
 
+        with tempfile.TemporaryDirectory(prefix="brs_graft_") as work_dir:
+            return self._graft_from_donor(input_path, donor_path, output_path, work_dir, report)
+
+    def _graft_from_donor(
+        self,
+        input_path: str,
+        donor_path: str,
+        output_path: str,
+        work_dir: str,
+        report: RepairReport,
+    ) -> RepairReport:
         with open(input_path, "rb") as f:
             target = bytearray(f.read())
 
@@ -424,7 +481,7 @@ class BiosRepairEngine:
         with open(donor_path, "rb") as f:
             donor_head = f.read(16)
         if is_aptio_capsule_guid(donor_head):
-            extract_dir = donor_path.rsplit(".", 1)[0] + "_grade_extracted"
+            extract_dir = os.path.join(work_dir, "donor_capsule")
             os.makedirs(extract_dir, exist_ok=True)
             info = extract_flashable_image(
                 donor_path, output_path=os.path.join(extract_dir, "flashable.bin")
@@ -446,11 +503,6 @@ class BiosRepairEngine:
             report.issues_found.append(
                 RepairIssue(RepairType.AUTO, "error", "Donor/target size mismatch", 0, 0)
             )
-            if output_path is None:
-                return report
-            with open(output_path, "wb") as f:
-                f.write(bytes(target))
-            report.output_path = output_path
             return report
 
         fvs_t = self._fv_bounds(bytes(target))
@@ -487,8 +539,19 @@ class BiosRepairEngine:
                     f"donor {donor_me.get('version') or 'unknown'} "
                     f"(version family and bounds must match)"
                 )
-        t_me_off = int(target_me.get("offset", "0"), 16) if me_found else 0
-        t_me_size = int(target_me.get("size", "0"), 16) if me_found else 0
+        me_blocked: list[tuple[int, int]] = []
+        if me_found:
+            if not me_block_allowed:
+                me_blocked.append(
+                    (int(target_me.get("offset", "0"), 16), int(target_me.get("size", "0"), 16))
+                )
+        else:
+            me_blocked = self._declared_me_ranges(bytes(target))
+            if me_blocked:
+                report.warnings.append(
+                    "ME layout not identified; volumes overlapping the descriptor ME region "
+                    "are not grafted"
+                )
 
         grafts = 0
         graft_bytes = 0
@@ -500,12 +563,13 @@ class BiosRepairEngine:
                     f"Donor FV @0x{base:x} fails its own integrity ({d_damaged}) - not grafted"
                 )
                 continue
-            if (
-                me_found
-                and not me_block_allowed
-                and base < t_me_off + t_me_size
-                and base + flen > t_me_off
-            ):
+            if not self._is_ffs_volume(chunk_d):
+                report.warnings.append(
+                    f"Donor FV @0x{base:x} is not an FFS volume (NVRAM or other store) - "
+                    "not grafted"
+                )
+                continue
+            if any(base < off + size and off < base + flen for off, size in me_blocked):
                 report.warnings.append(
                     f"Donor FV @0x{base:x} overlaps the ME region, which is not graftable - refused"
                 )
@@ -514,6 +578,12 @@ class BiosRepairEngine:
             t_damaged = self._damaged_reason(chunk_t)
             if (base, flen) in fvs_t:
                 if chunk_t == chunk_d:
+                    continue
+                if not self._is_ffs_volume(chunk_t):
+                    report.warnings.append(
+                        f"FV @0x{base:x} is not an FFS volume (NVRAM or other store) - "
+                        "left untouched"
+                    )
                     continue
                 if not t_damaged:
                     report.warnings.append(
@@ -557,24 +627,27 @@ class BiosRepairEngine:
                     "target area is not erased - refused (would overwrite unknown data)"
                 )
 
-        if output_path is None:
-            output_path = input_path.rsplit(".", 1)[0] + "_grafted.bin"
-        try:
-            ensure_distinct(input_path, output_path)
-        except SameFileError as exc:
-            report.warnings.append(str(exc))
-            report.success = False
-            return report
         report.operations.append(f"Total grafts: {grafts} ({graft_bytes:#x} bytes written)")
-        with open(output_path, "wb") as f:
-            f.write(bytes(target))
-        report.output_path = output_path
         if not grafts:
-            report.warnings.append(
-                "No region was graftable; the output is an unchanged copy of the input"
-            )
-        report.success = grafts > 0
+            report.warnings.append("No region was graftable; no output written")
+            return report
+        write_verified(output_path, bytes(target))
+        report.output_path = output_path
+        report.success = True
         return report
+
+    @staticmethod
+    def _declared_me_ranges(data: bytes) -> list[tuple[int, int]]:
+        """(offset, size) of the ME regions the flash descriptor declares."""
+        return [
+            (r.offset, r.size)
+            for r in BiosAnalyzer()._parse_intel_ifd(data)
+            if r.region_type == RegionType.INTEL_ME
+        ]
+
+    @staticmethod
+    def _is_ffs_volume(chunk: bytes) -> bool:
+        return bytes(chunk[0x10:0x20]) in _FFS_FILESYSTEM_GUIDS
 
     @staticmethod
     def _fv_bounds(blob: bytes) -> list[tuple[int, int]]:
@@ -592,17 +665,28 @@ class BiosRepairEngine:
         # All-FF volume (erased or lost)
         if chunk and set(chunk) == {0xFF}:
             return "entirely FF (erased)"
+        # Only FFS volumes hold FFS files; NVRAM and other stores are not walked.
+        if len(chunk) < 0x48 or not BiosRepairEngine._is_ffs_volume(chunk):
+            return ""
+        hdr_len = struct.unpack_from("<H", chunk, 0x30)[0]
+        if hdr_len < 0x48 or hdr_len > len(chunk):
+            return "invalid header length"
         # FFS header checksum failures
         bad = 0
-        pos = 0x48
+        pos = hdr_len
         while pos + 0x18 <= len(chunk):
+            hdr_size = 0x18
             isize = chunk[pos + 0x14] | chunk[pos + 0x15] << 8 | chunk[pos + 0x16] << 16
-            if isize < 0x18 or pos + isize > len(chunk):
+            if (chunk[pos + 0x13] & FFS_ATTRIB_LARGE_FILE) and isize in (0, 0xFFFFFF):
+                if pos + FFS_LARGE_HEADER <= len(chunk):
+                    isize = struct.unpack_from("<Q", chunk, pos + 0x18)[0]
+                    hdr_size = FFS_LARGE_HEADER
+            if isize < hdr_size or pos + isize > len(chunk):
                 # A corrupt size field is damage, unless only erased space follows.
                 if set(chunk[pos:]) != {0xFF}:
                     bad += 1
                 break
-            hd = bytearray(chunk[pos : pos + 0x18])
+            hd = bytearray(chunk[pos : pos + hdr_size])
             hd[0x10] = hd[0x11] = hd[0x17] = 0
             if ((-sum(hd)) & 0xFF) != chunk[pos + 0x10]:
                 bad += 1
@@ -634,8 +718,7 @@ class BiosRepairEngine:
             )
 
         region = data[offset : offset + size]
-        with open(output_path, "wb") as f:
-            f.write(region)
+        write_verified(output_path, region)
 
         return RepairReport(
             success=True,
@@ -650,9 +733,11 @@ class BiosRepairEngine:
         region_offset: int,
         region_size: int,
         replacement_path: str,
+        allow_erase: bool = False,
     ) -> RepairReport:
         try:
             ensure_distinct(input_path, output_path)
+            ensure_distinct(replacement_path, output_path)
         except SameFileError as exc:
             return RepairReport(success=False, output_path=output_path, warnings=[str(exc)])
         with open(input_path, "rb") as f:
@@ -660,6 +745,18 @@ class BiosRepairEngine:
 
         with open(replacement_path, "rb") as f:
             replacement = f.read()
+
+        if not replacement and not allow_erase:
+            return RepairReport(
+                success=False,
+                issues_found=[
+                    RepairIssue(
+                        repair_type=RepairType.AUTO,
+                        severity="error",
+                        description="Replacement file is empty; pass allow_erase to erase it",
+                    )
+                ],
+            )
 
         if region_offset < 0 or region_size <= 0 or region_offset + region_size > len(data):
             return RepairReport(
@@ -689,8 +786,7 @@ class BiosRepairEngine:
         for i in range(region_offset + len(replacement), region_offset + region_size):
             data[i] = 0xFF
 
-        with open(output_path, "wb") as f:
-            f.write(data)
+        write_verified(output_path, bytes(data))
 
         return RepairReport(
             success=True,

@@ -15,11 +15,17 @@ message instead of being force-patched.
 
 from __future__ import annotations
 
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
 from bios_recovery.core.bios_analyzer import decode_flreg
+from bios_recovery.core.safety import SameFileError, ensure_distinct
+
+_PRINTABLE_SERIAL = re.compile(r"[\x21-\x7E]+")
+_UUID_HEX = re.compile(r"[0-9A-Fa-f]{32}")
+_MAC_HEX = re.compile(r"[0-9A-Fa-f]{12}")
 
 
 def _locate_smbios(data: bytes):
@@ -164,51 +170,69 @@ class DMIEditor:
         uuid: Optional[str] = None,
         mac: Optional[str] = None,
     ) -> DMIEditReport:
-        """Apply identity edits. Refuses unequal-length serial swaps."""
+        """Apply identity edits. Refuses anything that would change the image size."""
         report = DMIEditReport()
         with open(file_path, "rb") as f:
-            data = bytearray(f.read())
-        eps = _locate_smbios(bytes(data))
-        if not eps:
-            report.message = "no valid SMBIOS table found - edit refused"
+            original = f.read()
+        data = bytearray(original)
+
+        if output_path is None:
+            output_path = file_path.rsplit(".", 1)[0] + "_edited.bin"
+        try:
+            ensure_distinct(file_path, output_path)
+        except SameFileError as exc:
+            report.message = str(exc)
             return report
-        _, table_addr, table_len = eps
-        structures = list(_smbios_structures(bytes(data), table_addr, table_len))
+
+        eps = _locate_smbios(original)
+        if eps:
+            _, table_addr, table_len = eps
+            structures = list(_smbios_structures(original, table_addr, table_len))
+        else:
+            structures = []
+            if serial is not None or uuid is not None:
+                report.message = "no valid SMBIOS table found - edit refused"
+                return report
 
         if serial is not None:
-            new = serial.encode("ascii")
-            targets = []
-            for off, stype, slen, strings in structures:
-                if stype == 1 and len(data) >= off + 0x1B:
-                    idx = data[off + 0x07]  # Type 1 SerialNumber per spec
-                    if 1 <= idx <= len(strings):
-                        targets.append(strings[idx - 1])
-                if stype == 2 and len(data) >= off + 0x08:
-                    idx = data[off + 0x07]
-                    if 1 <= idx <= len(strings):
-                        targets.append(strings[idx - 1])
-            if not targets:
-                report.warnings.append("no serial string referenced by Type 1/2 - skipped")
-            for s_off, s_len in targets:
-                if len(new) != s_len:
-                    report.warnings.append(
-                        f"serial swap refused @0x{s_off:x}: length differs "
-                        f"({len(new)} != {s_len}); equal-length in-place swaps only"
-                    )
-                    continue
-                data[s_off : s_off + s_len] = new
-                report.operations.append(
-                    f"serial replaced @0x{s_off:x} (equal-length swap, {s_len} bytes)"
+            new = serial.encode("ascii") if _PRINTABLE_SERIAL.fullmatch(serial) else None
+            if new is None:
+                report.warnings.append(
+                    "serial refused: must be printable ASCII with no spaces or control characters"
                 )
+            else:
+                targets = []
+                for off, stype, slen, strings in structures:
+                    if stype == 1 and len(data) >= off + 0x1B:
+                        idx = data[off + 0x07]  # Type 1 SerialNumber per spec
+                        if 1 <= idx <= len(strings):
+                            targets.append(strings[idx - 1])
+                    if stype == 2 and len(data) >= off + 0x08:
+                        idx = data[off + 0x07]
+                        if 1 <= idx <= len(strings):
+                            targets.append(strings[idx - 1])
+                if not targets:
+                    report.warnings.append("no serial string referenced by Type 1/2 - skipped")
+                for s_off, s_len in targets:
+                    if len(new) != s_len:
+                        report.warnings.append(
+                            f"serial swap refused @0x{s_off:x}: length differs "
+                            f"({len(new)} != {s_len}); equal-length in-place swaps only"
+                        )
+                        continue
+                    data[s_off : s_off + s_len] = new
+                    report.operations.append(
+                        f"serial replaced @0x{s_off:x} (equal-length swap, {s_len} bytes)"
+                    )
 
         if uuid is not None:
             hexs = uuid.replace("-", "")
-            if len(hexs) != 32:
+            if not _UUID_HEX.fullmatch(hexs):
                 report.message = "uuid must be 32 hex chars (8-4-4-4-12) - refused"
                 return report
             done = 0
             for off, stype, slen, _ in structures:
-                if stype == 1:
+                if stype == 1 and slen >= 0x18:
                     data[off + 0x08 : off + 0x18] = bytes.fromhex(hexs)
                     done += 1
                     report.operations.append(f"Type-1 UUID written @0x{off + 8:x}")
@@ -216,7 +240,7 @@ class DMIEditor:
                 report.warnings.append("no SMBIOS Type 1 structure - uuid skipped")
 
         if mac is not None:
-            fd = self._find_fd(bytes(data))
+            fd = self._find_fd(original)
             if fd is None:
                 report.warnings.append(
                     "board has no Intel descriptor (AMD layout): NIC keeps its MAC "
@@ -224,22 +248,29 @@ class DMIEditor:
                 )
             else:
                 raw = mac.replace(":", "").replace("-", "")
-                try:
-                    gb_base, gb_limit = self._gbe_region(bytes(data), fd)
-                except struct.error:
-                    gb_base = gb_limit = 0
-                if not (gb_base and gb_base <= gb_limit and gb_limit <= len(data)):
-                    report.warnings.append("descriptor has no valid GbE region - MAC skipped")
+                if not _MAC_HEX.fullmatch(raw):
+                    report.warnings.append("MAC refused: expected 6 hex bytes (AA:BB:CC:DD:EE:FF)")
                 else:
-                    data[gb_base : gb_base + 6] = bytes.fromhex(raw)
-                    report.operations.append(f"MAC written to GbE region @0x{gb_base:x}")
+                    try:
+                        gb_base, gb_limit = self._gbe_region(original, fd)
+                    except struct.error:
+                        gb_base = gb_limit = 0
+                    if not (gb_base and gb_base <= gb_limit and gb_limit <= len(data)):
+                        report.warnings.append("descriptor has no valid GbE region - MAC skipped")
+                    else:
+                        data[gb_base : gb_base + 6] = bytes.fromhex(raw)
+                        report.operations.append(f"MAC written to GbE region @0x{gb_base:x}")
+                        report.warnings.append(
+                            "GbE NVM checksum not recomputed: the NIC may reject the NVM"
+                        )
 
-        if not report.operations and not report.warnings:
-            report.message = "nothing to edit"
+        if not report.operations:
+            report.message = report.message or "no edit applied - nothing written"
+            return report
+        if len(data) != len(original):
+            report.message = "internal check failed: edit would change the image size - refused"
             return report
 
-        if output_path is None:
-            output_path = file_path.rsplit(".", 1)[0] + "_edited.bin"
         with open(output_path, "wb") as f:
             f.write(bytes(data))
         report.success = True

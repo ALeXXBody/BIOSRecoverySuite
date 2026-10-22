@@ -12,8 +12,13 @@ A table is found in one of two ways:
 
 A table validates only when its structures are well formed (lengths fit, each string
 set is printable ASCII ending in the spec's double NUL) and it contains a System
-Information structure (type 1). Random bytes that happen to contain "_SM_" or "_DMI_"
-do not pass.
+Information structure (type 1). An entry point must also pass its checksums, and the
+table must end exactly at the length the entry point declares, or at an end-of-table
+structure (type 127). Random bytes that happen to contain "_SM_" or "_DMI_" do not pass.
+
+The scanner (no usable entry point) only starts at a Type 0 structure and only accepts a
+chain that reaches the end-of-table structure. Tables whose first structure is Type 1 are
+found only through an entry point.
 """
 
 from __future__ import annotations
@@ -80,8 +85,8 @@ def _plausible_first_string(text: bytes) -> bool:
     return len(text) >= 3 and any(chr(c).isalpha() for c in text)
 
 
-def _validate(data: bytes, start: int, end: int, min_structures: int) -> Optional[int]:
-    """End offset of the table if [start, end) validates, else None."""
+def _validate(data: bytes, start: int, end: int, min_structures: int):
+    """(end of the walk, reached end-of-table) for [start, end), or None if it does not validate."""
     kinds = []
     last = start
     first_text = None
@@ -94,31 +99,41 @@ def _validate(data: bytes, start: int, end: int, min_structures: int) -> Optiona
         return None
     if not _plausible_first_string(first_text or b""):
         return None
-    return last
+    return last, kinds[-1] == END_OF_TABLE
+
+
+def _checksum_ok(data: bytes, start: int, length: int) -> bool:
+    return sum(data[start : start + length]) & 0xFF == 0
 
 
 def _entry_candidates(data: bytes):
-    """(entry_offset, table_start, table_length) for every SMBIOS entry point."""
+    """(entry_offset, table_start, table_length) for every SMBIOS entry point that checksums."""
     for m in re.finditer(rb"_SM_", data):
         i = m.start()
         if i + 0x1F > len(data):
             continue
         entry_len = data[i + 5]
+        if entry_len < 0x1E or not _checksum_ok(data, i, entry_len):
+            continue
+        if entry_len >= 0x1F and (
+            data[i + 0x10 : i + 0x15] != b"_DMI_" or not _checksum_ok(data, i + 0x10, 0x0F)
+        ):
+            continue
         table_len = struct.unpack_from("<H", data, i + 0x16)[0]
         table_addr = struct.unpack_from("<I", data, i + 0x18)[0]
         yield i, table_addr, table_len
-        if entry_len >= 0x1F:
-            yield i, i + entry_len, table_len
+        yield i, i + entry_len, table_len
     for m in re.finditer(rb"_SM3_", data):
         i = m.start()
         if i + 0x18 > len(data):
             continue
         entry_len = data[i + 6]
+        if entry_len < 0x18 or not _checksum_ok(data, i, entry_len):
+            continue
         table_len = struct.unpack_from("<I", data, i + 0x0C)[0]
         table_addr = struct.unpack_from("<Q", data, i + 0x10)[0] & 0xFFFFFFFF
         yield i, table_addr, table_len
-        if entry_len >= 0x18:
-            yield i, i + entry_len, table_len
+        yield i, i + entry_len, table_len
 
 
 def find_table(data: bytes) -> Optional[tuple[int, int, int]]:
@@ -129,13 +144,16 @@ def find_table(data: bytes) -> Optional[tuple[int, int, int]]:
     for anchor, start, length in _entry_candidates(data):
         if length <= 0 or start <= 0 or start + length > len(data):
             continue
-        end = _validate(data, start, start + length, ENTRY_MIN_STRUCTURES)
-        if end is not None:
-            return anchor, start, end - start
+        result = _validate(data, start, start + length, ENTRY_MIN_STRUCTURES)
+        if result is None:
+            continue
+        last, reached_eot = result
+        if last == start + length or reached_eot:
+            return anchor, start, last - start
 
     for m in re.finditer(rb"(?=\x00[\x12-\x40])", data):
         start = m.start()
-        end = _validate(data, start, len(data), SCAN_MIN_STRUCTURES)
-        if end is not None:
-            return start, start, end - start
+        result = _validate(data, start, len(data), SCAN_MIN_STRUCTURES)
+        if result is not None and result[1]:
+            return start, start, result[0] - start
     return None

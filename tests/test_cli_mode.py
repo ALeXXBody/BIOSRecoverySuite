@@ -26,8 +26,12 @@ def _fixture_with_smbios():
     table = t1 + pool1 + t2 + pool2
     eps = bytearray(0x1F)
     eps[0:4] = b"_SM_"
+    eps[5] = 0x1F
+    eps[0x10:0x15] = b"_DMI_"
     struct.pack_into("<H", eps, 0x16, len(table))
     struct.pack_into("<I", eps, 0x18, 0x0100)
+    eps[0x15] = (0x100 - sum(eps[0x10:0x1F]) % 0x100) % 0x100
+    eps[4] = (0x100 - sum(eps) % 0x100) % 0x100
     blob = bytearray(b"\xff" * 0x2000)
     blob[0 : len(eps)] = eps
     blob[0x0100 : 0x0100 + len(table)] = table

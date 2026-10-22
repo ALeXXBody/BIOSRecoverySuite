@@ -12,6 +12,7 @@ success. The gate never writes to any file.
 
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
@@ -151,6 +152,9 @@ def _kind_at(offset: int, regions) -> tuple[str, str]:
 
 
 def verify_rebuild(original_path: str, candidate_path: str, allow: tuple = ("me",)) -> VerifyResult:
+    for path in (original_path, candidate_path):
+        if not os.path.isfile(path):
+            return VerifyResult(original_size=0, candidate_size=0, reasons=[f"not a file: {path}"])
     with open(original_path, "rb") as f:
         a = f.read()
     with open(candidate_path, "rb") as f:

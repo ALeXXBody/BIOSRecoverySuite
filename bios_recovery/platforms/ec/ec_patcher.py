@@ -2,8 +2,10 @@
 
 The EC is a dedicated microcontroller on the motherboard that manages power,
 keyboard, fan control, and (on many modern laptops) performs the BIOS-setup
-password verification. On 2-chip designs the EC firmware lives in a separate
-flash chip (often 256KB or 512KB) that is imaged in the top of a full SPI dump.
+password verification. Some designs store the EC image inside the BIOS flash
+chip, where it can be found in a full SPI dump. A separate EC flash chip is not
+in a BIOS dump at all, so it must be read on its own. The chip sizes and the
+"EC image at the top of a dump" layout are assumptions, not verified facts.
 
 This engine:
   1. Locates EC firmware inside a BIOS/spi dump,
@@ -14,13 +16,14 @@ This engine:
      contribute verified patterns without touching code).
 """
 
+import bisect
 import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
-from bios_recovery.core.safety import SameFileError, ensure_distinct
+from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
 
 
 class ECController(Enum):
@@ -62,6 +65,7 @@ class ECAnalysis:
     size: int = 0
     controller: ECController = ECController.UNKNOWN
     controller_name: str = ""
+    controller_tokens: list[str] = field(default_factory=list)
     magic: str = ""
     password_flags: list[dict] = field(default_factory=list)
     has_kbc_config: bool = False
@@ -99,7 +103,6 @@ class ECPatcher:
             b"IT55",
             b"IT51",
             b"IT57",
-            b"\x80\x04",  # ITE reporter ID used in many EC images
         ],
         ECController.NUVOTON: [
             b"NPCE",
@@ -140,10 +143,23 @@ class ECPatcher:
 
     KBC_MARKERS = [b"KBC_CONFIG", b"KBCDebug", b"KBCSecurity"]
 
+    # Intel ME/BIOS structures that begin a region but are never EC firmware
+    NON_EC_HEADERS = (b"$CPD", b"$FPT", b"$MN2", b"$BPDT")
+
+    # Caps the marker-scoring work on dense input (see _scored_anchors)
+    MAX_ANCHOR_CANDIDATES = 20000
+
+    # Real EC chip sizes are an assumption (no public external-chip table was found).
+    # 192/384/1024 KB parts are not auto-detected; pass an explicit size for them.
+    STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
+    MAX_EC = 0x80000
+    SEARCH = MAX_EC + 0x10000
+
     def __init__(self, patches_path: Optional[str] = None):
         self.patches_path = patches_path or self._default_patches_path()
         self._patches: list[ECPatch] = []
         self.load_error: Optional[str] = None
+        self.registry_damaged = False
         self._load_patches()
 
     def _default_patches_path(self) -> str:
@@ -157,27 +173,40 @@ class ECPatcher:
         HIGHEST offset wins because 2-chip designs put the EC in the top of
         the dump. A real EC image shows several distinct family/behavioral
         markers inside a 128KB window; noise shows one lonely short hit.
-        """
-        candidates = []
-        for sig_group in self.CONTROLLER_SIGNATURES.values():
-            for sig in sig_group:
-                idx = 0
-                while True:
-                    idx = data.find(sig, idx)
-                    if idx < 0:
-                        break
-                    candidates.append(idx)
-                    idx += 1
-        if not candidates:
-            return []
 
+        Each marker's hit positions are collected once and searched with
+        bisect, so scoring costs O(candidates x markers x log hits). When the
+        candidate list is still larger than MAX_ANCHOR_CANDIDATES (dense short
+        markers), only the first hit in each 4KB block is scored.
+        """
         families = list(self.CONTROLLER_SIGNATURES.values())
         all_markers = [s for fam in families for s in fam] + self.KBC_MARKERS
+        positions = []
+        for marker in all_markers:
+            hits = []
+            idx = data.find(marker)
+            while idx >= 0:
+                hits.append(idx)
+                idx = data.find(marker, idx + 1)
+            positions.append(hits)
+        candidates = sorted({p for hits in positions for p in hits})
+        if not candidates:
+            return []
+        if len(candidates) > self.MAX_ANCHOR_CANDIDATES:
+            first_per_block = {}
+            for off in candidates:
+                first_per_block.setdefault(off // 0x1000, off)
+            candidates = sorted(first_per_block.values())
+
         radius = 0x20000
         scored = []
         for off in candidates:
             lo, hi = max(0, off - radius), min(len(data), off + radius)
-            distinct = sum(1 for m in all_markers if m in data[lo:hi])
+            distinct = 0
+            for marker, hits in zip(all_markers, positions):
+                i = bisect.bisect_left(hits, lo)
+                if i < len(hits) and hits[i] + len(marker) <= hi:
+                    distinct += 1
             scored.append((distinct, off))
         scored.sort(reverse=True)
         return scored
@@ -210,22 +239,31 @@ class ECPatcher:
         head_hits = sum(1 for s in all_markers if s in head)
         # a genuine EC image carries several markers; a BIOS head almost
         # never accumulates that many inside its first 128KB
-        if head_hits >= 3:
+        if head_hits >= 3 and not self._rejected_start(data, 0):
             return 0, len(data)
 
-        # ---- find candidate signature offsets ----------------------------
+        return self._first_region(data, self.STD_EC_SIZES, strict=True)
+
+    def _first_region(
+        self, data: bytes, sizes: tuple[int, ...], strict: bool = True
+    ) -> tuple[int, int]:
+        """The one (start, size) the content supports, over the marker clusters.
+
+        This is the single region rule behind find_ec_region, find_ec_region_end
+        and end-anchored resolution, so the three cannot disagree on one file.
+        ``sizes`` is the set of capacities to try; a size-only request passes one.
+        ``strict`` also requires the start to sit on observed padding (the rule
+        auto-detection uses). Without it, only the end and the marker cluster
+        are checked, which is what an end-anchored request on an unpadded
+        region needs.
+        """
         scored = self._scored_anchors(data)
         if not scored:
             return -1, -1
 
-        MAX_EC = 0x80000  # 512KB covers every known EC image
-        # Real EC chips are 128/256/512KB, and a manufacturer embeds the EC
-        # firmware as exactly one chip-sized block delimited by erased flash.
-        STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
-
         # Search a little beyond MAX_EC so a genuine 512KB blob is
         # distinguishable from one where the walk simply hit the search limit.
-        SEARCH = MAX_EC + 0x10000
+        SEARCH = self.SEARCH
 
         # Probe every strong cluster and accept a region only when the
         # content facts single out exactly ONE (start, size) pair:
@@ -254,18 +292,20 @@ class ECPatcher:
             ends = self._observed_ends(data, blob_end)
             if not ends:
                 continue  # walk hit the search ceiling: end not observable
-            if not (blob_start > 0 and self._bounded_below(data, blob_start)):
+            if strict and not (blob_start > 0 and self._bounded_below(data, blob_start)):
                 continue  # cluster not bounded below by observed padding
             hits = set()
             for end in ends:
-                for p in STD_EC_SIZES:
+                for p in sizes:
                     start = end - p
                     if start < 0 or start < blob_start:
                         continue  # would cross the measured boundary
                     if not (start <= anchor < end):
                         continue  # marker cluster must sit inside the region
-                    if not self._sits_on_padding(data, start):
+                    if strict and not self._sits_on_padding(data, start):
                         continue  # computed start with no boundary under it
+                    if self._rejected_start(data, start):
+                        continue  # not the start of any EC image
                     hits.add((start, p))
             if len(hits) == 1:
                 return next(iter(hits))
@@ -281,36 +321,36 @@ class ECPatcher:
         # let the user state the region explicitly.
         return -1, -1
 
+    @classmethod
+    def _rejected_start(cls, data: bytes, start: int) -> bool:
+        """True when the bytes at ``start`` cannot begin an EC image.
+
+        Intel ME/BIOS structures, blank starts and a repeated leading word are
+        not EC firmware (no EC image layout is known to start that way).
+        """
+        head = data[start : start + 8]
+        if len(head) < 8:
+            return True
+        if head == bytes(8):
+            return True
+        if head[:4] == head[4:8]:
+            return True
+        return any(data.startswith(h, start) for h in cls.NON_EC_HEADERS)
+
     def find_ec_region_end(self, data: bytes) -> int:
         """Return the block-observed end of the EC blob, or -1 if unknown.
 
-        The end is the most reliable fact available: it is either the end of
-        the dump or the erased (0xFF) flash that follows the region. An end
-        that merely coincides with the walk's search ceiling is not derivable
-        from content and reports -1. (End-anchored resolution uses
-        ``_end_anchored_start``, which considers every real end of the
-        region, including where an internal FF tail runs out.)
+        This is the end of the region ``find_ec_region`` reports, so the two
+        never disagree. An end that merely coincides with the walk's search
+        ceiling is not derivable from content and reports -1.
         """
         if not data:
             return -1
 
-        scored = self._scored_anchors(data)
-        if not scored:
+        offset, size = self.find_ec_region(data)
+        if offset < 0:
             return -1
-
-        # Try the strongest clusters first and accept the first end that is an
-        # OBSERVED boundary (padding or EOF). An end that merely coincides with
-        # the search ceiling is not derivable from content, and end-anchored
-        # extraction would slice the wrong bytes from a known-wrong position.
-        for _distinct, anchor in scored[:32]:
-            # Headroom beyond MAX_EC: a genuine 512KB region whose anchor sits
-            # near its start must not look like "the search limit was reached".
-            _blob_start, blob_end = self._blob_bounds(data, anchor, 0x90000)
-            if blob_end <= anchor:
-                blob_end = anchor + 1
-            if self._bounded_above(data, blob_end):
-                return blob_end
-        return -1
+        return offset + size
 
     @staticmethod
     def _is_pad_block(block: bytes) -> bool:
@@ -522,10 +562,6 @@ class ECPatcher:
             end -= 1
         return end
 
-    def _strip_ff_run(self, data, start, end):
-        # placeholder kept for API compatibility
-        return self._strip_ff_tail(data, start, end)
-
     def _end_anchored_start(self, data: bytes, size: int) -> int:
         """Locate the start of a ``size``-byte region via its observed end(s).
 
@@ -539,30 +575,11 @@ class ECPatcher:
         """
         if not data or size <= 0:
             return -1
-        scored = self._scored_anchors(data)
-        if not scored:
-            return -1
-        # Headroom beyond MAX_EC: a genuine 512KB region whose anchor sits
-        # near its start must not look like "the search limit was reached".
-        SEARCH = 0x90000
-        for _distinct, anchor in scored[:32]:
-            blob_start, blob_end = self._blob_bounds(data, anchor, SEARCH)
-            if blob_end <= anchor:
-                blob_end = anchor + 1
-            ends = self._observed_ends(data, blob_end)
-            if not ends:
-                continue  # walk hit the search ceiling: end not observable
-            hits = set()
-            for end in ends:
-                start = end - size
-                if start < 0 or start < blob_start:
-                    continue  # would cross the measured boundary
-                if not (start <= anchor < end):
-                    continue  # marker cluster must sit inside the region
-                hits.add(start)
-            if len(hits) == 1:
-                return next(iter(hits))
-        return -1
+        offset, _size = self._first_region(data, (size,), strict=True)
+        if offset >= 0:
+            return offset
+        offset, _size = self._first_region(data, (size,), strict=False)
+        return offset
 
     def resolve_region(
         self,
@@ -581,14 +598,25 @@ class ECPatcher:
             that corroborates it (measured start, contained marker cluster).
           * neither                 -> auto-detection.
         """
-        size = int(size) if size else None
+        try:
+            offset = None if offset is None else int(offset)
+            size = int(size) if size else None
+        except (TypeError, ValueError):
+            return -1, -1, "The manual offset and size must be whole numbers of bytes."
         if offset is not None and offset < 0:
             return -1, -1, "The manual offset must be zero or more."
+        if size is not None and size < 0:
+            return -1, -1, "The region size must be a positive number of bytes."
+        if size is not None and size > len(data):
+            return (
+                -1,
+                -1,
+                (f"Region 0x{size:X} runs past the end of the file (0x{len(data):X} bytes)."),
+            )
         if offset is not None and not size:
             return -1, -1, "A manual offset needs a region size as well."
 
-        if offset is not None and offset >= 0 and size:
-            offset = int(offset)
+        if offset is not None and size:
             if offset + size > len(data):
                 return (
                     -1,
@@ -638,7 +666,7 @@ class ECPatcher:
         ec_data = data[offset : offset + size]
         analysis = ECAnalysis(found=True, offset=offset, size=size, raw=ec_data)
 
-        analysis.controller = self._detect_controller(ec_data)
+        analysis.controller, analysis.controller_tokens = self._controller_evidence(ec_data)
         analysis.controller_name = analysis.controller.name
         analysis.magic = ec_data[:8].hex()
 
@@ -664,15 +692,27 @@ class ECPatcher:
         analysis.checksum_valid = self._check_xor_checksum(ec_data)
         return analysis
 
-    def _detect_controller(self, ec_data: bytes) -> ECController:
+    def _controller_evidence(self, ec_data: bytes) -> tuple[ECController, list[str]]:
+        """The controller family and the tokens that support it.
+
+        A label needs at least two distinct vendor strings of three or more
+        bytes that are not pure digits; a lone token is not evidence.
+        A tie between families is reported as UNKNOWN.
+        """
         best = ECController.UNKNOWN
-        best_score = 0
+        best_tokens: list[bytes] = []
+        tie = False
         for controller, sigs in self.CONTROLLER_SIGNATURES.items():
-            score = sum(1 for s in sigs if s in ec_data)
-            if score > best_score:
-                best_score = score
-                best = controller
-        return best if best_score else ECController.UNKNOWN
+            tokens = [s for s in sigs if len(s) >= 3 and not s.isdigit() and s in ec_data]
+            if len(tokens) < 2:
+                continue
+            if len(tokens) > len(best_tokens):
+                best, best_tokens, tie = controller, tokens, False
+            elif len(tokens) == len(best_tokens):
+                tie = True
+        if tie:
+            return ECController.UNKNOWN, []
+        return best, [t.decode("latin-1") for t in best_tokens]
 
     def _check_xor_checksum(self, ec_data: bytes) -> Optional[bool]:
         """Many older ITE/Nuvoton EC images store an XOR checksum in the last byte."""
@@ -683,6 +723,22 @@ class ECPatcher:
             xor ^= b
         return xor == ec_data[-1]
 
+    @staticmethod
+    def _controller_family(name: str) -> str:
+        """Map a registry controller string (ITE4532, NPCE, ...) to its ECController name."""
+        upper = name.upper()
+        for prefix, family in (
+            ("ITE", "ITE"),
+            ("NPC", "NUVOTON"),
+            ("NUVOTON", "NUVOTON"),
+            ("MEC", "MEC"),
+            ("ENE", "ENE"),
+            ("KB90", "ENE"),
+        ):
+            if upper.startswith(prefix):
+                return family
+        return upper
+
     def list_patches(
         self, vendor: Optional[str] = None, controller: Optional[ECController] = None
     ) -> list[ECPatch]:
@@ -690,7 +746,11 @@ class ECPatcher:
         for p in self._patches:
             if vendor and p.vendor.lower() != vendor.lower():
                 continue
-            if controller and p.controller and controller.name.lower() != p.controller.lower():
+            if (
+                controller
+                and p.controller
+                and self._controller_family(p.controller) != controller.name
+            ):
                 continue
             result.append(p)
         return result
@@ -701,15 +761,39 @@ class ECPatcher:
                 return p
         return None
 
+    @staticmethod
+    def _read_file(path: str) -> tuple[Optional[bytes], str]:
+        """(contents, "") for a readable regular file, else (None, reason)."""
+        if not os.path.exists(path):
+            return None, f"file not found: {path}"
+        if not os.path.isfile(path):
+            return None, f"not a file: {path}"
+        try:
+            with open(path, "rb") as f:
+                return f.read(), ""
+        except OSError as exc:
+            return None, f"cannot read {path}: {exc.strerror or exc}"
+
+    @staticmethod
+    def _pattern_offsets(data: bytes, signature: bytes) -> list[int]:
+        offsets = []
+        pos = data.find(signature)
+        while pos >= 0:
+            offsets.append(pos)
+            pos = data.find(signature, pos + 1)
+        return offsets
+
     def scan_patch_sites(self, input_path: str) -> list[dict]:
         """Advisory scan: which EC patches' signatures are present and where.
 
         Performs NO writes and produces no output file — the safety pass that
         also shows which patches are verified versus advisory-only before
-        anyone considers applying them.
+        anyone considers applying them. Raises ValueError for a missing,
+        non-file or unreadable path.
         """
-        with open(input_path, "rb") as f:
-            data = f.read()
+        data, error = self._read_file(input_path)
+        if error:
+            raise ValueError(error)
         out = []
         for patch in self._patches:
             try:
@@ -725,14 +809,7 @@ class ECPatcher:
                     }
                 )
                 continue
-            offsets = []
-            pos = 0
-            while True:
-                i = data.find(signature, pos)
-                if i < 0:
-                    break
-                offsets.append(i)
-                pos = i + 1
+            offsets = self._pattern_offsets(data, signature)
             out.append(
                 {
                     "key": patch.key,
@@ -752,6 +829,7 @@ class ECPatcher:
         patch_key: str,
         output_path: Optional[str] = None,
         require_verified: bool = True,
+        overwrite: bool = False,
     ) -> ECPatchResult:
         patch = self.get_patch(patch_key)
         if patch is None:
@@ -770,6 +848,12 @@ class ECPatcher:
         except ValueError as e:
             return ECPatchResult(status=ECStatus.ERROR, patch=patch, message=f"Invalid hex: {e}")
 
+        if not signature:
+            return ECPatchResult(
+                status=ECStatus.ERROR,
+                patch=patch,
+                message="The patch has an empty signature; nothing was written.",
+            )
         if len(signature) != len(replacement):
             return ECPatchResult(
                 status=ECStatus.ERROR,
@@ -777,24 +861,63 @@ class ECPatcher:
                 message=f"Signature ({len(signature)}) and patch ({len(replacement)}) sizes differ",
             )
 
-        with open(input_path, "rb") as f:
-            data = bytearray(f.read())
+        if output_path is None:
+            output_path = os.path.splitext(input_path)[0] + "_ecpatched.bin"
+        try:
+            ensure_distinct(input_path, output_path)
+        except SameFileError as exc:
+            return ECPatchResult(status=ECStatus.ERROR, patch=patch, message=str(exc))
+        if os.path.exists(output_path) and not overwrite:
+            return ECPatchResult(
+                status=ECStatus.ERROR,
+                patch=patch,
+                message=(
+                    f"{output_path} already exists. Pass overwrite=True (CLI: --overwrite) "
+                    "to replace it, or choose another output path. Nothing was written."
+                ),
+            )
 
-        offset = self._find_offset_for_patch(data, patch)
-        if offset < 0:
+        raw, error = self._read_file(input_path)
+        if error:
+            return ECPatchResult(status=ECStatus.ERROR, patch=patch, message=error)
+        data = bytearray(raw)
+
+        matches = self._pattern_offsets(data, signature)
+        if not matches:
             return ECPatchResult(
                 status=ECStatus.PATTERN_MISSING,
                 patch=patch,
                 message="Signature not found in image",
             )
-
+        if len(matches) > 1:
+            return ECPatchResult(
+                status=ECStatus.ERROR,
+                patch=patch,
+                message=(
+                    f"The signature matches {len(matches)} places in the image "
+                    "(" + ", ".join(f"0x{m:X}" for m in matches[:8]) + "); "
+                    "refusing to guess which one to patch. Nothing was written."
+                ),
+            )
+        offset = matches[0]
         data[offset : offset + len(replacement)] = replacement
 
-        if output_path is None:
-            output_path = input_path.rsplit(".", 1)[0] + "_ecpatched.bin"
-
-        with open(output_path, "wb") as f:
-            f.write(data)
+        try:
+            write_file_atomic(output_path, bytes(data))
+        except OSError as exc:
+            return ECPatchResult(
+                status=ECStatus.ERROR,
+                patch=patch,
+                message=f"Could not write {output_path}: {exc.strerror or exc}",
+            )
+        written, error = self._read_file(output_path)
+        if error or written != bytes(data):
+            return ECPatchResult(
+                status=ECStatus.ERROR,
+                patch=patch,
+                output_path=output_path,
+                message=f"The written file did not match the patched image: {output_path}",
+            )
 
         return ECPatchResult(
             status=ECStatus.SUCCESS,
@@ -804,32 +927,36 @@ class ECPatcher:
             message=f"Patch '{patch.key}' applied at 0x{offset:X}",
         )
 
-    def _find_offset_for_patch(self, data: bytes, patch: ECPatch) -> int:
-        try:
-            signature = bytes.fromhex(patch.signature_hex)
-        except ValueError:
-            return -1
-        return data.find(signature)
-
     def extract_ec(
         self,
         input_path: str,
         output_path: str,
         offset: Optional[int] = None,
         size: Optional[int] = None,
+        overwrite: bool = False,
     ) -> ECPatchResult:
         """Extract the EC region to ``output_path``.
 
         Pass ``offset``/``size`` to override auto-detection. The written file is
         ALWAYS exactly ``size`` bytes, so it can be flashed straight onto a chip
-        of that capacity.
+        of that capacity. An existing ``output_path`` is replaced only with
+        ``overwrite=True``.
         """
         try:
             ensure_distinct(input_path, output_path)
         except SameFileError as exc:
             return ECPatchResult(status=ECStatus.ERROR, message=str(exc))
-        with open(input_path, "rb") as f:
-            data = f.read()
+        if os.path.exists(output_path) and not overwrite:
+            return ECPatchResult(
+                status=ECStatus.ERROR,
+                message=(
+                    f"{output_path} already exists. Pass overwrite=True (CLI: --overwrite) "
+                    "to replace it, or choose another output path. No bytes were written."
+                ),
+            )
+        data, error = self._read_file(input_path)
+        if error:
+            return ECPatchResult(status=ECStatus.ERROR, message=error)
 
         offset, size, error = self.resolve_region(data, offset, size)
         if error:
@@ -838,21 +965,29 @@ class ECPatcher:
             return ECPatchResult(
                 status=ECStatus.NOT_FOUND,
                 message=(
-                    "Could not delimit the EC region from the dump alone. Tick "
-                    "'Manual region override' and select your chip size (e.g. "
-                    "0x40000 for a 256KB IT8218VG) -- leave the offset blank to "
-                    "anchor the region at its detected end. No bytes were "
-                    "extracted."
+                    "Could not delimit the EC region from the dump alone. Set a manual "
+                    "region: tick 'Manual region override' in the GUI, or pass --offset "
+                    "and --size on the command line, with the chip size (for example "
+                    "0x40000 for a 256 KB part). Leave the offset out to anchor the region "
+                    "at its detected end. No bytes were extracted."
                 ),
             )
 
-        with open(output_path, "wb") as f:
-            f.write(data[offset : offset + size])
+        try:
+            write_file_atomic(output_path, data[offset : offset + size])
+        except OSError as exc:
+            return ECPatchResult(
+                status=ECStatus.ERROR,
+                message=f"Could not write {output_path}: {exc.strerror or exc}",
+            )
         return ECPatchResult(
             status=ECStatus.SUCCESS,
             offset=offset,
             output_path=output_path,
-            message=f"EC firmware extracted: offset 0x{offset:X}, {size} bytes ({size // 1024} KB)",
+            message=(
+                f"EC firmware extracted: offset 0x{offset:X}, {size} bytes ({size // 1024} KB). "
+                "The region is not checked against an EC image format; confirm it before flashing."
+            ),
         )
 
     def _load_patches(self) -> None:
@@ -860,11 +995,24 @@ class ECPatcher:
             self.load_error = f"EC patch registry not found: {self.patches_path}"
             return
         try:
-            with open(self.patches_path, "r") as f:
+            with open(self.patches_path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            self.registry_damaged = True
+            self.load_error = (
+                f"EC patch registry is damaged and was not loaded: {self.patches_path}"
+            )
             return
-        for item in raw if isinstance(raw, list) else raw.get("patches", []):
+        entries = (
+            raw if isinstance(raw, list) else raw.get("patches") if isinstance(raw, dict) else None
+        )
+        if not isinstance(entries, list):
+            self.registry_damaged = True
+            self.load_error = f"EC patch registry has an unexpected layout: {self.patches_path}"
+            return
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
             self._patches.append(
                 ECPatch(
                     key=item.get("key", ""),
@@ -875,14 +1023,30 @@ class ECPatcher:
                     signature_hex=item.get("signature_hex", ""),
                     patch_hex=item.get("patch_hex", ""),
                     offset_hint=item.get("offset_hint", ""),
-                    verified=item.get("verified", False),
+                    verified=item.get("verified") is True,
                     source=item.get("source", ""),
                 )
             )
 
     def install_patch(self, patch: ECPatch) -> None:
-        self._patches.append(patch)
-        os.makedirs(os.path.dirname(self.patches_path), exist_ok=True)
+        """Add ``patch`` to the registry file. Refuses a damaged file so its contents survive."""
+        if self.registry_damaged:
+            raise ValueError(
+                f"The EC patch registry is damaged; move or repair it first: {self.patches_path}"
+            )
+        if not patch.key:
+            raise ValueError("A patch needs a key.")
+        if self.get_patch(patch.key) is not None:
+            raise ValueError(f"A patch with key '{patch.key}' already exists.")
+        try:
+            signature = bytes.fromhex(patch.signature_hex)
+            replacement = bytes.fromhex(patch.patch_hex)
+        except ValueError as exc:
+            raise ValueError(f"Patch hex is invalid: {exc}") from exc
+        if not signature or len(signature) != len(replacement):
+            raise ValueError(
+                "Patch signature and replacement must be non-empty and the same length."
+            )
         entries = [
             {
                 "key": p.key,
@@ -896,7 +1060,12 @@ class ECPatcher:
                 "verified": p.verified,
                 "source": p.source,
             }
-            for p in self._patches
+            for p in self._patches + [patch]
         ]
-        with open(self.patches_path, "w") as f:
-            json.dump({"patches": entries}, f, indent=2)
+        directory = os.path.dirname(self.patches_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        write_file_atomic(
+            self.patches_path, json.dumps({"patches": entries}, indent=2).encode("utf-8")
+        )
+        self._patches.append(patch)

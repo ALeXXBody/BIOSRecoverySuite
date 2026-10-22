@@ -26,9 +26,12 @@ def _smbios_fixture():
 
     eps = bytearray(0x1F)
     eps[0:4] = b"_SM_"
+    eps[5] = 0x1F
+    eps[0x10:0x15] = b"_DMI_"
     struct.pack_into("<H", eps, 0x16, len(table))
     struct.pack_into("<I", eps, 0x18, 0x0100)
-    # (fixture does not require a valid EPS checksum)
+    eps[0x15] = (0x100 - sum(eps[0x10:0x1F]) % 0x100) % 0x100
+    eps[4] = (0x100 - sum(eps) % 0x100) % 0x100
 
     blob = bytearray(b"\xff" * 0x2000)
     blob[0 : len(eps)] = eps

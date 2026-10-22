@@ -41,6 +41,7 @@ class DMIInfo:
     chassis_serial_number: str = ""
     chassis_asset_tag: str = ""
     processor_family: str = ""
+    processor_socket: str = ""
     processor_manufacturer: str = ""
     processor_version: str = ""
     processor_serial: str = ""
@@ -84,10 +85,11 @@ class DMIExtractor:
         found = find_table(data)
         if found is None:
             return None
-        _anchor, start, length = found
-        return self._parse_smbios(data[start : start + length])
+        anchor, start, length = found
+        version = _smbios_version(data, anchor, start)
+        return self._parse_smbios(data[start : start + length], version)
 
-    def _parse_smbios(self, data: bytes) -> DMIInfo:
+    def _parse_smbios(self, data: bytes, version: Optional[int] = None) -> DMIInfo:
         info = DMIInfo(raw_smbios=data)
         offset = 0
 
@@ -118,7 +120,7 @@ class DMIExtractor:
             if struct_type == 0:
                 self._parse_bios_info(struct_data, strings, info)
             elif struct_type == 1:
-                self._parse_system_info(struct_data, strings, info)
+                self._parse_system_info(struct_data, strings, info, version)
             elif struct_type == 2:
                 self._parse_baseboard_info(struct_data, strings, info)
             elif struct_type == 3:
@@ -152,64 +154,81 @@ class DMIExtractor:
                 current += bytes([data[i]])
         return strings
 
+    @staticmethod
+    def _field(data: bytes, strings: list[str], offset: int) -> str:
+        """The string named by the index byte at offset (0 means none, past the end is bad)."""
+        if offset >= len(data):
+            return ""
+        idx = data[offset]
+        if idx == 0:
+            return ""
+        if idx > len(strings):
+            return "<bad index>"
+        return strings[idx - 1]
+
     def _parse_bios_info(self, data: bytes, strings: list[str], info: DMIInfo) -> None:
         if len(data) >= 0x12:
-            info.bios_vendor = strings[0] if len(strings) > 0 else ""
-            info.bios_version = strings[1] if len(strings) > 1 else ""
-            info.bios_release_date = strings[2] if len(strings) > 2 else ""
+            info.bios_vendor = self._field(data, strings, 0x04)
+            info.bios_version = self._field(data, strings, 0x05)
+            info.bios_release_date = self._field(data, strings, 0x08)
 
-    def _parse_system_info(self, data: bytes, strings: list[str], info: DMIInfo) -> None:
+    def _parse_system_info(
+        self,
+        data: bytes,
+        strings: list[str],
+        info: DMIInfo,
+        version: Optional[int] = None,
+    ) -> None:
+        info.system_manufacturer = self._field(data, strings, 0x04)
+        info.system_product_name = self._field(data, strings, 0x05)
+        info.system_serial_number = self._field(data, strings, 0x07)
         if len(data) >= 0x19:
-            info.system_manufacturer = strings[0] if len(strings) > 0 else ""
-            info.system_product_name = strings[1] if len(strings) > 1 else ""
-            info.system_serial_number = strings[2] if len(strings) > 2 else ""
-            if len(data) >= 0x19:
-                uuid_bytes = data[8:24]
-                info.system_uuid = self._format_uuid(uuid_bytes)
+            info.system_uuid = self._format_uuid(data[8:24], version)
 
     def _parse_baseboard_info(self, data: bytes, strings: list[str], info: DMIInfo) -> None:
-        if len(data) >= 0x08:
-            info.board_manufacturer = strings[0] if len(strings) > 0 else ""
-            info.board_product_name = strings[1] if len(strings) > 1 else ""
-            info.board_serial_number = strings[3] if len(strings) > 3 else ""
-            info.board_asset_tag = strings[4] if len(strings) > 4 else ""
+        info.board_manufacturer = self._field(data, strings, 0x04)
+        info.board_product_name = self._field(data, strings, 0x05)
+        info.board_serial_number = self._field(data, strings, 0x07)
+        info.board_asset_tag = self._field(data, strings, 0x08)
 
     def _parse_chassis_info(self, data: bytes, strings: list[str], info: DMIInfo) -> None:
-        if len(data) >= 0x09:
-            info.chassis_manufacturer = strings[0] if len(strings) > 0 else ""
-            info.chassis_serial_number = strings[2] if len(strings) > 2 else ""
-            info.chassis_asset_tag = strings[3] if len(strings) > 3 else ""
+        info.chassis_manufacturer = self._field(data, strings, 0x04)
+        info.chassis_serial_number = self._field(data, strings, 0x07)
+        info.chassis_asset_tag = self._field(data, strings, 0x08)
 
     def _parse_processor_info(self, data: bytes, strings: list[str], info: DMIInfo) -> None:
-        if len(data) >= 0x20:
-            info.processor_socket = strings[0] if len(strings) > 0 else ""
-            info.processor_manufacturer = strings[1] if len(strings) > 1 else ""
-            info.processor_version = strings[2] if len(strings) > 2 else ""
-            info.processor_serial = strings[3] if len(strings) > 3 else ""
-            info.processor_asset_tag = strings[4] if len(strings) > 4 else ""
+        info.processor_socket = self._field(data, strings, 0x04)
+        info.processor_manufacturer = self._field(data, strings, 0x07)
+        info.processor_version = self._field(data, strings, 0x10)
+        info.processor_serial = self._field(data, strings, 0x20)
+        info.processor_asset_tag = self._field(data, strings, 0x21)
 
     def _parse_memory_device(self, data: bytes, strings: list[str], info: DMIInfo) -> None:
         mem_device = {
-            "device_locator": strings[0] if len(strings) > 0 else "",
-            "bank_locator": strings[1] if len(strings) > 1 else "",
-            "manufacturer": strings[2] if len(strings) > 2 else "",
-            "serial_number": strings[3] if len(strings) > 3 else "",
-            "asset_tag": strings[4] if len(strings) > 4 else "",
-            "part_number": strings[5] if len(strings) > 5 else "",
+            "device_locator": self._field(data, strings, 0x10),
+            "bank_locator": self._field(data, strings, 0x11),
+            "manufacturer": self._field(data, strings, 0x17),
+            "serial_number": self._field(data, strings, 0x18),
+            "asset_tag": self._field(data, strings, 0x19),
+            "part_number": self._field(data, strings, 0x1A),
         }
         info.memory_devices.append(mem_device)
 
-    def _format_uuid(self, uuid_bytes: bytes) -> str:
+    def _format_uuid(self, uuid_bytes: bytes, version: Optional[int] = None) -> str:
+        """UUID text as dmidecode prints it. Before SMBIOS 2.6 the bytes are not swapped."""
         if len(uuid_bytes) < 16:
             return ""
-        return (
-            f"{uuid_bytes[3]:02X}{uuid_bytes[2]:02X}{uuid_bytes[1]:02X}{uuid_bytes[0]:02X}-"
-            f"{uuid_bytes[5]:02X}{uuid_bytes[4]:02X}-"
-            f"{uuid_bytes[7]:02X}{uuid_bytes[6]:02X}-"
-            f"{uuid_bytes[8]:02X}{uuid_bytes[9]:02X}-"
-            f"{uuid_bytes[10]:02X}{uuid_bytes[11]:02X}{uuid_bytes[12]:02X}"
-            f"{uuid_bytes[13]:02X}{uuid_bytes[14]:02X}{uuid_bytes[15]:02X}"
-        )
+        if uuid_bytes == b"\xff" * 16:
+            return "Not Present"
+        if uuid_bytes == b"\x00" * 16:
+            return "Not Settable"
+        b = uuid_bytes
+        if version is not None and version < 0x0206:
+            ordered = b
+        else:
+            ordered = bytes([b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6]]) + b[8:16]
+        h = ordered.hex().upper()
+        return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
     def search_dmi_in_image(self, file_path: str, pattern: str = "") -> list[dict]:
         with open(file_path, "rb") as f:
@@ -238,6 +257,15 @@ class DMIExtractor:
                 offset = idx + 1
 
         return results
+
+
+def _smbios_version(data: bytes, anchor: int, start: int) -> Optional[int]:
+    """SMBIOS version (0xMMmm) from the entry point, or None when the table was scanned."""
+    if anchor == start:
+        return None
+    if data[anchor : anchor + 5] == b"_SM3_":
+        return (data[anchor + 7] << 8) | data[anchor + 8]
+    return (data[anchor + 6] << 8) | data[anchor + 7]
 
 
 def _printable_text(blob: bytes, limit: int = 160) -> str:

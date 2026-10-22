@@ -59,14 +59,14 @@ class HPUnlocker:
         }
         cred = data.find(_USER_CRED)
         if cred >= 0:
-            out["style"] = "new"
             out["usercred_offset"] = cred
-            return out
         entries = _vss_entries(data)
         out["vss_entries"] = len(entries)
         out["vss_offsets"] = [start for start, _ in entries]
         if out["vss_entries"]:
             out["style"] = "old"
+        elif cred >= 0:
+            out["style"] = "new"
         return out
 
     def unlock(self, image_path: str, output_path: str) -> dict:
@@ -88,8 +88,17 @@ class HPUnlocker:
             original = f.read()
         data = bytearray(original)
 
+        # $VSS is checked first, as in the public reference; UserCred is the fallback.
+        entries = _vss_entries(original)
         loc = data.find(_USER_CRED)
-        if loc >= 0:
+        if entries:
+            report["style"] = "old"
+            for start, size in entries:
+                data[start : start + size] = b"\xff" * size
+            report["cleared"] = len(entries)
+            report["success"] = True
+            report["messages"].append(f"Cleared {report['cleared']} $VSS/BiosUser entr(ies)")
+        elif loc >= 0:
             report["style"] = "new"
             # credential block: 100 bytes after the structure header;
             # flag bytes 10..13 of the block are set to 0xFF, rest to 0x00
@@ -102,17 +111,9 @@ class HPUnlocker:
             report["messages"].append(f"UserCred credential block cleared at 0x{loc:X}")
         else:
             report["style"] = "old"
-            entries = _vss_entries(original)
-            for start, size in entries:
-                data[start : start + size] = b"\xff" * size
-            report["cleared"] = len(entries)
-            if report["cleared"]:
-                report["success"] = True
-                report["messages"].append(f"Cleared {report['cleared']} $VSS/BiosUser entr(ies)")
-            else:
-                report["messages"].append(
-                    "ERROR: unable to find HP BIOS password - is this a correct HP BIOS image?"
-                )
+            report["messages"].append(
+                "ERROR: unable to find HP BIOS password - is this a correct HP BIOS image?"
+            )
 
         if bytes(data) == original:
             report["messages"].append("Nothing was written: the image was already clear")

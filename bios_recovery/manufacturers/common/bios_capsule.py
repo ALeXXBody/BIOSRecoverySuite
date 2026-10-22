@@ -27,6 +27,8 @@ import hashlib
 import struct
 from dataclasses import dataclass
 
+from bios_recovery.core.verified_write import write_verified
+
 APTIO_SIGNED_CAPSULE_GUID_LE = bytes.fromhex("8ba63c4a2377fb48803d578cc1fec44d")
 APTIO_UNSIGNED_CAPSULE_GUID_LE = bytes.fromhex("90bbee140a89db43aed15d3c4588a418")
 APTIO_CAPSULE_GUID_LE = APTIO_SIGNED_CAPSULE_GUID_LE
@@ -79,6 +81,10 @@ def detect_capsule(data: bytes) -> CapsuleInfo:
         )
         return CapsuleInfo(success=False, header_size=rom_image_offset,
                            size_field=size_field, messages=messages)
+    if rom_image_offset == size_field:
+        messages.append("AMI capsule contains no flash image (empty payload)")
+        return CapsuleInfo(success=False, header_size=rom_image_offset,
+                           size_field=size_field, messages=messages)
     if size_field < len(data):
         messages.append(
             f"{len(data) - size_field:#x} bytes follow the capsule image and are ignored"
@@ -112,6 +118,15 @@ def extract_flashable_image(
     input_path: str, output_path: str | None = None
 ) -> CapsuleInfo:
     """Strip the Aptio capsule header and write the bare flash image."""
+    from bios_recovery.core.safety import SameFileError, ensure_distinct
+
+    if output_path is None:
+        output_path = input_path.rsplit(".", 1)[0] + "_flashable.bin"
+    try:
+        ensure_distinct(input_path, output_path)
+    except SameFileError as exc:
+        return CapsuleInfo(success=False, messages=[str(exc)])
+
     with open(input_path, "rb") as f:
         data = f.read()
 
@@ -120,12 +135,7 @@ def extract_flashable_image(
         return info
 
     image = data[info.header_size:info.image_end]
-
-    if output_path is None:
-        output_path = input_path.rsplit(".", 1)[0] + "_flashable.bin"
-
-    with open(output_path, "wb") as f:
-        f.write(image)
+    write_verified(output_path, image)
 
     info.output_path = output_path
     return info
@@ -163,11 +173,11 @@ def restore_nvar_from_dump(
       - The NVRAM FVs hold NVAR records; the capsule's copies lack machine
         records (_DMI etc.).
 
-    With identical FV boundaries, the merge:
-      1. copies the dump's NVRAM FVs (bases >= 0x1000000 with matching bounds),
-      2. restores FVs the capsule omitted entirely (when they fit),
-      3. replaces capsule NVAR records whose identity key also exists in the
-         dump (byte-identical record swap when sizes match).
+    The merge copies a dump volume at or above 0x1000000 only when the capsule has a
+    volume with the same bounds, or has no volume there and the range is erased.
+    Any other dump volume is skipped with a message. The output is written only when
+    bytes change and every volume of the capsule still parses afterwards. Variable
+    records are not rewritten; a variable survives only if its dump volume is copied.
     """
     from bios_recovery.core.safety import SameFileError, ensure_distinct
 
@@ -180,12 +190,14 @@ def restore_nvar_from_dump(
         image = bytearray(f.read())
     with open(dump_path, "rb") as f:
         dump = f.read()
+    original = bytes(image)
 
     info = CapsuleInfo(success=True, messages=[])
 
     # --- 1) Region-level restore of NVRAM / machine FVs ---------------------
     dump_fvs = _fv_list(dump)
-    cap_set = set(_fv_list(bytes(image)))
+    cap_fvs = _fv_list(original)
+    cap_set = set(cap_fvs)
     written: list[tuple[int, int]] = []
 
     def _overlaps(base: int, flen: int) -> bool:
@@ -202,13 +214,22 @@ def restore_nvar_from_dump(
             written.append((base, flen))
             info.messages.append(f"Restored NVRAM FV @0x{base:x} (0x{flen:x} bytes) from the dump")
         elif (base, flen) not in cap_set and base + flen <= len(image):
-            image[base : base + flen] = dump[base : base + flen]
-            written.append((base, flen))
-            info.messages.append(
-                f"Restored machine FV @0x{base:x} (0x{flen:x} bytes; capsule omitted it)"
-            )
+            if any(b < base + flen and base < b + n for b, n in cap_fvs):
+                info.messages.append(
+                    f"Skipped FV @0x{base:x}: the capsule holds a different volume there"
+                )
+            elif set(image[base : base + flen]) != {0xFF}:
+                info.messages.append(
+                    f"Skipped FV @0x{base:x}: the capsule holds data there that is not a volume"
+                )
+            else:
+                image[base : base + flen] = dump[base : base + flen]
+                written.append((base, flen))
+                info.messages.append(
+                    f"Restored machine FV @0x{base:x} (0x{flen:x} bytes; erased in the capsule)"
+                )
 
-    # --- 2) Machine records beyond the FV copy ------------------------------
+    # --- 2) Variable names that exist only in the dump -----------------------
     def nvar_names(blob: bytes) -> set:
         names = set()
         pos = 0
@@ -226,18 +247,25 @@ def restore_nvar_from_dump(
         return names
 
     dump_names = nvar_names(dump)
-    cap_names = nvar_names(bytes(image))
+    cap_names = nvar_names(original)
     only_dump = {n.decode(errors="replace") for n in (dump_names - cap_names) if len(n) >= 3}
     if only_dump:
         preview = ", ".join(sorted(only_dump)[:6])
         info.messages.append(
-            f"{len(only_dump)} dump variable(s) are not in the capsule's store; "
-            f"preserved via the FV copy (e.g. {preview})"
+            f"{len(only_dump)} dump variable(s) are not in the capsule's store "
+            f"(e.g. {preview}); they are kept only if their dump volume was restored above"
         )
 
-    with open(output_path, "wb") as f:
-        f.write(bytes(image))
-
-    info.output_path = output_path
     info.image_size = len(image)
+    if bytes(image) == original:
+        info.success = False
+        info.messages.append("nothing to restore from the dump; no file written")
+        return info
+    if not set(cap_fvs) <= set(_fv_list(bytes(image))):
+        info.success = False
+        info.messages.append("merged image would lose a capsule volume; no file written")
+        return info
+
+    write_verified(output_path, bytes(image))
+    info.output_path = output_path
     return info

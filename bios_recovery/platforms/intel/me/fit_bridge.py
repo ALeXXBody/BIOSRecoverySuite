@@ -38,6 +38,21 @@ class ToolProbe:
     warnings: list = field(default_factory=list)
 
 
+def _banner_version(output: str) -> str:
+    """Version from the line that names the tool, else from a 'version' line.
+
+    The first four-part number in the whole output is not necessarily the tool version.
+    """
+    lines = output.splitlines()
+    named = [ln for ln in lines if "flash image tool" in ln.lower()]
+    versioned = [ln for ln in lines if "version" in ln.lower()]
+    for line in named + versioned:
+        m = _VERSION_RE.search(line)
+        if m:
+            return ".".join(m.groups())
+    return ""
+
+
 def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
     probe = ToolProbe(path=path)
     if not os.path.isfile(path):
@@ -89,9 +104,9 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
 
     probe.identified = True
     probe.family = "MFIT" if "modular flash image tool" in lowered else "FIT"
-    m = _VERSION_RE.search(output)
-    if m:
-        probe.version = ".".join(m.groups())
+    version = _banner_version(output)
+    if version:
+        probe.version = version
     else:
         probe.warnings.append("banner does not state a version")
     p = re.search(r"\((LINUX64|WIN32|WIN64|EFI64)\)", output)
@@ -126,4 +141,7 @@ def compatible_with_me(probe: ToolProbe, me_version: str) -> tuple[bool, str]:
             f"{me_rule.release} is ambiguous in the release table; "
             "the tool cannot be confirmed for this ME version"
         )
-    return True, f"tool {probe.version} and ME {me_version} are both {me_rule.release}"
+    return True, (
+        f"tool {probe.version} and ME {me_version} are both {me_rule.release} "
+        f"(release table confidence: {me_rule.confidence})"
+    )

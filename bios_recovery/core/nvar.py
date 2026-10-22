@@ -4,20 +4,23 @@ Record layout (as used by uefi-firmware-parser, and matching AMI dumps):
 
   0x00  'NVAR'
   0x04  TotalSize    u16, bytes of the whole record
-  0x06  Reserved     3 bytes
-  0x09  Attributes   u8   bit 0x04 = GUID present, 0x08 = data-only, 0x02 = ASCII name
+  0x06  Next         24-bit offset of the next record (UEFITool NVAR_ENTRY_HEADER)
+  0x09  Attributes   u8   bit 0x80 = valid, 0x08 = data-only, 0x04 = GUID present,
+                          0x02 = ASCII name
   0x0A  (GUID, 16 bytes, when attribute 0x04 is set; otherwise one byte of padding)
-        Name         NUL-terminated (ASCII, or UTF-16LE when 0x02 is clear)
+        Name         NUL-terminated (ASCII, or UTF-16LE when 0x02 is clear); absent when
+                     the data-only attribute 0x08 is set
         Data         the rest of the record
 
 Identity carry-over copies the records that hold the machine's own data (MFG0, _DMI)
 from an old dump into a new image. It does that only when every identity record of the
-old dump has a counterpart of exactly the same size in the new image. Otherwise nothing
-is written.
+old dump has a counterpart of exactly the same size in the new image, and when the
+board model in MFG0 matches. Otherwise nothing is written.
 """
 
 from __future__ import annotations
 
+import re
 import struct
 from dataclasses import dataclass
 from typing import Optional
@@ -29,14 +32,16 @@ ATTR_VALID = 0x80
 HEADER_SIZE = 0x0A
 MIN_TOTAL = 0x0B + 2
 
+ATTR_DATA_ONLY = 0x08
 IDENTITY_NAMES = ("MFG0", "_DMI")
+_MODEL_TOKEN = re.compile(rb"(?<![A-Za-z0-9])[A-Z]{1,4}[0-9]{2,4}[A-Z]{1,4}(?![A-Za-z0-9])")
 
 
 @dataclass(frozen=True)
 class NvarRecord:
     offset: int
     total: int
-    name: str
+    name: Optional[str]
     attributes: int
     data: bytes
 
@@ -56,6 +61,8 @@ def _parse_at(data: bytes, pos: int) -> Optional[NvarRecord]:
     off = HEADER_SIZE + (16 if attrs & ATTR_GUID else 1)
     if off >= total:
         return None
+    if attrs & ATTR_DATA_ONLY:
+        return NvarRecord(pos, total, None, attrs, bytes(rec[off:]))
     if attrs & ATTR_ASCII_NAME:
         end = rec.find(b"\x00", off)
         if end < 0:
@@ -94,18 +101,32 @@ def iter_records(data: bytes) -> list[NvarRecord]:
     return out
 
 
+def _all_identity_records(data: bytes) -> list[NvarRecord]:
+    """Non-blank identity records whether or not they are valid."""
+    return [r for r in iter_records(data) if _non_blank_identity(r)]
+
+
 def is_valid(rec: NvarRecord) -> bool:
     """A record superseded by a later write has its valid bit cleared."""
     return bool(rec.attributes & ATTR_VALID)
+
+
+def _non_blank_identity(rec: NvarRecord) -> bool:
+    return rec.name in IDENTITY_NAMES and bool(rec.data) and set(rec.data) != {0xFF}
 
 
 def identity_copies(data: bytes) -> dict[str, list[NvarRecord]]:
     """Valid, non-blank copies of each identity variable, in file order."""
     out: dict[str, list[NvarRecord]] = {}
     for rec in iter_records(data):
-        if rec.name in IDENTITY_NAMES and is_valid(rec) and rec.data and set(rec.data) != {0xFF}:
+        if _non_blank_identity(rec) and is_valid(rec):
             out.setdefault(rec.name, []).append(rec)
     return out
+
+
+def model_tokens(mfg0: bytes) -> frozenset:
+    """Board model identifiers in an MFG0 payload, e.g. X510UA or TUF516PE."""
+    return frozenset(m.group().decode("ascii") for m in _MODEL_TOKEN.finditer(mfg0))
 
 
 @dataclass
@@ -122,13 +143,15 @@ class CarryReport:
             self.messages = []
 
 
-def carry_identity(old: bytes, new: bytearray) -> CarryReport:
+def carry_identity(old: bytes, new: bytearray, force: bool = False) -> CarryReport:
     """Copy the identity variables from old into new, all or nothing.
 
     The live old copy (the last valid one) is written over every valid copy of the same
-    name in the new image, so the firmware cannot read a stale copy. Refused when a name
-    is missing in the new image or any copy there has a different size. The new image is
-    changed only on success.
+    name in the new image, so the firmware cannot read a stale copy. Superseded copies of
+    the same size get the old data too, with their header left as it is. Refused when a
+    name is missing in the new image, any valid copy there has a different size, or the
+    MFG0 board model does not match (unless force is set). The new image is changed only
+    on success.
     """
     report = CarryReport()
     old_copies = identity_copies(old)
@@ -137,6 +160,18 @@ def carry_identity(old: bytes, new: bytearray) -> CarryReport:
     if not old_copies:
         report.refused = "no identity variables (MFG0, _DMI) with data in the old dump"
         return report
+    if not force:
+        old_mfg0 = old_copies.get("MFG0")
+        new_mfg0 = new_copies.get("MFG0")
+        if not old_mfg0 or not new_mfg0:
+            report.refused = "MFG0 is missing in one image, so the board model cannot be checked"
+            return report
+        if model_tokens(old_mfg0[-1].data) != model_tokens(new_mfg0[-1].data):
+            report.refused = (
+                "MFG0 board model differs between the old dump and the new image "
+                "(the identity belongs to another board); nothing written"
+            )
+            return report
     extra = sorted(set(new_copies) - set(old_copies))
     if extra:
         report.refused = (
@@ -157,22 +192,35 @@ def carry_identity(old: bytes, new: bytearray) -> CarryReport:
                 "nothing written"
             )
             return report
-        plan[name] = (src, targets)
+        superseded = [
+            r
+            for r in _all_identity_records(bytes(new))
+            if r.name == name and not is_valid(r) and len(r.data) == len(src.data)
+        ]
+        plan[name] = (src, targets, superseded)
 
-    for name, (src, targets) in plan.items():
+    for name, (src, targets, superseded) in plan.items():
         payload = bytes(old[src.offset : src.end])
         for t in targets:
             new[t.offset : t.end] = payload
+        for r in superseded:
+            new[r.end - len(r.data) : r.end] = src.data
         report.copied.append(name)
         report.messages.append(
             f"{name}: {src.total:#x} bytes written to {len(targets)} copy/copies in the new image"
+            + (f", {len(superseded)} superseded data block(s) updated" if superseded else "")
         )
 
     after = identity_copies(bytes(new))
-    for name, (src, _targets) in plan.items():
+    fresh = _all_identity_records(bytes(new))
+    for name, (src, _targets, superseded) in plan.items():
         payload = bytes(old[src.offset : src.end])
         if any(bytes(new[t.offset : t.end]) != payload for t in after.get(name, [])):
             raise RuntimeError(f"{name} did not verify after the copy")
+        for r in superseded:
+            current = next(x for x in fresh if x.offset == r.offset)
+            if current.data != src.data:
+                raise RuntimeError(f"{name} superseded copy did not verify after the copy")
 
     report.success = True
     return report

@@ -79,7 +79,7 @@ def test_nvram_skips_on_checksum_mismatch(patcher, autopatch_image, tmp_path):
     assert not res["success"]
     assert res.get("skipped")
     assert "checksum" in res["message"]
-    assert _read(out) == bytes(tampered)  # untouched
+    assert not os.path.exists(out)  # nothing written for a refused replacement
 
 
 def test_full_autopatch_flow(patcher, autopatch_image, tmp_path):

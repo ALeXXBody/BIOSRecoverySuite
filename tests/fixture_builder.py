@@ -65,7 +65,7 @@ def make_smbios_structures() -> tuple[bytes, int]:
     type0_fixed[0x01] = 0x12
     type0_fixed[0x04] = 1   # vendor string index
     type0_fixed[0x05] = 2   # version string index
-    type0_fixed[0x06] = 3   # release date string index
+    type0_fixed[0x08] = 3   # release date string index
     add_struct(0, bytes(type0_fixed),
                [b"American Megatrends Inc.", b"5.26", b"03/15/2020"])
 
@@ -74,7 +74,7 @@ def make_smbios_structures() -> tuple[bytes, int]:
     type1_fixed[0x00] = 1
     type1_fixed[0x01] = 0x19
     struct.pack_into("<H", type1_fixed, 0x02, 0)
-    type1_fixed[0x04:0x08] = bytes([1, 2, 3, 4])
+    type1_fixed[0x04:0x08] = bytes([1, 2, 0, 3])  # manufacturer, product, (no version), serial
     uuid_bytes = uuid.uuid4().bytes
     type1_fixed[0x08:0x18] = uuid_bytes
     add_struct(1, bytes(type1_fixed),
@@ -85,13 +85,16 @@ def make_smbios_structures() -> tuple[bytes, int]:
                [b"LENOVO", b"20HQ", b"Notebook", b"L1NV7XB2", b"AT12345678"])
 
     # Type 3 - Chassis (len 0x09)
-    add_struct(3, struct.pack("<BBHBBBBBB", 3, 0x09, 0, 1, 2, 0x00, 0x00, 0x00, 3),
-               [b"LENOVO", b"None", b"CH12345678"])
+    type3_fixed = bytearray(0x09)
+    type3_fixed[0x00:0x02] = bytes([3, 0x09])
+    type3_fixed[0x04:0x09] = bytes([1, 2, 0, 3, 0])  # manufacturer, type, version, serial, asset
+    add_struct(3, bytes(type3_fixed), [b"LENOVO", b"None", b"CH12345678"])
 
     # Type 17 - Memory Device (len 0x1B)
     type17_fixed = bytearray(0x1B)
     struct.pack_into("<BBH", type17_fixed, 0, 17, 0x1B, 0)
-    type17_fixed[0x04:0x19] = bytes([1, 2, 3, 4, 5]) + b"\x00" * (0x19 - 0x09)
+    # device locator, bank locator, (type, detail, speed), manufacturer, serial, asset, part
+    type17_fixed[0x10:0x1B] = bytes([1, 2, 0, 0, 0, 0, 0, 3, 4, 5, 6])
     add_struct(17, bytes(type17_fixed),
                [b"DIMM0", b"BANK 0", b"Micron", b"SX0123456", b"A1B2C3D4", b"MTA8ATF1G64"])
 
@@ -111,8 +114,10 @@ def make_smbios_eps(table_addr: int, table_len: int, struct_count: int) -> bytes
     struct.pack_into("<I", eps, 0x18, table_addr)
     struct.pack_into("<H", eps, 0x1C, struct_count)
     eps[0x1E] = 0x27
-    # intermediate checksum over bytes 0x05..0x1E, stored at 0x04
-    eps[4] = (0x100 - (sum(eps[5:]) & 0xFF)) & 0xFF
+    # intermediate checksum over bytes 0x10..0x1E, stored at 0x15
+    eps[0x15] = (0x100 - (sum(eps[0x10:0x1F]) & 0xFF)) & 0xFF
+    # entry point checksum over the whole 0x1F-byte entry, stored at 0x04
+    eps[4] = (0x100 - (sum(eps) & 0xFF)) & 0xFF
     return bytes(eps)
 
 
@@ -189,10 +194,9 @@ def build_intel_ifd_image(size: int = 0x1000000) -> bytes:
     # SMBIOS EPS + table
     smbios_table, struct_count = make_smbios_structures()
     table_addr = bios_ptr + fv_size_1
-    table_len = len(smbios_table) + 2
+    table_len = len(smbios_table)
     eps_addr = table_addr + table_len
-    data[table_addr:eps_addr - 2] = smbios_table
-    data[table_addr + len(smbios_table):table_addr + len(smbios_table) + 2] = b"\x00\x00"
+    data[table_addr:eps_addr] = smbios_table
     data[eps_addr:eps_addr + 0x1F] = make_smbios_eps(table_addr, table_len, struct_count)
 
     # AMI NVAR record for the password variable "AMITSESetup" (UTF-16LE name, valid, 12 data bytes)
@@ -338,7 +342,7 @@ def build_uefi_patch_image() -> bytes:
 
     # file B: raw PE32 section with whitelist pattern + tamper marker
     pe_body_b = WW_PATTERN + b"\x11" * 0x10 + TAMPER_MARKER + b"\x22" * 0x08
-    file_b = _ffs_header(UEFI_PATCH_OTHER_GUID, 0x15, 0x00, _section(0x10, pe_body_b))
+    file_b = _ffs_header(UEFI_PATCH_OTHER_GUID, 0x02, 0x00, _section(0x10, pe_body_b))
 
     # file C: trailing sibling (APPLICATION) with unique filler
     file_c = _ffs_header("6F6D2D0C-C56A-4C4F-9E5A-2B3A0F97C2B1", 0x09, 0x00,

@@ -145,7 +145,7 @@ def _library_cli(argv) -> int:
             return 2
         try:
             current = lib.add_folder(rest[0]) if cmd == "add-folder" else lib.remove_folder(rest[0])
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
         print(f"config: {lib.config_path()}")
@@ -153,7 +153,11 @@ def _library_cli(argv) -> int:
             print(f"  folder: {f}")
         return 0
     if cmd == "list":
-        current = lib.load_library()
+        try:
+            current = lib.load_library()
+        except OSError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         print(f"config: {lib.config_path()}")
         print(f"  tools folders:    {current.tools_folders or '(none)'}")
         print(f"  firmware folders: {current.firmware_folders or '(none)'}")
@@ -162,9 +166,10 @@ def _library_cli(argv) -> int:
         if len(rest) != 1:
             print(usage, file=sys.stderr)
             return 2
+        print(f"running {rest[0]} once with -h as this user to read its identity", file=sys.stderr)
         try:
             probe = lib.identify_tool(rest[0])
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
         if not probe.identified:
@@ -173,7 +178,11 @@ def _library_cli(argv) -> int:
         print(f"identified: {probe.family} {probe.version} {probe.platform}".rstrip())
         return 0
     if cmd == "scan":
-        result = lib.scan()
+        try:
+            result = lib.scan()
+        except OSError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         if not result.folders:
             print("no folders added; use: library add-folder PATH")
             return 0
@@ -208,6 +217,15 @@ def _verify_rebuild_cli(argv) -> int:
     for line in describe(result):
         print(line)
     return 0 if result.accepted else 3
+
+
+def _int_arg(text: str) -> int:
+    import argparse
+
+    try:
+        return int(text, 0)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text}") from None
 
 
 def _cli_main(argv) -> int:
@@ -255,7 +273,14 @@ def _cli_main(argv) -> int:
     s_sd.add_argument("--serial", default=None)
     s_sd.add_argument("--uuid", default=None)
     s_sd.add_argument("--mac", default=None)
-    add("ec-extract", "locate + extract the EC firmware region")
+    s_ec = add("ec-extract", "locate + extract the EC firmware region")
+    s_ec.add_argument(
+        "--offset", type=_int_arg, default=None, help="region offset (with --size, skips detection)"
+    )
+    s_ec.add_argument(
+        "--size", type=_int_arg, default=None, help="region size in bytes (alone: end-anchored)"
+    )
+    s_ec.add_argument("--overwrite", action="store_true", help="replace the output if it exists")
     add("ec-scan", "advisory scan: which EC patches' signatures are present")
     s_fi = add(
         "fit-info",
@@ -268,6 +293,9 @@ def _cli_main(argv) -> int:
     f = args.file
     if not os.path.exists(f):
         print(f"Error: file not found: {f}", file=sys.stderr)
+        return 2
+    if args.command in ("ec-extract", "ec-scan") and not os.path.isfile(f):
+        print(f"Error: not a file: {f}", file=sys.stderr)
         return 2
 
     tool = _CLI_TOOL_FOR_COMMAND.get(args.command)
@@ -411,8 +439,10 @@ def _cli_main(argv) -> int:
     if args.command == "ec-extract":
         from bios_recovery.platforms.ec.ec_patcher import ECPatcher, ECStatus
 
-        out_f = args.out or f.rsplit(".", 1)[0] + "_ec.bin"
-        result = ECPatcher().extract_ec(f, out_f)
+        out_f = args.out or os.path.splitext(f)[0] + "_ec.bin"
+        result = ECPatcher().extract_ec(
+            f, out_f, offset=args.offset, size=args.size, overwrite=args.overwrite
+        )
         print(result.message)
         if result.status != ECStatus.SUCCESS:
             return 1
@@ -472,7 +502,11 @@ def _cli_main(argv) -> int:
         if p_.load_error:
             print(f"Error: {p_.load_error}", file=sys.stderr)
             return 1
-        hits = p_.scan_patch_sites(f)
+        try:
+            hits = p_.scan_patch_sites(f)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         found = [h for h in hits if h.get("found")]
         print(f"EC patches in table: {len(hits)}  (signatures present: {len(found)})")
         for h in hits:

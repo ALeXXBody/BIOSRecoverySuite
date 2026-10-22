@@ -24,12 +24,14 @@ device-static data plus that first character.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
 DVAR_STORE_SIGNATURE = b"DVAR"
 KEY_SLOTS = 20
 RECORD_LEN = 32
+SELF_CHECKED = "null-padding leak (overlapped read)"
 
 
 def _key_slot_for_pos(pos: int) -> int:
@@ -51,32 +53,8 @@ class RecoveryReport:
     message: str = ""
     store_offsets: list = field(default_factory=list)
     passwords: list[RecoveredPassword] = field(default_factory=list)
+    unverified: list[RecoveredPassword] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-
-
-def _decrypt_record(key: bytes, record: bytes) -> Optional[str]:
-    """Decrypt a 32-byte record given a known key; returns None if inconsistent."""
-    chars = [record[0]]  # first char is stored in the clear
-    if not (0x20 <= record[0] <= 0x7E):
-        return None
-    i = 1
-    while i < RECORD_LEN:
-        plain = record[i] ^ key[_key_slot_for_pos(i)]
-        if plain == 0:
-            break  # password ends (null padding begins)
-        if plain < 0x20 or plain > 0x7E:
-            return None
-        chars.append(plain)
-        i += 1
-    # everything from here on must decrypt to pure NUL padding
-    while i < RECORD_LEN:
-        if record[i] ^ key[_key_slot_for_pos(i)] != 0:
-            return None
-        i += 1
-    pw = bytes(chars).decode("ascii")
-    if len(pw) < 4:
-        return None  # 1-3 char "passwords" are filler artifacts, not records
-    return pw
 
 
 def _derive_key(record: bytes, from_pos: int) -> Optional[bytes]:
@@ -99,14 +77,6 @@ def _derive_key(record: bytes, from_pos: int) -> Optional[bytes]:
 def _key_plausible(key: bytes) -> bool:
     """Reject degenerate keys from filler windows (mostly-FF/0x00)."""
     return key.count(0xFF) <= 4 and key.count(0x00) <= 4
-
-
-def _rekey_from_history(target_record: bytes, history_record: bytes) -> Optional[bytes]:
-    """Key derived from a short historical record (overlap-checked)."""
-    if target_record[0] != history_record[0]:
-        return None
-    k = _derive_key(history_record, from_pos=11)
-    return k if (k and _key_plausible(k)) else None
 
 
 def _decrypt_record(key: bytes, record: bytes) -> Optional[str]:
@@ -162,7 +132,7 @@ def _recover_12(record: bytes, neighbor_keys: set) -> Optional[str]:
 def try_recover_record(record: bytes, neighbors: list = None) -> Optional[str]:
     """Recover one record; `neighbors` = other same-first-char records whose
     key derivations cross-validate the 12..31 read."""
-    if not (0x20 <= record[0] <= 0x7E):
+    if len(record) < RECORD_LEN or not (0x20 <= record[0] <= 0x7E):
         return None
     pw = _recover_short(record)
     if pw:
@@ -203,6 +173,11 @@ def recover_passwords(
     `scan_radius`: how many bytes around each 'DVAR' hit to search for records.
     The decrypt-consistency check itself is the record fingerprint, so the scan
     walks byte-by-byte but bails on the first non-printable first byte.
+
+    A candidate is reported as recovered only when its own record shows the password's
+    end (a NUL tail inside the record) or it was derived from an overlap-checked key and
+    cross-validated. Candidates that repeat at more than one offset, or that fill all 32
+    bytes, go to `unverified` instead.
     """
     report = RecoveryReport()
     with open(file_path, "rb") as f:
@@ -238,9 +213,11 @@ def recover_passwords(
 
     # Stage 2: classify each candidate
     recovered: dict[int, RecoveredPassword] = {}
+    unverified: dict[int, RecoveredPassword] = {}
     for base, record in candidates:
         pw = _recover_short(record)
-        source = "null-padding leak (overlapped read)"
+        source = SELF_CHECKED
+        verified = True
         if pw is None:
             # 12-char path: cross-record agreement on the 12..31 derivation
             k12 = _derive_key(record, from_pos=12)
@@ -255,22 +232,43 @@ def recover_passwords(
                 pw = _decrypt_record(key, record)
                 if pw is not None and len(pw) > 11:
                     source = "historical record key reuse"
+                    # a password that fills the record has no NUL tail to check the key on
+                    verified = len(pw) < RECORD_LEN
                 else:
                     pw = None  # short decodes are already handled by the direct path
         if pw:
-            recovered[base] = RecoveredPassword(
+            item = RecoveredPassword(
                 password=pw,
                 record_offset=base,
                 recovered_from=source,
                 first_char=chr(record[0]),
                 length=len(pw),
             )
+            (recovered if verified else unverified)[base] = item
+
+    # Overlapped-read recoveries check their own key, so a repeat there is a real duplicate.
+    # Only the derived-key paths need the repeat test: that is where fabricated values repeat.
+    repeats = Counter(item.password for item in recovered.values())
+    for base in [
+        b
+        for b, item in recovered.items()
+        if item.recovered_from != SELF_CHECKED and repeats[item.password] > 1
+    ]:
+        unverified[base] = recovered.pop(base)
 
     report.passwords = sorted(recovered.values(), key=lambda r: r.record_offset)
+    report.unverified = sorted(unverified.values(), key=lambda r: r.record_offset)
+    if report.unverified:
+        report.notes.append(
+            f"{len(report.unverified)} candidate(s) not verified (repeated at more than one "
+            "offset, or no end-of-password in the record); not reported as recovered"
+        )
     if report.passwords:
         report.success = True
         report.message = f"Recovered {len(report.passwords)} password record(s) from DVAR store"
         report.notes.append(f"store candidates at {[hex(s) for s in stores]}")
+    elif report.unverified:
+        report.message = "DVAR store found; only unverified candidates (not recovered)"
     else:
         report.message = (
             "DVAR store found but no recoverable password records "
