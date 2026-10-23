@@ -150,9 +150,12 @@ class ECPatcher:
     MAX_ANCHOR_CANDIDATES = 20000
 
     # Real EC chip sizes are an assumption (no public external-chip table was found).
-    # 192/384/1024 KB parts are not auto-detected; pass an explicit size for them.
-    STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
-    MAX_EC = 0x80000
+    # ITE SoC EC flash sizes per the ChromiumOS EC source (i2c_ite_flash_support.c):
+    # 128 KB, 192 KB, 256 KB, 384 KB, 512 KB. 1 MB parts exist in some ITE ECs
+    # (IT81202E-1024) but are not common in laptop EC dumps; add 0x100000 to
+    # cover them. Nuvoton NPCX parts use 128/256/512 KB.
+    STD_EC_SIZES = (0x20000, 0x30000, 0x40000, 0x60000, 0x80000, 0x100000)
+    MAX_EC = 0x100000
     SEARCH = MAX_EC + 0x10000
 
     def __init__(self, patches_path: Optional[str] = None):
