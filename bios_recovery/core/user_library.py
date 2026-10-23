@@ -175,6 +175,10 @@ def add_folder(path: str, kind: str = "both") -> Library:
     absolute = os.path.abspath(path)
     if not os.path.isdir(absolute):
         raise ValueError(f"not a folder: {path}")
+    if os.path.ismount(absolute) or absolute in ("/", "\\"):
+        raise ValueError(
+            "refusing to scan a filesystem root; add a specific folder instead"
+        )
     lib = load_library()
     for k in _kinds(kind):
         if absolute not in lib.folders(k):
