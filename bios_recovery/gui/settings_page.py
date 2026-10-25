@@ -45,6 +45,12 @@ class SettingsPage(QWidget):
         self._run_task = run_task or _run_inline
         self._build()
         self.refresh_folders()
+        # Auto-scan on startup so imported files appear in the table
+        # without the user needing to click "Scan folders" manually.
+        # Only scan if folders are already configured or the app library exists.
+        cfg = lib.load_library()
+        if cfg.tools_folders or cfg.firmware_folders or os.path.isdir(lib.app_library_dir()):
+            self.start_scan(prompt=False)
 
     # -- layout ----------------------------------------------------------------
     def _build(self):
@@ -157,10 +163,10 @@ class SettingsPage(QWidget):
         self.refresh_folders()
         return results
 
-    def start_scan(self, on_done=None):
+    def start_scan(self, on_done=None, prompt=True):
         cfg = lib.load_library()
         folders = cfg.tools_folders + cfg.firmware_folders
-        if not folders:
+        if not folders and prompt:
             folder = QFileDialog.getExistingDirectory(self, "Choose a folder to scan")
             if not folder:
                 self.scan_status.setText("No folder chosen. Add a folder first.")
@@ -329,9 +335,18 @@ class SettingsPage(QWidget):
         self.scan_status.setStyleSheet("color: #0F0;" if copied else "color: #F80;")
         # Show a popup so the full result is visible even if the status label
         # is too small or scrolls out of view.
-        box = QMessageBox(self)
-        box.setWindowTitle("Import results")
-        box.setText(f"Imported {len(copied)} of {len(results)} file(s).")
-        box.setDetailedText(detail)
-        box.setIcon(QMessageBox.Icon.Information if copied else QMessageBox.Icon.Warning)
-        box.exec()
+        from PySide6.QtWidgets import QDialog, QTextEdit, QVBoxLayout
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Import results")
+        dlg.setMinimumSize(600, 400)
+        layout = QVBoxLayout(dlg)
+        summary = QLabel(f"Imported {len(copied)} of {len(results)} file(s).")
+        summary.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(summary)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(detail)
+        text.setStyleSheet("font-family: monospace;")
+        layout.addWidget(text)
+        dlg.exec()
