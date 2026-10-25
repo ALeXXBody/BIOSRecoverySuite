@@ -163,7 +163,7 @@ class SettingsPage(QWidget):
         if not folders:
             folder = QFileDialog.getExistingDirectory(self, "Choose a folder to scan")
             if not folder:
-                self.scan_status.setText("No folder chosen. Add a folder first, or use 'Add folder…'.")
+                self.scan_status.setText("No folder chosen. Add a folder first.")
                 return
             try:
                 self.add_folder("tools", folder)
@@ -186,7 +186,7 @@ class SettingsPage(QWidget):
         if not folders:
             folder = QFileDialog.getExistingDirectory(self, "Choose a folder to scan and import")
             if not folder:
-                self.scan_status.setText("No folder chosen. Add a folder first, or use 'Add folder…'.")
+                self.scan_status.setText("No folder chosen. Add a folder first.")
                 return
             try:
                 self.add_folder("tools", folder)
