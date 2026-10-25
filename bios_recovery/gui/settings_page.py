@@ -107,6 +107,11 @@ class SettingsPage(QWidget):
         remove = QPushButton("Remove selected")
         remove.clicked.connect(lambda: self._remove_selected(kind, listwidget))
         imp = QPushButton(import_label)
+        imp.setToolTip(
+            "Copy Intel tool or ME firmware files into the app's own library folder. "
+            "Valid ME images must contain a full ME partition table (not a full BIOS dump). "
+            "Click 'Scan folders' afterwards to see them in the table."
+        )
         imp.clicked.connect(lambda: self._choose_files(kind))
         for b in (add, remove, imp):
             row.addWidget(b)
@@ -258,7 +263,10 @@ class SettingsPage(QWidget):
         self.refresh_folders()
         refused = [f"{os.path.basename(r.source)}: {r.refused}" for r in results if r.refused]
         copied = [r for r in results if r.copied_to]
-        self.scan_status.setText(
-            f"Imported {len(copied)} file(s)."
-            + (" Refused: " + "; ".join(refused) if refused else "")
-        )
+        msg = f"Imported {len(copied)} file(s) into the app library."
+        if refused:
+            msg += " Refused: " + "; ".join(refused)
+        if copied:
+            msg += " Click 'Scan folders' to see them in the table."
+        self.scan_status.setText(msg)
+        self.scan_status.setStyleSheet("color: #0F0;" if copied else "color: #F80;")
