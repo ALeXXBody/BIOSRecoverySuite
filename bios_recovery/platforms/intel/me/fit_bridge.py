@@ -89,7 +89,6 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
                     [os.path.abspath(path), flag],
                     cwd=tool_dir,
                     env=env,
-                    stdin=subprocess.PIPE,
                     capture_output=True,
                     text=True,
                     errors="replace",
@@ -131,7 +130,6 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
                     [os.path.abspath(path)],
                     cwd=tool_dir,
                     env=env,
-                    stdin=subprocess.PIPE,
                     capture_output=True,
                     text=True,
                     errors="replace",
@@ -139,8 +137,10 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
                     input="\n",
                 )
                 output = (done.stdout or "") + (done.stderr or "")
-            except subprocess.TimeoutExpired:
-                pass
+            except subprocess.TimeoutExpired as exc:
+                partial = (exc.stdout or "") + (exc.stderr or "")
+                if partial:
+                    output = partial
             except OSError as exc:
                 probe.error = f"could not start: {exc}"
                 return probe
@@ -149,14 +149,23 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
     lowered = output.lower()
     if "flash image tool" not in lowered:
         snippet = output.strip()[:500]
-        # Some FIT builds print the banner to a window or a log file rather than
-        # stdout/stderr. Fall back to the file name as a weak hint, but still
-        # require the banner for a positive identification.
         probe.error = (
             "not a Flash Image Tool (no 'Flash Image Tool' banner in output)"
             + (f": {snippet}" if snippet else "")
         )
         return probe
+
+    probe.identified = True
+    probe.family = "MFIT" if "modular flash image tool" in lowered else "FIT"
+    version = _banner_version(output)
+    if version:
+        probe.version = version
+    else:
+        probe.warnings.append("banner does not state a version")
+    p = re.search(r"\((LINUX64|WIN32|WIN64|EFI64)\)", output)
+    if p:
+        probe.platform = p.group(1)
+    return probe
 
     probe.identified = True
     probe.family = "MFIT" if "modular flash image tool" in lowered else "FIT"
