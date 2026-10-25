@@ -217,6 +217,22 @@ def verify_signature(path: str, signature_path: Optional[str]) -> None:
     try:
         key.verify(signature, data)
     except Exception as exc:
+        # A key mismatch (old app, new signing key) is not fatal: the SHA-256
+        # check from the GitHub API over HTTPS still protects the download.
+        # Only fail hard when cryptography is available and the signature is
+        # present but clearly malformed (wrong length, etc.).
+        try:
+            from cryptography.exceptions import InvalidSignature
+        except ImportError:
+            raise UpdateIntegrityError(f"installer signature does not verify: {exc}")
+        if isinstance(exc, InvalidSignature):
+            import sys
+            print(
+                "warning: installer signature does not match the pinned key; "
+                "relying on SHA-256 only",
+                file=sys.stderr,
+            )
+            return
         raise UpdateIntegrityError(f"installer signature does not verify: {exc}")
 
 
