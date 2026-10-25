@@ -317,14 +317,21 @@ class SettingsPage(QWidget):
 
     def _import_done(self, results):
         self.refresh_folders()
-        refused = [f"{os.path.basename(r.source)}: {r.refused}" for r in results if r.refused]
+        refused = [r for r in results if r.refused]
         copied = [r for r in results if r.copied_to]
         lines = [f"Imported {len(copied)} of {len(results)} file(s)."]
         for r in copied:
             lines.append(f"  + {os.path.basename(r.source)} -> {os.path.basename(r.copied_to)}")
         for r in refused:
-            pass
-        for r in [x for x in results if x.refused]:
             lines.append(f"  - {os.path.basename(r.source)}: {r.refused}")
-        self.scan_status.setText("\n".join(lines))
+        detail = "\\n".join(lines)
+        self.scan_status.setText(detail)
         self.scan_status.setStyleSheet("color: #0F0;" if copied else "color: #F80;")
+        # Show a popup so the full result is visible even if the status label
+        # is too small or scrolls out of view.
+        box = QMessageBox(self)
+        box.setWindowTitle("Import results")
+        box.setText(f"Imported {len(copied)} of {len(results)} file(s).")
+        box.setDetailedText(detail)
+        box.setIcon(QMessageBox.Icon.Information if copied else QMessageBox.Icon.Warning)
+        box.exec()
