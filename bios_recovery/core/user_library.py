@@ -216,6 +216,9 @@ def release_line(version: str) -> str:
 
 def tool_file_name(family: str, version: str, platform: str, ext: str = "") -> str:
     """Identity-bearing name for an imported tool: FIT_15.0.35.1951_Linux."""
+    family = family or "unknown"
+    version = version or "unknown"
+    platform = platform or "unknown"
     for part in (family, version, platform):
         if not _SAFE_NAME_PART.fullmatch(part):
             raise ValueError(f"not usable in a file name: {part!r}")
@@ -528,7 +531,12 @@ def import_files(paths: list, kind: str) -> list:
             if not probe.identified:
                 result.refused = "not a Flash Image Tool banner"
                 continue
-            name = tool_file_name(probe.family, probe.version, file_platform(src), ext)
+            name = tool_file_name(
+        probe.family or "FIT",
+        probe.version or "unknown",
+        file_platform(src) or "unknown",
+        ext,
+    )
             lib = load_library()
             lib.identified[digest] = {"family": probe.family, "version": probe.version}
             save_library(lib)
