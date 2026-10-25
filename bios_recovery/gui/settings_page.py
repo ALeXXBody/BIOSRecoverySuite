@@ -77,6 +77,13 @@ class SettingsPage(QWidget):
         self.scan_button = QPushButton("Scan folders")
         self.scan_button.clicked.connect(lambda: self.start_scan())
         row.addWidget(self.scan_button)
+        self.auto_import_button = QPushButton("Scan and auto-import")
+        self.auto_import_button.setToolTip(
+            "Scan all folders and copy every valid tool and ME firmware image "
+            "into the app library. Tools are run once with -h to identify them."
+        )
+        self.auto_import_button.clicked.connect(self._auto_import)
+        row.addWidget(self.auto_import_button)
         self.identify_button = QPushButton("Identify selected tool (runs it once)")
         self.identify_button.setToolTip(
             "Scanning only lists files. Identifying runs the selected tool once with -h, "
@@ -157,6 +164,27 @@ class SettingsPage(QWidget):
                 on_done(result)
 
         self._run_task(lib.scan, finished, button=self.scan_button)
+
+    def _auto_import(self):
+        answer = QMessageBox.question(
+            self,
+            "Auto-import",
+            "This will scan all folders and copy every valid tool and ME firmware "
+            "image into the app library. Tools will be run once with -h to identify "
+            "them. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.scan_status.setText("Auto-import cancelled.")
+            return
+        self.scan_status.setText("Scanning and importing…")
+
+        def finished(result):
+            self._show_result(result[0])
+            self._import_done(result[1])
+
+        self._run_task(lambda: lib.scan_and_import(), finished, button=self.auto_import_button)
 
     def _show_result(self, result):
         self.tools_table.setRowCount(0)
@@ -263,10 +291,12 @@ class SettingsPage(QWidget):
         self.refresh_folders()
         refused = [f"{os.path.basename(r.source)}: {r.refused}" for r in results if r.refused]
         copied = [r for r in results if r.copied_to]
-        msg = f"Imported {len(copied)} file(s) into the app library."
-        if refused:
-            msg += " Refused: " + "; ".join(refused)
-        if copied:
-            msg += " Click 'Scan folders' to see them in the table."
-        self.scan_status.setText(msg)
+        lines = [f"Imported {len(copied)} of {len(results)} file(s)."]
+        for r in copied:
+            lines.append(f"  + {os.path.basename(r.source)} -> {os.path.basename(r.copied_to)}")
+        for r in refused:
+            pass
+        for r in [x for x in results if x.refused]:
+            lines.append(f"  - {os.path.basename(r.source)}: {r.refused}")
+        self.scan_status.setText("\n".join(lines))
         self.scan_status.setStyleSheet("color: #0F0;" if copied else "color: #F80;")

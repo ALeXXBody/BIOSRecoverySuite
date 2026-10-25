@@ -399,6 +399,47 @@ def scan(folders: Optional[list] = None) -> ScanResult:
     return result
 
 
+def scan_and_import(folders: Optional[list] = None) -> tuple:
+    """Scan folders and import every valid file found into the app library.
+
+    Returns (scan_result, import_results).  Tools are identified (run with -h)
+    before being kept; firmware must contain a full ME partition table.
+    """
+    result = scan(folders)
+    imports = []
+    app_dir = os.path.realpath(app_library_dir())
+    # Only import files that live outside the app library; files already
+    # copied there are already part of the library.
+    # Also skip files whose content is already in the app library.
+    existing_digests = set()
+    for kind in ("tools", "firmware"):
+        d = os.path.join(app_dir, kind)
+        if os.path.isdir(d):
+            for name in os.listdir(d):
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    try:
+                        existing_digests.add(_sha256_file(p))
+                    except OSError:
+                        pass
+    tool_paths = [
+        e.path for e in result.tools
+        if e.family == "unidentified"
+        and not os.path.realpath(e.path).startswith(app_dir)
+        and _sha256_file(e.path) not in existing_digests
+    ]
+    fw_paths = [
+        e.path for e in result.firmware
+        if not os.path.realpath(e.path).startswith(app_dir)
+        and _sha256_file(e.path) not in existing_digests
+    ]
+    if tool_paths:
+        imports.extend(import_files(tool_paths, "tools"))
+    if fw_paths:
+        imports.extend(import_files(fw_paths, "firmware"))
+    return result, imports
+
+
 @dataclass
 class ImportResult:
     source: str
