@@ -22,7 +22,7 @@ from typing import Callable, Optional
 
 # Ed25519 public key used to verify release signatures. The matching private key
 # is kept off the repository and is used to sign each installer at release time.
-_SIGNING_PUBLIC_KEY_B64 = "MCowBQYDK2VwAyEAFbI2NdizxS1Tta8QrVgz2n4gu348NyGoDuVlYMIyPXs="
+_SIGNING_PUBLIC_KEY_B64 = "MCowBQYDK2VwAyEA+z/OlJRE5SPt/OEUwEYRH3DGfETTY+y7zoqBnjj/fa4="
 
 REPO = "ALeXXBody/BIOSRecoverySuite"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
