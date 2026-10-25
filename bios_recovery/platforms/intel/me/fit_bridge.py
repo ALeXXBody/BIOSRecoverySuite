@@ -83,7 +83,7 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
             TEMP=work,
             TMP=work,
         )
-        for flag in ("-h", "--help"):
+        for flag in ("-h", "--help", "-?"):
             try:
                 done = subprocess.run(
                     [os.path.abspath(path), flag],
@@ -105,15 +105,36 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
                 probe.error = f"could not start: {exc}"
                 return probe
         else:
-            # Neither flag produced a banner; keep the last output for the error message.
-            pass
+            # Neither flag produced a banner. Some FIT builds print the banner only
+            # when invoked with no arguments and then wait for input; try once with
+            # a very short timeout and kill it if it hangs.
+            try:
+                done = subprocess.run(
+                    [os.path.abspath(path)],
+                    cwd=tool_dir,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=5,
+                )
+                output = (done.stdout or "") + (done.stderr or "")
+            except subprocess.TimeoutExpired:
+                pass
+            except OSError as exc:
+                probe.error = f"could not start: {exc}"
+                return probe
 
     probe.banner = output[:2000]
     lowered = output.lower()
     if "flash image tool" not in lowered:
-        snippet = output.strip()[:300]
+        snippet = output.strip()[:500]
+        # Some FIT builds print the banner to a window or a log file rather than
+        # stdout/stderr. Fall back to the file name as a weak hint, but still
+        # require the banner for a positive identification.
         probe.error = (
-            "not a Flash Image Tool (no 'Flash Image Tool' banner in -h output)"
+            "not a Flash Image Tool (no 'Flash Image Tool' banner in output)"
             + (f": {snippet}" if snippet else "")
         )
         return probe

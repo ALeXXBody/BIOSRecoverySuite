@@ -99,6 +99,14 @@ class SettingsPage(QWidget):
         )
         self.identify_button.clicked.connect(self.identify_selected)
         row.addWidget(self.identify_button)
+
+        self.manual_button = QPushButton("Mark as FIT/MFIT manually")
+        self.manual_button.setToolTip(
+            "If auto-identify fails, set the family and version yourself. "
+            "Use this when the tool works but its banner is not recognised."
+        )
+        self.manual_button.clicked.connect(self._manual_identify)
+        row.addWidget(self.manual_button)
         self.scan_status = QLabel("Not scanned yet.")
         row.addWidget(self.scan_status, 1)
         scan_layout.addLayout(row)
@@ -253,6 +261,41 @@ class SettingsPage(QWidget):
                 self.tools_table.selectionModel().selectedRows()[0].row(), 0
             ).text()
         self.identify_button.setEnabled(bool(path) and family == "unidentified")
+
+    def _manual_identify(self):
+        path = self._selected_tool_path()
+        if not path:
+            self.scan_status.setText("Select a tool in the table first.")
+            return
+        from PySide6.QtWidgets import QInputDialog
+
+        family, ok = QInputDialog.getItem(
+            self,
+            "Tool family",
+            "Which tool is this?",
+            ["FIT", "MFIT"],
+            0,
+            False,
+        )
+        if not ok:
+            return
+        version, ok = QInputDialog.getText(
+            self,
+            "Tool version",
+            "Enter the version (e.g. 15.0.35.1951):",
+        )
+        if not ok or not version.strip():
+            self.scan_status.setText("Manual identify cancelled (no version given).")
+            return
+        version = version.strip()
+        import hashlib
+
+        digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        library = lib.load_library()
+        library.identified[digest] = {"family": family, "version": version}
+        lib.save_library(library)
+        self.scan_status.setText(f"Identified manually: {family} {version}")
+        self.start_scan(prompt=False)
 
     def identify_selected(self, on_done=None):
         path = self._selected_tool_path()
