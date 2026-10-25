@@ -72,7 +72,8 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
         base_path = os.environ.get("PATH", "")
         if tool_dir not in base_path.split(os.pathsep):
             base_path = tool_dir + os.pathsep + base_path
-        env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC") if k in os.environ}
+        keys = ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC")
+        env = {k: os.environ[k] for k in keys if k in os.environ}
         env["PATH"] = base_path
         env.update(
             QT_QPA_PLATFORM="offscreen",
