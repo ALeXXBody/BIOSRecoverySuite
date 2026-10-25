@@ -89,16 +89,34 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
                     [os.path.abspath(path), flag],
                     cwd=tool_dir,
                     env=env,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE,
                     capture_output=True,
                     text=True,
                     errors="replace",
                     timeout=timeout,
+                    input="\n",
                 )
                 output = (done.stdout or "") + (done.stderr or "")
                 if "flash image tool" in output.lower():
                     break
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
+                output = (exc.stdout or "") + (exc.stderr or "")
+                if "flash image tool" in output.lower():
+                    # Tool printed its banner but waited for a keypress; we have
+                    # enough to identify it.
+                    probe.banner = output[:2000]
+                    lowered = output.lower()
+                    probe.identified = True
+                    probe.family = "MFIT" if "modular flash image tool" in lowered else "FIT"
+                    version = _banner_version(output)
+                    if version:
+                        probe.version = version
+                    else:
+                        probe.warnings.append("banner does not state a version")
+                    p = re.search(r"\((LINUX64|WIN32|WIN64|EFI64)\)", output)
+                    if p:
+                        probe.platform = p.group(1)
+                    return probe
                 probe.error = f"no output within {timeout} s"
                 return probe
             except OSError as exc:
@@ -113,11 +131,12 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
                     [os.path.abspath(path)],
                     cwd=tool_dir,
                     env=env,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE,
                     capture_output=True,
                     text=True,
                     errors="replace",
                     timeout=5,
+                    input="\n",
                 )
                 output = (done.stdout or "") + (done.stderr or "")
             except subprocess.TimeoutExpired:
