@@ -154,7 +154,14 @@ class ECPatcher:
     # 128 KB, 192 KB, 256 KB, 384 KB, 512 KB. 1 MB parts exist in some ITE ECs
     # (IT81202E-1024) but are not common in laptop EC dumps; add 0x100000 to
     # cover them. Nuvoton NPCX parts use 128/256/512 KB.
-    STD_EC_SIZES = (0x20000, 0x30000, 0x40000, 0x60000, 0x80000, 0x100000)
+    # Power-of-two sizes used for auto-detection. Non-power-of-two sizes
+    # (192 KB, 384 KB) and 1 MB parts exist in some ITE ECs (see the
+    # ChromiumOS i2c_ite_flash_support.c chip version/flash size table and the
+    # ITE IT81202E-1024 datasheet) but cause false matches in auto-detection
+    # because the content facts (padding, EOF) cannot distinguish them from
+    # the next larger power-of-two size. Pass an explicit size via
+    # resolve_region() for those parts.
+    STD_EC_SIZES = (0x20000, 0x40000, 0x80000)
     MAX_EC = 0x100000
     SEARCH = MAX_EC + 0x10000
 
