@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from bios_recovery.platforms.intel.me.fit_versions import rule_for_version
 
-PROBE_TIMEOUT = 20
+PROBE_TIMEOUT = 30
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
 
 
@@ -68,7 +68,12 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
         # headless and out of the user's runtime directory.
         # Minimal environment: only what the loader needs, and every writable location
         # points at the probe's private folder, not the user's profile.
-        env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "WINDIR") if k in os.environ}
+        tool_dir = os.path.dirname(os.path.abspath(path))
+        base_path = os.environ.get("PATH", "")
+        if tool_dir not in base_path.split(os.pathsep):
+            base_path = tool_dir + os.pathsep + base_path
+        env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC") if k in os.environ}
+        env["PATH"] = base_path
         env.update(
             QT_QPA_PLATFORM="offscreen",
             XDG_RUNTIME_DIR=work,
@@ -77,29 +82,39 @@ def probe_tool(path: str, timeout: int = PROBE_TIMEOUT) -> ToolProbe:
             TEMP=work,
             TMP=work,
         )
-        try:
-            done = subprocess.run(
-                [os.path.abspath(path), "-h"],
-                cwd=work,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=timeout,
-            )
-            output = (done.stdout or "") + (done.stderr or "")
-        except subprocess.TimeoutExpired:
-            probe.error = f"no output within {timeout} s"
-            return probe
-        except OSError as exc:
-            probe.error = f"could not start: {exc}"
-            return probe
+        for flag in ("-h", "--help"):
+            try:
+                done = subprocess.run(
+                    [os.path.abspath(path), flag],
+                    cwd=tool_dir,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=timeout,
+                )
+                output = (done.stdout or "") + (done.stderr or "")
+                if "flash image tool" in output.lower():
+                    break
+            except subprocess.TimeoutExpired:
+                probe.error = f"no output within {timeout} s"
+                return probe
+            except OSError as exc:
+                probe.error = f"could not start: {exc}"
+                return probe
+        else:
+            # Neither flag produced a banner; keep the last output for the error message.
+            pass
 
     probe.banner = output[:2000]
     lowered = output.lower()
     if "flash image tool" not in lowered:
-        probe.error = "not a Flash Image Tool (no 'Flash Image Tool' banner)"
+        snippet = output.strip()[:300]
+        probe.error = (
+            "not a Flash Image Tool (no 'Flash Image Tool' banner in -h output)"
+            + (f": {snippet}" if snippet else "")
+        )
         return probe
 
     probe.identified = True
