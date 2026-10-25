@@ -28,8 +28,10 @@ from bios_recovery.core import user_library as lib
 
 DISCLAIMER = (
     "BIOS Recovery Suite does not include Intel tools or ME firmware, and it never "
-    "downloads them. Add the folders where you keep your own copies; subfolders are "
-    "searched. Files stay where they are unless you import them."
+    "downloads them. Use 'Add folder...' to point at folders where you keep your own "
+    "copies (subfolders are searched), then 'Scan folders' to list them, or "
+    "'Scan and auto-import' to copy valid files into the app library. "
+    "Files stay where they are unless you import them."
 )
 
 
@@ -156,6 +158,19 @@ class SettingsPage(QWidget):
         return results
 
     def start_scan(self, on_done=None):
+        cfg = lib.load_library()
+        folders = cfg.tools_folders + cfg.firmware_folders
+        if not folders:
+            folder = QFileDialog.getExistingDirectory(self, "Choose a folder to scan")
+            if not folder:
+                self.scan_status.setText("No folder chosen. Add a folder first, or use 'Add folder…'.")
+                return
+            try:
+                self.add_folder("tools", folder)
+                self.add_folder("firmware", folder)
+            except ValueError as exc:
+                self.scan_status.setText(str(exc))
+                return
         self.scan_status.setText("Scanning…")
 
         def finished(result):
@@ -166,6 +181,19 @@ class SettingsPage(QWidget):
         self._run_task(lib.scan, finished, button=self.scan_button)
 
     def _auto_import(self):
+        cfg = lib.load_library()
+        folders = cfg.tools_folders + cfg.firmware_folders
+        if not folders:
+            folder = QFileDialog.getExistingDirectory(self, "Choose a folder to scan and import")
+            if not folder:
+                self.scan_status.setText("No folder chosen. Add a folder first, or use 'Add folder…'.")
+                return
+            try:
+                self.add_folder("tools", folder)
+                self.add_folder("firmware", folder)
+            except ValueError as exc:
+                self.scan_status.setText(str(exc))
+                return
         answer = QMessageBox.question(
             self,
             "Auto-import",
