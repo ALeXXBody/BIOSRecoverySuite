@@ -204,3 +204,32 @@ Phoenix/HP/Compaq/FSI 5-decimal (buggy-CRC16 brute force), FSI 8-hex + 5x4-hex
 Sony 4x4 OTP (RSA-64 with public constants), HP Mini (substitution tables),
 ASUS system-date. Dell: the real algorithm is a modified-MD5 with suffix tables
 (595B/D35B/2A7B/1F66/6FF1) - still a heuristic placeholder in this suite.
+
+## Intel Engine Detail Fields (ME Analyzer)
+
+Source: https://github.com/platomav/MEAnalyzer (BSD-2-Clause-Patent) — trust: high; it is
+the de-facto reference for Intel engine dumps and follows the structures published in the
+CSME kits. The suite ships the analyzer and reads its JSON report, so the ME Region page
+shows the same field set as a full analyzer run:
+
+| Field | Read from |
+|---|---|
+| Family | engine variant: ME / CSME / TXE / SPS |
+| Version | `$MN2` manifest Major.Minor.Hotfix.Build |
+| Release | manifest flags: Production / Pre-Production / Debug |
+| Type | Stock / Extracted / Update, from the FPT layout and FIT fields |
+| SKU | extension 0x0C SKU type plus capability flags (e.g. Consumer H) |
+| Chipset | `mphytbl` in the chipset init configuration |
+| TCB SVN / ARB SVN | manifest SVN and extension 0x0F ARBSVN |
+| VCN | extension 0x0F VCN |
+| Production Ready | manifest PV flag |
+| OEM Configuration | `fitc.cfg` or a non-placeholder OEM key in FTPR |
+| FWUpdate Support | IUP partitions (PMCP / PCHC / PHY) |
+| Date | manifest BCD date |
+| File System State | MFS / EFS parse state |
+| Size | engine end from the FPT / CSE LT layout |
+| Flash Image Tool | FIT version fields of the FPT 2.1 header |
+| MEA Database Name | database entry for the image's RSA signature hash |
+
+Only fields the analyzer decoded are printed; anything it could not decode stays "Unknown"
+instead of a guess.

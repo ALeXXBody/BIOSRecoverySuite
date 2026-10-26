@@ -32,6 +32,7 @@ from bios_recovery.core.rebuild_verify import describe, verify_rebuild
 from bios_recovery.gui.outputs import confirm_overwrite, derived_path
 from bios_recovery.platforms.intel.me.fit_check import check_image as check_tools
 from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
+from bios_recovery.platforms.intel.me.me_details import engine_details, format_engines
 from bios_recovery.platforms.intel.me.me_injector import MEInjector
 
 
@@ -148,10 +149,16 @@ class MERegionPage(QWidget):
         if not path:
             return
 
-        def done(info):
-            self._report("ME info", self._for_image(path, _format_me_info(info)))
+        def collect():
+            info = self.cleaner.get_me_info(path)
+            # Detail needs the bundled analyzer: skip it when there is no engine.
+            return info, engine_details(path) if info.get("found") else {}
 
-        self._run_task(lambda: self.cleaner.get_me_info(path), done, button=self.info_btn)
+        def done(result):
+            info, details = result
+            self._report("ME info", self._for_image(path, _format_me_info(info, details)))
+
+        self._run_task(collect, done, button=self.info_btn)
 
     def check_tools(self):
         path = self._current()
@@ -314,20 +321,31 @@ def _library_lookup(path: str) -> dict:
     return {"version": version, "matches": lib.firmware_for_version(version)}
 
 
-def _format_me_info(info) -> list:
+def _format_me_info(info, details=None) -> list:
     if not info.get("found"):
         return [info.get("reason") or "No Intel ME region found in this image."]
-    lines = [
-        f"ME Version: {info.get('version', 'Unknown')}",
-        f"ME Type: {info.get('type', 'Unknown')}",
-        f"Generation: {info.get('generation', 'Unknown')}",
-        f"Offset: {info.get('offset', '0x0')}",
-        f"Size: {info.get('size', '0x0')}",
-        "",
-        "Partitions:",
-    ]
+    details = details or {}
+    engines = details.get("engines") or []
+    lines = []
+    if engines:
+        lines.extend(format_engines(engines))
+        lines.append(f"Generation: {info.get('generation', 'Unknown')}")
+        lines.append(f"Offset: {info.get('offset', '0x0')}")
+    else:
+        lines = [
+            f"ME Version: {info.get('version', 'Unknown')}",
+            f"ME Type: {info.get('type', 'Unknown')}",
+            f"Generation: {info.get('generation', 'Unknown')}",
+            f"Offset: {info.get('offset', '0x0')}",
+            f"Size: {info.get('size', '0x0')}",
+        ]
+        if details.get("reason"):
+            lines.append(f"Detail: {details['reason']}")
+    lines.append("")
+    lines.append("Partitions:")
     for p in info.get("partitions", []):
-        lines.append(f"  {p['name']}: offset {p['offset']}, size {p['size']}")
+        name = str(p["name"]).strip()
+        lines.append(f"  {name}: offset {p['offset']}, size {p['size']}")
     return lines
 
 

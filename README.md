@@ -7,6 +7,9 @@ Professional BIOS repair, analysis, ME cleaning, DMI extraction, and password re
 ## Features
 
 - **BIOS Analysis** - Detect BIOS type, regions, ME version, and identify issues in any firmware image
+- **Intel Engine Detail** - Full ME/CSME report for the loaded image: family, release, type, SKU,
+  chipset, TCB/ARB SVN, VCN, OEM configuration, FWUpdate support, date, file system state,
+  size, Flash Image Tool version and MEA database name
 - **Auto Repair** - Fix corrupted flash descriptors, FPT checksums, and normalize image sizes
 - **Intel ME Cleaner** - Clear/neuter ME, TXE, and CSME regions with HAP/AltMeDisable support
 - **DMI / SMBIOS Extraction** - Extract system, board, and BIOS information from dumps
@@ -59,6 +62,8 @@ Run auto-repair to fix common BIOS problems:
 
 ### ME Cleaner Tab
 Clean the Intel Management Engine region:
+- Show the loaded engine's full detail: family, version, release, type, SKU, chipset, SVN/VCN,
+  OEM configuration, FWUpdate support, file system state, FIT version and database name
 - Set HAP/AltMeDisable bit to soft-disable ME
 - Remove non-essential ME partitions and modules
 - Lock the flash descriptor

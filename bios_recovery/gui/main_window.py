@@ -45,6 +45,11 @@ from bios_recovery.manufacturers.common.bios_extractor import BiosExtractor
 from bios_recovery.manufacturers.hp.hp_unlocker import HPUnlocker
 from bios_recovery.manufacturers.profiles import ManufacturerProfiles
 from bios_recovery.platforms.intel.me import mea_bridge
+from bios_recovery.platforms.intel.me.me_details import (
+    engine_entries,
+    failure_reason,
+    format_engines,
+)
 from bios_recovery.utils import master_passwords
 
 # Tab titles whose tool name in core/traits_matrix.py differs from the title.
@@ -1354,16 +1359,14 @@ class MainWindow(QMainWindow):
 
     def _mea_done(self, res):
         lines = ["ME Analyzer Result:"]
-        if res.success:
-            lines.append("Success")
+        if not res.success:
+            lines.append(failure_reason(res))
         else:
-            lines.append(f"Failed: {res.error}")
-        if res.messages:
-            lines.append("")
-            lines.extend(res.messages)
-        if res.stdout:
-            lines.append("")
-            lines.append(res.stdout[-1000:])
+            engines = engine_entries(res.json_data)
+            lines.append("Success")
+            if engines:
+                lines.append("")
+                lines.extend(format_engines(engines))
         self.info_text.setPlainText("\n".join(lines))
         self.statusBar().showMessage("ME Analyzer completed")
 

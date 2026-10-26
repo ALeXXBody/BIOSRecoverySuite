@@ -76,6 +76,72 @@ def test_actions_need_a_loaded_image(qapp):
     assert page.output.toPlainText().count("Open a BIOS file first") == 3
 
 
+def test_me_info_shows_the_analyzer_field_set(qapp, tmp_path, monkeypatch):
+    from bios_recovery.gui import me_region_page
+
+    img = tmp_path / "me.bin"
+    img.write_bytes(build_intel_ifd_image())
+    entry = {
+        "Family": "CSE ME",
+        "Version": "12.0.92.2145",
+        "Release": "Production",
+        "Type": "Extracted",
+        "SKU": "Consumer LP",
+        "Chipset": "Unknown",
+        "File System State": "Initialized",
+        "Flash Image Tool": "N/A",
+        "MEA Database Name": "12.0.92.2145_CON_LP_X_PRD_EXTR",
+    }
+    monkeypatch.setattr(
+        me_region_page,
+        "engine_details",
+        lambda path: {"found": True, "engines": [("Management Engine", entry)]},
+    )
+
+    page = me_region_page.MERegionPage(image_provider=lambda: str(img))
+    page.show_info()
+    text = page.output.toPlainText()
+
+    assert "== ME info ==" in text
+    assert "Family: CSE ME" in text
+    assert "MEA Database Name: 12.0.92.2145_CON_LP_X_PRD_EXTR" in text
+    # The loaded image still gets its region line and partition list.
+    assert "Generation: " in text and "Partitions:" in text
+
+
+def test_me_info_falls_back_to_the_built_in_lines(qapp, tmp_path, monkeypatch):
+    from bios_recovery.gui import me_region_page
+
+    img = tmp_path / "me.bin"
+    img.write_bytes(build_intel_ifd_image())
+    reason = "This image has no engine data ME Analyzer could read."
+    monkeypatch.setattr(
+        me_region_page, "engine_details", lambda path: {"found": False, "reason": reason}
+    )
+
+    page = me_region_page.MERegionPage(image_provider=lambda: str(img))
+    page.show_info()
+    text = page.output.toPlainText()
+
+    assert "ME Version: 12." in text
+    assert f"Detail: {reason}" in text
+    assert "Partitions:" in text
+
+
+def test_me_info_says_it_simply_when_no_engine_is_found(qapp, tmp_path, monkeypatch):
+    from bios_recovery.gui import me_region_page
+
+    img = tmp_path / "bios.bin"
+    img.write_bytes(build_intel_ifd_image())
+    monkeypatch.setattr(me_region_page, "engine_details", lambda path: pytest.fail("not asked"))
+
+    page = me_region_page.MERegionPage(image_provider=lambda: str(img))
+    monkeypatch.setattr(page.cleaner, "get_me_info", lambda path: {"found": False})
+    page.show_info()
+
+    assert page.output.toPlainText().count("No Intel ME region found in this image.") == 1
+
+
 def test_spi_page_hex_view_reads_the_shared_image(qapp, tmp_path):
     from bios_recovery.gui.spi_tab import SPITab
 
