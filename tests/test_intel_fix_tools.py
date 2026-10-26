@@ -69,7 +69,7 @@ def test_inferred_release_is_named_in_the_compatibility_reason():
     probe = ToolProbe(path="x", identified=True, family="MFIT", version="16.1.25.2053")
     ok, why = compatible_with_me(probe, "16.1.25.2091")
     assert ok is True
-    assert "inferred" in why
+    assert "v16.1 r0" in why
 
 
 def test_injector_refuses_a_directory_instead_of_raising(tmp_path):

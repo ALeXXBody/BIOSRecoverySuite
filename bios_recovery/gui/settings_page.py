@@ -99,14 +99,6 @@ class SettingsPage(QWidget):
         )
         self.identify_button.clicked.connect(self.identify_selected)
         row.addWidget(self.identify_button)
-
-        self.manual_button = QPushButton("Mark as FIT/MFIT manually")
-        self.manual_button.setToolTip(
-            "If auto-identify fails, set the family and version yourself. "
-            "Use this when the tool works but its banner is not recognised."
-        )
-        self.manual_button.clicked.connect(self._manual_identify)
-        row.addWidget(self.manual_button)
         self.scan_status = QLabel("Not scanned yet.")
         row.addWidget(self.scan_status, 1)
         scan_layout.addLayout(row)
@@ -262,41 +254,6 @@ class SettingsPage(QWidget):
             ).text()
         self.identify_button.setEnabled(bool(path) and family == "unidentified")
 
-    def _manual_identify(self):
-        path = self._selected_tool_path()
-        if not path:
-            self.scan_status.setText("Select a tool in the table first.")
-            return
-        from PySide6.QtWidgets import QInputDialog
-
-        family, ok = QInputDialog.getItem(
-            self,
-            "Tool family",
-            "Which tool is this?",
-            ["FIT", "MFIT"],
-            0,
-            False,
-        )
-        if not ok:
-            return
-        version, ok = QInputDialog.getText(
-            self,
-            "Tool version",
-            "Enter the version (e.g. 15.0.35.1951):",
-        )
-        if not ok or not version.strip():
-            self.scan_status.setText("Manual identify cancelled (no version given).")
-            return
-        version = version.strip()
-        import hashlib
-
-        digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-        library = lib.load_library()
-        library.identified[digest] = {"family": family, "version": version}
-        lib.save_library(library)
-        self.scan_status.setText(f"Identified manually: {family} {version}")
-        self.start_scan(prompt=False)
-
     def identify_selected(self, on_done=None):
         path = self._selected_tool_path()
         if not path:
@@ -304,7 +261,9 @@ class SettingsPage(QWidget):
         answer = QMessageBox.question(
             self,
             "Run this file",
-            f"Identifying runs this file once with -h, as the current user:\n{path}\n\nContinue?",
+            "Identifying reads this file's own version first. It is run once with -h, "
+            f"as the current user, only if the file does not state its version:\n{path}\n\n"
+            "Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -354,8 +313,8 @@ class SettingsPage(QWidget):
             answer = QMessageBox.question(
                 self,
                 "Run these files",
-                "Importing a tool runs each file once with -h, as the current user, "
-                "before it is kept. Continue?",
+                "Importing a tool reads its version from the file. It is run once with -h, "
+                "as the current user, only if the file does not state its version. Continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )

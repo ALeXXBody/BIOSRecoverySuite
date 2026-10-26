@@ -57,7 +57,7 @@ def test_compatibility_requires_same_release_line():
     probe = ToolProbe(path="x", identified=True, family="MFIT", version="16.1.25.2053")
     assert compatible_with_me(probe, "16.1.25.2091")[0] is True
     ok, why = compatible_with_me(probe, "15.0.3.1402")
-    assert ok is False and "belongs to" in why
+    assert ok is False and "it is for v16.1 r0" in why
 
 
 def test_unidentified_tool_is_never_compatible():
@@ -163,3 +163,64 @@ def test_mfit_16_50_is_refused_for_16_1_image():
     probe = ToolProbe(path="x", identified=True, family="MFIT", version="16.50.0.1120")
     ok, why = compatible_with_me(probe, "16.1.25.1865")
     assert ok is False and "v16.50" in why
+
+
+def _fake_windows_tool(family: str, version: str, size: int = 8192) -> bytes:
+    """A PE-shaped file that carries its banner and FileVersion the way Intel's do.
+
+    Windows stores both as UTF-16 inside the executable. This fixture is not a
+    runnable program: it exists to prove identification works without running it.
+    """
+    version = version.encode("utf-16-le") + b"\x00\x00"
+    return b"".join(
+        [
+            b"MZ" + b"\x00" * 254,
+            f"Intel (R) {family} Flash Image Tool".encode("utf-16-le") + b"\x00\x00",
+            b"\x00" * 256,
+            "StringFileInfo".encode("utf-16-le") + b"\x00\x00",
+            "FileVersion".encode("utf-16-le") + b"\x00\x00",
+            version,
+            b"\x5a" * size,
+        ]
+    )
+
+
+def test_static_identify_reads_a_windows_tool_without_running_it(tmp_path):
+    from bios_recovery.platforms.intel.me.fit_bridge import identify_static
+
+    tool = tmp_path / "mfit.exe"
+    tool.write_bytes(_fake_windows_tool("Modular", "16.1.25.2053"))
+    tool.chmod(0o644)  # not executable: nothing can run it
+    probe = identify_static(str(tool))
+    assert probe.identified and probe.source == "file"
+    assert probe.family == "MFIT" and probe.version == "16.1.25.2053"
+
+
+def test_probe_returns_a_gui_tool_that_would_hang_when_run(tmp_path):
+    # Real MFIT is a Qt window: -h prints nothing and waits. The bytes must be enough.
+    tool = tmp_path / "mfit.exe"
+    tool.write_bytes(_fake_windows_tool("Modular", "16.1.25.2053"))
+    tool.chmod(0o755)
+    probe = probe_tool(str(tool), timeout=1)
+    assert probe.identified and probe.version == "16.1.25.2053"
+    assert probe.platform == "Windows"
+
+
+def test_static_identify_reads_the_printed_help_text(tmp_path):
+    from bios_recovery.platforms.intel.me.fit_bridge import identify_static
+
+    # The exact banner the user's FIT 11 prints for "-h".
+    tool = tmp_path / "fit.exe"
+    tool.write_bytes(
+        b"===============================================================================\n"
+        b"Intel (R) Flash Image Tool. Version: 11.8.86.3877\n"
+        b"Copyright (c) 2013 - 2021, Intel Corporation. All rights reserved.\n"
+    )
+    probe = identify_static(str(tool))
+    assert probe.identified and probe.family == "FIT" and probe.version == "11.8.86.3877"
+
+
+def test_static_identify_ignores_a_bios_image(intel_ifd):
+    from bios_recovery.platforms.intel.me.fit_bridge import identify_static
+
+    assert identify_static(intel_ifd).identified is False

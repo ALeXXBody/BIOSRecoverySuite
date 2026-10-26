@@ -3,14 +3,15 @@
 The app ships no Intel tools and no ME firmware, and it never downloads them.
 The user adds the folders where they keep their own copies.
 
-Scanning never runs anything. A tool's identity (family and version) is only
-known by running it with -h, so that happens only when the user asks to identify
-a specific file. The result is cached by the file's SHA-256, so a later scan does
-not run the file again unless its contents change.
+Scanning reads file bytes but never runs anything. A tool's identity (family and
+version) is read from its own banner in the file; the file is run with -h only
+when its bytes do not state a version. The result is cached by the file's SHA-256,
+so a later scan does not read it again unless its contents change.
 
-Identifying a tool, or importing one, runs that file once with -h as the current
-user. The child gets a scrubbed environment and a temporary working folder, but
-no sandbox: in a root session it runs as root. Identify and import only files you
+Identifying a tool, or importing one, reads the file's own banner first. It runs
+the file with -h as the current user only when the bytes do not state a version.
+That child gets a scrubbed environment and a temporary working folder, but no
+sandbox: in a root session it runs as root. Identify and import only files you
 trust.
 
 Config location:
@@ -280,19 +281,34 @@ _NON_TOOL_SUFFIXES = (
 
 
 def _looks_like_tool_name(name: str) -> bool:
-    """fit / mfit by name, excluding logs, notes and archives.
+    """fit / mfit / fitc / "flash image tool" by name, excluding logs and archives.
 
-    Identity is still checked by running the tool with -h.
+    The name only decides what to look at. The identity always comes from the
+    file's own banner, read from its bytes, or from its -h output.
     """
     lower = name.lower()
-    return lower.startswith(("fit", "mfit")) and not lower.endswith(_NON_TOOL_SUFFIXES)
+    if lower.endswith(_NON_TOOL_SUFFIXES):
+        return False
+    if lower.startswith(("fit", "mfit")):
+        return True
+    stem = os.path.splitext(lower)[0]
+    return "flash image tool" in re.sub(r"[_\-.]+", " ", stem)
+
+
+def remember_identity(path: str, family: str, version: str) -> None:
+    """Cache a tool's identity by the SHA-256 of its bytes."""
+    lib = load_library()
+    lib.identified[_sha256_file(path)] = {"family": family, "version": version}
+    save_library(lib)
 
 
 def identify_tool(path: str, timeout: int = 20):
-    """Run a user-chosen tool once with -h and cache its identity by SHA-256.
+    """Identify a user-chosen tool and cache the result by SHA-256.
 
-    Runs a private copy made from the same bytes that were hashed, so the cache
-    key always matches the code that ran. The file in the library is never changed.
+    The identity is read from the file's own bytes. The file is run with -h only
+    when its bytes do not state a version, so a GUI build that prints nothing is
+    never left hanging. It runs a private copy made from the same bytes that were
+    hashed, so the cache key always matches the code that ran.
     """
     from bios_recovery.platforms.intel.me.fit_bridge import probe_tool
 
@@ -345,6 +361,7 @@ def scan(folders: Optional[list] = None) -> ScanResult:
     result = ScanResult(folders=list(folders))
     seen_paths: set = set()
     seen_content: set = set()
+    learned = False
     for folder in folders:
         if not os.path.isdir(folder):
             result.skipped.append(f"missing folder: {folder}")
@@ -367,6 +384,16 @@ def scan(folders: Optional[list] = None) -> ScanResult:
                         continue
                     digest = _sha256_file(path)
                     known = lib.identified.get(digest)
+                    if known is None:
+                        # Reading the banner out of the bytes runs nothing, so a scan
+                        # stays safe while every tool the folder holds is still found.
+                        from bios_recovery.platforms.intel.me.fit_bridge import identify_static
+
+                        static = identify_static(path)
+                        if static.identified and static.version:
+                            known = {"family": static.family, "version": static.version}
+                            lib.identified[digest] = known
+                            learned = True
                     result.tools.append(
                         ToolEntry(
                             path=path,
@@ -399,14 +426,20 @@ def scan(folders: Optional[list] = None) -> ScanResult:
                         result.firmware.append(FirmwareEntry(path, best, size))
             except OSError as exc:
                 result.skipped.append(f"could not read {path}: {exc.strerror or exc}")
+    if learned:
+        try:
+            save_library(lib)
+        except OSError:
+            pass  # a read-only config only costs a re-read on the next scan
     return result
 
 
 def scan_and_import(folders: Optional[list] = None) -> tuple:
     """Scan folders and import every valid file found into the app library.
 
-    Returns (scan_result, import_results).  Tools are identified (run with -h)
-    before being kept; firmware must contain a full ME partition table.
+    Returns (scan_result, import_results).  Tools are identified from their own
+    bytes (run with -h only if the bytes do not state a version) before being
+    kept; firmware must contain a full ME partition table.
     """
     result = scan(folders)
     imports = []
@@ -427,9 +460,8 @@ def scan_and_import(folders: Optional[list] = None) -> tuple:
                         pass
     tool_paths = [
         e.path for e in result.tools
-        if e.family == "unidentified"
-        and not os.path.realpath(e.path).startswith(app_dir)
-        and _sha256_file(e.path) not in existing_digests
+        if not os.path.realpath(e.path).startswith(app_dir)
+        and e.sha256 not in existing_digests
     ]
     fw_paths = [
         e.path for e in result.firmware
@@ -528,18 +560,20 @@ def import_files(paths: list, kind: str) -> list:
                 if os.name != "nt":
                     os.chmod(staged, os.stat(staged).st_mode | stat.S_IXUSR)
                 probe = probe_tool(staged)
-            if not probe.identified:
+            if not probe.identified and file_platform(src) not in ("Windows", "Linux"):
+                # Neither a tool banner nor a program: not something to keep.
                 result.refused = "not a Flash Image Tool banner"
                 continue
+            if probe.identified:
+                lib = load_library()
+                lib.identified[digest] = {"family": probe.family, "version": probe.version}
+                save_library(lib)
             name = tool_file_name(
-        probe.family or "FIT",
-        probe.version or "unknown",
-        file_platform(src) or "unknown",
-        ext,
-    )
-            lib = load_library()
-            lib.identified[digest] = {"family": probe.family, "version": probe.version}
-            save_library(lib)
+                probe.family or "FIT",
+                probe.version or "unknown",
+                file_platform(src) or "unknown",
+                ext,
+            )
         else:
             if not _looks_like_me_image(blob):
                 result.refused = "no full ME partition table"

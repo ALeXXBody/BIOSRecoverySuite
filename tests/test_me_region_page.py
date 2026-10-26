@@ -39,8 +39,11 @@ def test_check_tools_reports_release_and_empty_library(qapp, tmp_path):
     page.check_tools()
     text = page.output.toPlainText()
     assert "== Tools for this image ==" in text
-    assert "ME version:   12." in text and "Tool release: v12 r38" in text
-    assert "no Intel tools in your library match" in text
+    assert "ME:    12." in text and "needs FIT 12" in text
+    assert "Matching tool: none" in text
+    assert "No Intel tools found" in text
+    # Short: the check must not dump versions, paths or confidence notes.
+    assert len(text.strip().splitlines()) <= 7
 
 
 def test_verify_refuses_identical_image(qapp, tmp_path):
@@ -231,3 +234,46 @@ def test_inject_refuses_a_file_that_is_not_me_firmware(qapp, tmp_path, monkeypat
 
     assert not (tmp_path / "loaded_mefixed.bin").exists()
     assert "Not added to the library" in page.output.toPlainText()
+
+
+def test_check_tools_names_the_one_matching_tool_plainly(qapp, tmp_path):
+    """One short line for the tool to use: no paths, no confidence notes."""
+    from bios_recovery.core import user_library as lib
+    from bios_recovery.gui.me_region_page import MERegionPage
+    from tests.test_fit_tools import _fake_windows_tool
+
+    tool = tmp_path / "fit.exe"
+    tool.write_bytes(_fake_windows_tool("", "12.0.45.1509"))
+    lib.import_files([str(tool)], "tools")
+
+    img = tmp_path / "me.bin"
+    img.write_bytes(build_intel_ifd_image())
+    page = MERegionPage(image_provider=lambda: str(img))
+    page.check_tools()
+    text = page.output.toPlainText()
+
+    assert "ME:    12." in text and "needs FIT 12" in text
+    assert "Matching tool: FIT 12.0.45.1509 (Windows)" in text
+    assert str(tmp_path) not in text  # no paths
+    assert "confidence" not in text and "release table" not in text
+    assert len(text.strip().splitlines()) <= 5
+
+
+def test_check_tools_lists_an_unidentified_tool_instead_of_hiding_it(qapp, tmp_path):
+    from bios_recovery.core import user_library as lib
+    from bios_recovery.gui.me_region_page import MERegionPage
+
+    folder = tmp_path / "tools"
+    folder.mkdir()
+    tool = folder / "fit"
+    tool.write_text("Intel (R) Flash Image Tool\n")  # banner, but no version anywhere
+    tool.chmod(0o644)  # cannot be run, so no version can be added
+    lib.add_folder(str(folder), "tools")
+
+    img = tmp_path / "me.bin"
+    img.write_bytes(build_intel_ifd_image())
+    page = MERegionPage(image_provider=lambda: str(img))
+    page.check_tools()
+    text = page.output.toPlainText()
+    assert "Matching tool: none" in text
+    assert "FIT (not identified)" in text

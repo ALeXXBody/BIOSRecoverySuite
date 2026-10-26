@@ -65,7 +65,8 @@ def test_scan_identifies_user_supplied_tool(tmp_path):
     tool.write_text("#!/bin/sh\necho 'Intel (R) Modular Flash Image Tool. Version: 16.50.0.1120'\n")
     tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     lib.add_folder(str(folder))
-    assert [(t.family, t.identified) for t in lib.scan().tools] == [("unidentified", False)]
+    # The banner is in the file's own bytes, so the scan identifies it without running it.
+    assert [(t.family, t.version) for t in lib.scan().tools] == [("MFIT", "16.50.0.1120")]
     lib.identify_tool(str(tool))
     assert [(t.family, t.version) for t in lib.scan().tools] == [("MFIT", "16.50.0.1120")]
 
@@ -231,7 +232,8 @@ def test_scan_never_runs_a_tool(tmp_path):
 
 
 @POSIX_ONLY
-def test_identify_runs_once_and_caches_by_hash(tmp_path):
+def test_identify_does_not_run_a_tool_that_states_its_version(tmp_path):
+    """The banner is in the bytes, so nothing needs to be executed at all."""
     marker = tmp_path / "runs.marker"
     folder = tmp_path / "tools"
     folder.mkdir()
@@ -241,10 +243,32 @@ def test_identify_runs_once_and_caches_by_hash(tmp_path):
     )
     tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     lib.add_folder(str(folder), "tools")
-    assert lib.identify_tool(str(tool)).identified
+    probe = lib.identify_tool(str(tool))
+    assert probe.identified and probe.version == "14.1.60.1790"
     lib.scan()
     lib.scan()
-    assert marker.read_text().count("x") == 1  # identify ran it once; scans did not
+    assert not marker.exists()  # identifying and scanning never ran it
+    assert lib.scan().tools[0].version == "14.1.60.1790"
+
+
+@POSIX_ONLY
+def test_identify_runs_a_tool_whose_bytes_state_no_version(tmp_path):
+    """Fallback: no version in the bytes, so -h output is used, and cached by hash."""
+    marker = tmp_path / "runs.marker"
+    folder = tmp_path / "tools"
+    folder.mkdir()
+    tool = folder / "fit"
+    # The assembled number never appears in the file, only in what it prints.
+    tool.write_text(
+        f"#!/bin/sh\necho x >> '{marker}'\n"
+        "printf 'Intel (R) Flash Image Tool. Version: %s.%s.%s.%s\\n' 14 1 60 1790\n"
+    )
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    lib.add_folder(str(folder), "tools")
+    assert lib.identify_tool(str(tool)).version == "14.1.60.1790"
+    lib.scan()
+    lib.scan()
+    assert marker.read_text().count("x") == 1  # identified once; scans did not run it
     assert lib.scan().tools[0].identified
 
 
