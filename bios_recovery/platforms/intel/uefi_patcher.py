@@ -1171,6 +1171,78 @@ class UEFIPatcher:
     TAMPER_MARKER = bytes.fromhex("4C4E564242534543FB")  # LNVBBSEC + FB
     TAMPER_PATCHED = bytes.fromhex("4C4E564242534543FF")  # LNVBBSEC + FF
 
+    # badcaps autopatch target drivers: patched BootOption + LenovoTranslateService
+    AUTOPATCH_TARGET_GUIDS = (
+        "E0746C42-D3F9-4F8B-B211-1410957B9FF5",
+        "826BCF56-BAC4-43F4-8EA1-8CDF0A121ABD",
+    )
+
+    def diagnose_svp_storage(self, image_path: str) -> dict:
+        """Classify where the ThinkPad supervisor password hash lives for this image.
+
+        Generation mapping (researched, never patched by this function):
+
+        - ``in_dump_backdoor``: the ``cE!`` backdoor marker is present, so the H2O
+          runtime unlocker / one-time-bypass methods apply to this machine.
+        - ``in_dump_autopatch``: the autopatch target drivers are present, so the
+          badcaps autopatch flow (driver replacement + NVRAM clean) applies.
+        - ``ec_eeprom``: 8th-gen-and-newer ThinkPads (incl. X13 Gen 4+) store the
+          supervisor/power-on password hash in the embedded controller EEPROM,
+          which is NOT part of the SPI BIOS dump. No in-dump patch can clear it;
+          the honest remediation is an offline EC EEPROM edit or Lenovo's ThinkPad
+          Config Information Update Utility ("initialize EEPROM"). Editing the
+          Setup/LenovoSecurityConfig variables instead is documented to brick
+          the board (black screen, no POST).
+        - ``unknown``: not a recognised ThinkPad layout.
+        """
+        det = self.detect_lenovo(image_path)
+        with open(image_path, "rb") as f:
+            data = f.read()
+        autopatch_hits = [
+            g for g in self.AUTOPATCH_TARGET_GUIDS
+            if guid_to_bytes(g) in data
+        ]
+        if det["ce_backdoor"]["guid_hits"] or det["ce_backdoor"]["string_hits"]:
+            return {
+                "location": "in_dump_backdoor",
+                "message": (
+                    "cE! backdoor present in this image: the supervisor password "
+                    "prompt can be one-time bypassed by patching this dump "
+                    "(Lenovo Unlock flow)."
+                ),
+                "details": det,
+            }
+        if autopatch_hits:
+            return {
+                "location": "in_dump_autopatch",
+                "message": (
+                    "Autopatch target driver(s) present: the badcaps SVP "
+                    "autopatch flow applies to this image."
+                ),
+                "details": det,
+            }
+        if det["is_lenovo"]:
+            return {
+                "location": "ec_eeprom",
+                "message": (
+                    "Supervisor password hash on this ThinkPad generation "
+                    "(8th gen and newer) is stored in the embedded controller "
+                    "EEPROM, NOT in this SPI BIOS dump. No dump patch can clear "
+                    "it. Proven options: (1) offline EC EEPROM edit with the "
+                    "offsets documented for the machine's EC firmware version "
+                    "(e.g. T490-class: 0x302/0x303/0x310..0x34F -> FF), or "
+                    "(2) Lenovo ThinkPad Config Information Update Utility "
+                    "with 'initialize EEPROM'. Editing Setup or "
+                    "LenovoSecurityConfig variables instead bricks the board."
+                ),
+                "details": det,
+            }
+        return {
+            "location": "unknown",
+            "message": "No ThinkPad supervisor-password layout recognised.",
+            "details": det,
+        }
+
     def detect_lenovo(self, image_path: str) -> dict:
         """Detect Lenovo unlock-relevant features in an image."""
         with open(image_path, "rb") as f:

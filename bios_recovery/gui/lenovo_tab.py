@@ -161,13 +161,19 @@ class LenovoTab(QWidget):
     def run_detect(self):
         if not self._require_file():
             return
-        self._run_task(
-            lambda: self.patcher.detect_lenovo(self.current_dump),
-            self._detect_done,
-            button=self.detect_btn,
-        )
 
-    def _detect_done(self, det):
+        def task():
+            det = self.patcher.detect_lenovo(self.current_dump)
+            try:
+                diag = self.patcher.diagnose_svp_storage(self.current_dump)
+            except Exception as e:  # diagnosis must never break detection
+                diag = {"location": "unknown", "message": f"diagnosis failed: {e}"}
+            return det, diag
+
+        self._run_task(task, self._detect_done, button=self.detect_btn)
+
+    def _detect_done(self, result):
+        det, diag = result
         lines = []
         lines.append(f"Lenovo firmware detected: {'YES' if det['is_lenovo'] else 'no'}")
         ce = det["ce_backdoor"]
@@ -177,6 +183,8 @@ class LenovoTab(QWidget):
                 f"{len(ce['string_hits'])} string hit(s) -> the H2O runtime "
                 "unlocker method applies to this machine"
             )
+        else:
+            lines.append(f"Supervisor password storage: {diag['message']}")
         if det["tamper_marker"] is not None:
             lines.append(
                 f"LNVBBSEC tamper flag present at 0x{det['tamper_marker']:X} "

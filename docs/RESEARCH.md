@@ -162,6 +162,25 @@ LBE (Laptop Bios Extractor) by EgyFixLab is the inspiration for this tool. Its k
    risk. `dxe_replacements.json` also supports auto-derivation by diffing an original vs
    autopatched dump pair.
 
+### Where the supervisor password actually lives per generation
+`diagnose_svp_storage` classifies the target and says which of the methods above
+applies instead of silently reporting "nothing found":
+
+- **in_dump_backdoor / in_dump_autopatch**: cE! marker or autopatch target GUIDs
+  present -> an in-dump patch can work.
+- **ec_eeprom**: on 8th-gen-and-newer ThinkPads (T490/X1 C7+/X13 Gen 4 class) the
+  supervisor and power-on password hashes live in the **embedded controller
+  EEPROM**, not in the SPI BIOS dump. Verified on a Lenovo X13 Gen 4 64 MB dump:
+  every NVRAM store (three EVSA bank copies plus the SecureBoot default store)
+  enumerates to ~173 variables (`Setup` 3162 B, `LenovoConfig`, `LBC`,
+  `LenovoSecurityConfig`, `PwdUnlockErr`, `UnlockID`/`UnlockIDCopy`, boot keys)
+  with no password-hash variable in any record. Proven clearings: an offline EC
+  EEPROM edit with offsets documented per EC firmware version (e.g. T490-class
+  with firmware N2IHT39W: 0x302/0x303/0x310..0x34F -> FF) or Lenovo's ThinkPad
+  Config Information Update Utility ("initialize EEPROM"). Editing `Setup` or
+  `LenovoSecurityConfig` variables instead bricks the board (black screen, no
+  POST) — documented repeatedly on badcaps; the suite refuses to do it.
+
 ### Tamper protection (LNVBBSEC)
 xx40+ ThinkPads verify FV signatures; after modifying a signed FV the marker
 `4C 4E 56 42 42 53 45 43 FB` (`LNVBBSEC`+FB) must be flipped to `...FF`, else the

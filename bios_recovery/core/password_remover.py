@@ -115,7 +115,22 @@ class PasswordRemover:
         self._clear_passwords(data, report, password_types)
 
         if bytes(data) == original:
-            report.messages.append("Nothing was written: no change to the image")
+            if report.found_passwords:
+                report.messages.append("Nothing was written: no change to the image")
+            elif b"LENOVO" in original or bytes.fromhex("4C4E564242534543FB") in original:
+                # ThinkPad layout, no verified password store. Modern generations
+                # keep the SVP hash in the EC EEPROM (not part of this dump).
+                report.messages.append(
+                    "Lenovo ThinkPad detected, but no verifiable password store "
+                    "was found in this dump. On 8th-gen-and-newer ThinkPads the "
+                    "supervisor password hash lives in the EC EEPROM, which is "
+                    "not part of the SPI BIOS dump; see the Lenovo tab's "
+                    "detection message for proven clearing options."
+                )
+            else:
+                report.messages.append(
+                    "No recognizable password structures found; nothing was written"
+                )
             return report
 
         write_file_atomic(output_path, data)
