@@ -252,3 +252,25 @@ shows the same field set as a full analyzer run:
 
 Only fields the analyzer decoded are printed; anything it could not decode stays "Unknown"
 instead of a guess.
+
+## CSME 11+ ("CSE LT") — what a proper ME clean actually is
+
+Validation ground truth: U2201, Lenovo P14s Gen 2 (Tiger Lake, CSME 15.0.55.2751),
+from the good & booting machine, plus me_cleaner's own source as armature:
+
+- The FPT of this layout does NOT carry an FTPR entry (PSVN, UEP, IVBP, MFS, UTOK,
+  HVMP, FLOG, EFS, RSTR, IMDP, FITC only — the $MN2 manifests live in a $CPD
+  partition directory instead).
+- me_cleaner *refuses* that layout for partition removal outright: its FTPR lookup
+  requires a `CODE`/`FTPR` FPT entry and exits with
+  "FTPR header not found, this image doesn't seem to be valid".
+- me_cleaner's gen3 soft-disable is `PCHSTRP0 |= (1 << 16)` where PCHSTRP0 is the
+  flash strap dword at FPSBA ((flmap1 >> 16 & 0xFF) * 0x10 = 0x100 here) — i.e. the
+  app's `HAP/AltMeDisable` write is byte-identical in location and effect.
+- Therefore the two on-disk facts the user must expect: (a) the "Clean ME" output
+  differs from the input in exactly ONE bit, at FPSBA+2 with bit16 of the dword there
+  (file byte 0x102 for this dump); (b) "Cleaned Size" stays the region size (no
+  truncation exists for this layout).
+
+Nothing more exists that any mainstream tool does on this generation beyond the
+HAP-bit soft-disable; bigger "cleanings" are undocumented surgery and not shipped.

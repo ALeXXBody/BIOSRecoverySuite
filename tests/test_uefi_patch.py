@@ -1,6 +1,5 @@
 """Tests for the UEFIPatch-compatible pattern engine and DXE replacement."""
 
-import lzma
 import os
 
 from bios_recovery.platforms.intel.uefi_patcher import UEFIPatcher
@@ -51,19 +50,18 @@ def test_apply_patches_lzma_and_raw(patcher, uefi_patch_image, tmp_path):
     patched = _read(out)
 
     # 1) advanced-menu pattern patched INSIDE the LZMA container. The section is
-    # decoded the way the patcher does — LZMADecompressor — because the strict
-    # module decoder's handling of the declared-size + EOS tail differs between
-    # liblzma builds (macOS fails while Linux tolerates it; EDK2 wants the size).
+    # decoded the way the firmware's own decoder does (props/dict from the header,
+    # stream ends at EOS or the declared size) — via the patcher's decode helper —
+    # because strict host-side ALONE decoders disagree about a declared size
+    # coexisting with the marker (macOS rejects it).
     p = UEFIPatcher(patcher.patches_path)
     files = {f.guid: f for f in p.iter_files(patched)}
     target = files[UEFI_PATCH_TARGET_GUID]
     lzma_sec = next(s for s in target.sections if s.comp == "lzma")
-    decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
-    inner = bytes(
-        decomp.decompress(
-            patched[lzma_sec.off + 0x18 : lzma_sec.off + lzma_sec.hdr_size + lzma_sec.body_size]
-        )
+    inner = p._decode_lzma_payload(
+        patched[lzma_sec.off + 0x18 : lzma_sec.off + lzma_sec.hdr_size + lzma_sec.body_size]
     )
+    inner = bytes(inner)
     assert ADV_REPLACEMENT in inner
     assert ADV_PATTERN not in inner
 
@@ -261,11 +259,10 @@ def test_lzma_section_header_carries_decoded_size(patcher):
     decoded_size = int.from_bytes(section[4 + 20 + 5 : 4 + 20 + 13], "little")
     assert decoded_size == len(payload)
     stream = section[4 + 20 :]
-    # The section stream is decoded exactly the way the patcher itself decodes LZMA
-    # sections — via LZMADecompressor — not with the strict module-level decoder,
-    # whose EOS-tail behaviour differs between liblzma builds.
-    decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
-    assert decomp.decompress(stream) == payload
+    # The section stream must decode with the firmware-style decoder: props/dict from
+    # the header, stream ending at the EOS marker — never with the strict host
+    # module-level ALONE decoder whose behaviour differs per liblzma build.
+    assert patcher._decode_lzma_payload(stream) == payload
 
 
 def test_file_alignment_follows_attribute_table(patcher):

@@ -195,14 +195,21 @@ class IntelMECleaner:
                         if loc is not None:
                             off, bit, byte_index = loc
                             report.messages.append(
-                                f"The only byte changed is at {byte_index:#x} "
-                                f"(bit {bit.bit_length() - 1} of the strap dword at "
-                                f"{off:#x}) — everything else is untouched."
+                                f"The only byte changed is at {byte_index:#x}: bit "
+                                f"{bit.bit_length() - 1} of PCHSTRP0 (the flash strap dword "
+                                f"at {off:#x}) — exactly what me_cleaner's HAP write does "
+                                "for this generation."
                             )
                         report.messages.append(
                             "CSME 11+ 'CSE LT' layout detected (engine manifest in $CPD, "
                             "not listed in FPT): partition cleaning is not applicable. "
                             "HAP/AltMeDisable bit set instead."
+                        )
+                        report.messages.append(
+                            "For reference: me_cleaner itself refuses this layout for "
+                            "partition removal (no FTPR entry in the FPT), so the "
+                            "HAP-bit soft-disable IS the full ME clean for CSME 11+ "
+                            "'CSE LT' engines; there is no deeper ME wipe for them."
                         )
                     else:
                         report.messages.append(

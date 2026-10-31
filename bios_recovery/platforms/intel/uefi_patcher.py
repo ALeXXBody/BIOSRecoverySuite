@@ -329,12 +329,8 @@ class UEFIPatcher:
                 payload = bytes(buf[off + data_off : off + size])
                 if node.guid == LZMA_GUID:
                     node.comp = "lzma"
-                    decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
-                    try:
-                        decoded = decomp.decompress(payload, max_length=MAX_LZMA_OUTPUT)
-                    except lzma.LZMAError:
-                        decoded = None
-                    if decoded is None or not decomp.eof:
+                    decoded = self._decode_lzma_payload(payload, max_output=MAX_LZMA_OUTPUT)
+                    if decoded is None:
                         node.kind = "unknown"
                     else:
                         node.data = bytearray(decoded)
@@ -588,6 +584,79 @@ class UEFIPatcher:
         else:
             hdr[0x11] = 0xAA
         buf[off : off + fnode.hdr_size] = hdr
+
+    def _decode_lzma_payload(
+        self, payload: bytes, max_output: Optional[int] = None
+    ) -> Optional[bytes]:
+        """Decode an LZMA-ALONE payload the way the firmware decoder does.
+
+        Reads the props byte (lc/lp/pb) and dictionary size from the header and decodes
+        the raw LZMA1 stream, stopping at the EOS marker or the declared size — exactly
+        what EDK2's `LzmaDecode(LZMA_FINISH_END)` accepts. Python's strict ALONE decoder
+        is not used because some liblzma builds (macOS) reject the very streams this
+        suite writes — a declared size may coexist with the marker in the LZMA SDK but
+        is treated as corrupt input by those builds.
+        """
+        if len(payload) < 13:
+            return None
+        props = payload[0]
+        dict_size = struct.unpack_from("<I", payload, 1)[0]
+        declared = struct.unpack_from("<Q", payload, 5)[0]
+        lc = props % 9
+        tmp = props // 9
+        lp = tmp % 5
+        pb = tmp // 5
+        filters = [
+            {
+                "id": lzma.FILTER_LZMA1,
+                "dict_size": dict_size,
+                "lc": lc,
+                "lp": lp,
+                "pb": pb,
+            }
+        ]
+        limit = max_output if max_output is not None else 0x10000000
+        if declared != 0xFFFFFFFFFFFFFFFF and declared > limit:
+            return None
+        try:
+            decomp = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters)
+            decoded = decomp.decompress(payload[13:], max_length=limit)
+            if len(decoded) >= limit and (
+                declared == 0xFFFFFFFFFFFFFFFF or len(decoded) < declared
+            ):
+                # Reached the cap without finishing the stream: treat as opaque.
+                return None
+        except lzma.LZMAError as exc:
+            if "leftover" in str(exc).lower() or "ended before" in str(exc).lower():
+                # A stream that ran out before its EOS marker is the LZMA1 no-marker
+                # container: accept it when the declared size was reached.
+                if declared != 0xFFFFFFFFFFFFFFFF:
+                    return self._decode_lzma_truncated_no_eos(payload, filters, declared, limit)
+                return None
+            return None
+        if declared != 0xFFFFFFFFFFFFFFFF and len(decoded) != declared:
+            return None
+        return decoded
+
+    def _decode_lzma_truncated_no_eos(
+        self, payload: bytes, filters: list, declared: int, limit: int
+    ) -> Optional[bytes]:
+        """Decode an LZMA1 stream that ends exactly at its declared size (no EOS marker)."""
+        try:
+            decomp = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters)
+            decoded = b""
+            chunk = 0x40000
+            src = payload[13:]
+            pos = 0
+            while pos < len(src) and len(decoded) < declared:
+                piece = src[pos : pos + chunk]
+                decoded += decomp.decompress(piece, max_length=declared - len(decoded))
+                pos += chunk
+            if len(decoded) != declared:
+                return None
+            return decoded
+        except lzma.LZMAError:
+            return None
 
     def _lzma_final_payload(self, raw_data: bytes) -> bytes:
         """LZMA-ALONE payload the firmware's own decoder accepts.
