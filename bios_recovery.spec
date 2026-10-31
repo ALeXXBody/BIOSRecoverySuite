@@ -2,7 +2,15 @@
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+import sys
+
 block_cipher = None
+
+IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+# Linux/darwin builds keep icon and upx off: .ico is meaningless there and upx
+# is not part of the CI toolchain off Windows.
+exe_icon = "assets/icon.ico" if IS_WIN else ("assets/icon.icns" if IS_MAC else None)
 
 a = Analysis(
     ["bios_recovery/main.py"],
@@ -49,14 +57,14 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=IS_WIN,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/icon.ico",
+    icon=exe_icon,
 )
 
 coll = COLLECT(
@@ -65,7 +73,10 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="BIOSRecoverySuite",
 )
+
+if IS_MAC:
+    bundle = BUNDLE(coll, name="BIOSRecoverySuite.app", icon="assets/icon.icns")

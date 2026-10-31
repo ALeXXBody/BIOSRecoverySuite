@@ -162,6 +162,23 @@ class UpdateDialog(QDialog):
             and getattr(sys, "frozen", False)
         )
         self.install_btn.setVisible(can_install)
+        if not can_install:
+            lines = []
+            if sys.platform == "darwin" and release.macos_url:
+                lines.append(f"macOS build: {release.macos_url}")
+            elif sys.platform.startswith("linux") and release.linux_url:
+                lines.append(f"Linux build: {release.linux_url}")
+            if lines:
+                lines.append("Grab it from the releases page (button below) — this app "
+                             "does not self-update on this platform.")
+                self.status_label.setText(
+                    f"New version available: v{release.version} — download it manually."
+                )
+            if release.notes:
+                self.notes_text.setPlainText(release.notes)
+                self.notes_text.setVisible(True)
+                if lines:
+                    self.notes_text.appendPlainText("\n" + "\n".join(lines))
         if self._auto_silent and can_install:
             self._start_download()
 

@@ -39,6 +39,15 @@ pip install -r requirements.txt
 python -m bios_recovery.main
 ```
 
+### Platform Support
+
+Windows/Linux/macOS. Windows additionally ships a signed installer with a silent
+self-update flow in the app. For Linux and macOS, grab the platform package
+from a release: `BIOSRecoverySuite-linux-x64-<v>.tar.gz` (unpack and run
+`./BIOSRecoverySuite`) or `BIOSRecoverySuite-macos-arm64-<v>.dmg`. The self-update
+button on Linux/macOS points at the releases page instead; PySide6 must be
+available through the system Qt libraries there.
+
 ### Building the Windows EXE
 
 ```bash

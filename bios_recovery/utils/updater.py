@@ -56,11 +56,17 @@ def is_newer(remote_tag: str, current_version: str) -> bool:
 
 
 def _pick_assets(assets: list) -> dict:
-    """Select installer/portable/signature download URLs and the installer's published SHA-256."""
+    """Select installer/portable/signature download URLs and the installer's published SHA-256.
+
+    Linux and macOS builds are picked up too so the update dialog can point at
+    the release page assets for those platforms.
+    """
     installer = None
     installer_sha = None
     portable = None
     signature = None
+    linux = None
+    macos = None
     for a in assets:
         name = (a.get("name") or "").lower()
         url = a.get("browser_download_url")
@@ -79,11 +85,17 @@ def _pick_assets(assets: list) -> dict:
             portable = url
         if signature is None and name.endswith(".sig") and "setup" in name:
             signature = url
+        if linux is None and "linux" in name and name.endswith(".tar.gz"):
+            linux = url
+        if macos is None and "macos" in name and name.endswith(".dmg"):
+            macos = url
     return {
         "installer": installer,
         "installer_sha256": installer_sha,
         "portable": portable,
         "signature": signature,
+        "linux": linux,
+        "macos": macos,
     }
 
 
@@ -96,6 +108,8 @@ class ReleaseInfo:
     portable_url: Optional[str] = None
     installer_sha256: Optional[str] = None
     signature_url: Optional[str] = None
+    linux_url: Optional[str] = None
+    macos_url: Optional[str] = None
 
 
 def fetch_latest_release() -> ReleaseInfo:
@@ -120,6 +134,8 @@ def fetch_latest_release() -> ReleaseInfo:
         portable_url=urls["portable"],
         installer_sha256=urls["installer_sha256"],
         signature_url=urls["signature"],
+        linux_url=urls["linux"],
+        macos_url=urls["macos"],
     )
 
 

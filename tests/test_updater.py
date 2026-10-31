@@ -51,12 +51,16 @@ def test_pick_assets_empty():
         "installer_sha256": None,
         "portable": None,
         "signature": None,
+        "linux": None,
+        "macos": None,
     }
     assert _pick_assets([{"name": "no-url"}]) == {
         "installer": None,
         "installer_sha256": None,
         "portable": None,
         "signature": None,
+        "linux": None,
+        "macos": None,
     }
 
 
