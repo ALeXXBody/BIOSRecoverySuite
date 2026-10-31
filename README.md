@@ -162,6 +162,12 @@ python -m bios_recovery.main analysis --file bios.bin
 python -m bios_recovery.main me-clean --file bios.bin --output cleaned.bin
 ```
 
+**Note on CSME 11+ ("CSE LT") engines** (CSME 12–19, e.g. Tiger Lake-era Lenovo boards):
+partition-level ME cleaning does not exist for that layout — the FPT carries no FTPR
+entry and me_cleaner itself refuses it. The clean there is the `HAP/AltMeDisable`
+soft-disable bit, byte-identical to what me_cleaner sets; the app's report shows the
+exact byte/bit it changed so the result can be verified in any hex diff.
+
 ## Dependencies
 
 - Python 3.10+
