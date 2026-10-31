@@ -186,10 +186,19 @@ class IntelMECleaner:
             exp_end = min(me_end, len(data))
             # The $CPD manifest of a CSE LT layout may sit in the block before the partition base.
             if b"$CPD" in data[max(0, me_start - 0x1000) : exp_end]:
+                loc = self._hap_bit_location(data, original_len, me_version_major)
                 if soft_disable:
                     if self._set_hap_bit(data, me_start, me_end, me_gen, me_version_major):
                         report.hap_bit_set = True
                         report.soft_disable = True
+                        report.cleaned_size = original_size  # nothing is removed on LT
+                        if loc is not None:
+                            off, bit, byte_index = loc
+                            report.messages.append(
+                                f"The only byte changed is at {byte_index:#x} "
+                                f"(bit {bit.bit_length() - 1} of the strap dword at "
+                                f"{off:#x}) — everything else is untouched."
+                            )
                         report.messages.append(
                             "CSME 11+ 'CSE LT' layout detected (engine manifest in $CPD, "
                             "not listed in FPT): partition cleaning is not applicable. "
@@ -552,24 +561,38 @@ class IntelMECleaner:
     ) -> bool:
         """Set the HAP (ME 11+) or AltMeDisable (older) strap bit. Returns True only if the
         bit reads back set after the write."""
-        fd_offset = self._find_fd_in_data(data)
-        if fd_offset < 0:
+        loc = self._hap_bit_location(data, len(data), me_version)
+        if loc is None:
             return False
-
-        flmap1 = self._read_flmap1(data, fd_offset)
-        if flmap1 is None:
-            return False
-        fpsba_abs = ((flmap1 >> 16) & 0xFF) << 4  # absolute file offset (ifdtool find_fpsba)
-
-        if me_version >= 11:
-            off, bit = fpsba_abs, 1 << 16
-        else:
-            off, bit = fpsba_abs + 0x28, 1 << 7
-        if off + 4 > len(data):
-            return False
+        off, bit, byte_index = loc
         value = struct.unpack_from("<I", data, off)[0] | bit
         struct.pack_into("<I", data, off, value)
         return bool(struct.unpack_from("<I", data, off)[0] & bit)
+
+    def _hap_bit_location(
+        self, data: bytes, image_len: int, me_version: int
+    ) -> Optional[tuple[int, int, int]]:
+        """(offset, bit, byte_index) of the HAP/AltMeDisable strap, or None if unknown.
+
+        byte_index is the absolute file offset of the single byte the flag lives in (the
+        only byte this clean changes), so reports can state the exact difference.
+        """
+        fd_offset = self._find_fd_in_data(bytes(data))
+        if fd_offset < 0:
+            return None
+        flmap1 = self._read_flmap1(data, fd_offset)
+        if flmap1 is None:
+            return None
+        fpsba_abs = ((flmap1 >> 16) & 0xFF) * 0x10  # absolute file offset (ifdtool find_fpsba)
+
+        if me_version >= 11:
+            off, bit = fpsba_abs, 1 << 16        # HAP in the flash strap dword (PCHSTRP)
+        else:
+            off, bit = fpsba_abs + 0x28, 1 << 7  # AltMeDisable
+        if off + 4 > len(data):
+            return None
+        byte_index = off + (bit.bit_length() - 1) // 8
+        return off, bit, byte_index
 
     def _read_flmap1(self, data: bytes, fd_offset: int) -> Optional[int]:
         """FLMAP1 at fd+0x08 (ifdtool struct fdbar; me_cleaner reads it there). No fallback:
@@ -617,6 +640,30 @@ class IntelMECleaner:
         truncate_at = -(-end // 0x1000) * 0x1000
         if me_start < truncate_at < len(data):
             del data[truncate_at:]
+
+    def is_cse_lt_engine(self, file_path: str) -> bool:
+        """True when the image carries a CSME 11+ 'CSE LT' engine layout ($CPD manifest).
+
+        On those engines the only applicable clean is the HAP/AltMeDisable soft-disable:
+        partition-level cleaning does not exist there, exactly as me_cleaner documents it.
+        """
+        try:
+            if not os.path.isfile(file_path):
+                return False
+            with open(file_path, "rb") as f:
+                data = f.read()
+            me_start, me_end, _gen = self._find_me_region(data)
+            if me_start < 0:
+                return False
+            if b"$CPD" not in bytes(data[max(0, me_start - 0x1000) : min(me_end, len(data))]):
+                return False
+            version = self._get_me_version(data, me_start, me_end)
+            try:
+                return int(version.split(".")[0]) >= 11
+            except (ValueError, IndexError):
+                return False
+        except (OSError, ValueError):
+            return False
 
     def _is_already_clean(self, data: bytes, me_start: int, me_end: int) -> bool:
         fpt_off = self._find_fpt(data, me_start, me_end)

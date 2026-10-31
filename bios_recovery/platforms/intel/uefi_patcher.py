@@ -591,14 +591,17 @@ class UEFIPatcher:
 
     def _lzma_section_bytes(self, node: SectionNode) -> bytes:
         raw_data = bytes(node.data)
-        payload = lzma.compress(
-            raw_data,
-            format=lzma.FORMAT_ALONE,
-            filters=[{"id": lzma.FILTER_LZMA1, "preset": 9, "dict_size": 1 << 24}],
+        # Raw LZMA1 stream (no end marker) inside an ALONE container whose header carries the
+        # real decoded size. This keeps every decoder — strict liblzma (macOS) and the
+        # firmware's own one — consistent: the declared size is preceded by no EOS tail.
+        filters = [{"id": lzma.FILTER_LZMA1, "preset": 9, "dict_size": 1 << 24}]
+        raw_stream = lzma.compress(raw_data, format=lzma.FORMAT_RAW, filters=filters)
+        payload = (
+            b"\x5d"                                # lc=3, lp=0, pb=2 (standard props byte)
+            + struct.pack("<I", 1 << 24)           # dictionary size
+            + struct.pack("<Q", len(raw_data))     # real decoded size (not the FF unknown)
+            + raw_stream
         )
-        # FORMAT_ALONE writes an unknown size (all 0xFF) in its 13-byte header. The firmware's
-        # LZMA decoder needs the real decoded size, so write it in place of the unknown marker.
-        payload = payload[:5] + struct.pack("<Q", len(raw_data)) + payload[13:]
         hdr_len = 4
         total = hdr_len + 20 + len(payload)
         if total <= 0xFFFFFF:

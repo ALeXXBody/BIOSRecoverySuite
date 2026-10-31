@@ -179,6 +179,17 @@ class MERegionPage(QWidget):
         output = derived_path(path, "_cleaned.bin")
         if not confirm_overwrite(self, output):
             return
+        lt = self.cleaner.is_cse_lt_engine(path)
+        if lt:
+            # On CSME 11+ engines the only applicable clean is the strap soft-disable;
+            # module/partition options must not promise something the engine does not do.
+            self.remove_modules.setChecked(False)
+            self.remove_modules.setEnabled(False)
+            self.truncate.setChecked(False)
+            self.truncate.setEnabled(False)
+        else:
+            self.remove_modules.setEnabled(True)
+            self.truncate.setEnabled(True)
         options = (
             self.soft_disable.isChecked(),
             self.truncate.isChecked(),
@@ -360,5 +371,7 @@ def _format_clean(report) -> list:
         f"HAP Bit Set: {report.hap_bit_set}",
         f"Output: {report.output_path}",
     ]
+    if report.soft_disable and report.cleaned_size == report.original_size:
+        lines.append("Soft-disable only: the ME region is NOT truncated or emptied.")
     lines.extend(f"  - {msg}" for msg in report.messages)
     return lines
