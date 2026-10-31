@@ -589,19 +589,30 @@ class UEFIPatcher:
             hdr[0x11] = 0xAA
         buf[off : off + fnode.hdr_size] = hdr
 
+    def _lzma_final_payload(self, raw_data: bytes) -> bytes:
+        """LZMA-ALONE payload the firmware's own decoder accepts.
+
+        Layout: props byte + dictionary size + the real decoded size in the ALONE
+        header (EDK2's `LzmaDecompress.c` reads the size from header bytes 5..12),
+        followed by the LZMA1 stream *including* the EOS marker. `LzmaDecode` runs
+        with `LZMA_FINISH_END`, so `LZMA_STATUS_FINISHED_WITH_MARK` (SZ_OK) covers
+        both the marker and the declared size.
+
+        Note: Python's strict `lzma.decompress()` treats the EOS bytes as trailing
+        data after the declared size on some liblzma builds (older/newer differ on
+        whether that is an error). The suite therefore never uses the strict
+        module-level decoder on LZMA sections; it decodes incrementally the way the
+        patcher itself does (`LZMADecompressor`).
+        """
+        filters = [{"id": lzma.FILTER_LZMA1, "preset": 9, "dict_size": 1 << 24}]
+        comp = lzma.compress(raw_data, format=lzma.FORMAT_ALONE, filters=filters)
+        # FORMAT_ALONE writes an unknown size (0xFF...FF) in its 13-byte header; the
+        # firmware needs the real decoded size, so write it in place of that marker.
+        return comp[:5] + struct.pack("<Q", len(raw_data)) + comp[13:]
+
     def _lzma_section_bytes(self, node: SectionNode) -> bytes:
         raw_data = bytes(node.data)
-        # Raw LZMA1 stream (no end marker) inside an ALONE container whose header carries the
-        # real decoded size. This keeps every decoder — strict liblzma (macOS) and the
-        # firmware's own one — consistent: the declared size is preceded by no EOS tail.
-        filters = [{"id": lzma.FILTER_LZMA1, "preset": 9, "dict_size": 1 << 24}]
-        raw_stream = lzma.compress(raw_data, format=lzma.FORMAT_RAW, filters=filters)
-        payload = (
-            b"\x5d"                                # lc=3, lp=0, pb=2 (standard props byte)
-            + struct.pack("<I", 1 << 24)           # dictionary size
-            + struct.pack("<Q", len(raw_data))     # real decoded size (not the FF unknown)
-            + raw_stream
-        )
+        payload = self._lzma_final_payload(raw_data)
         hdr_len = 4
         total = hdr_len + 20 + len(payload)
         if total <= 0xFFFFFF:

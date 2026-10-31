@@ -50,15 +50,18 @@ def test_apply_patches_lzma_and_raw(patcher, uefi_patch_image, tmp_path):
 
     patched = _read(out)
 
-    # 1) advanced-menu pattern patched INSIDE the LZMA container
+    # 1) advanced-menu pattern patched INSIDE the LZMA container. The section is
+    # decoded the way the patcher does — LZMADecompressor — because the strict
+    # module decoder's handling of the declared-size + EOS tail differs between
+    # liblzma builds (macOS fails while Linux tolerates it; EDK2 wants the size).
     p = UEFIPatcher(patcher.patches_path)
     files = {f.guid: f for f in p.iter_files(patched)}
     target = files[UEFI_PATCH_TARGET_GUID]
     lzma_sec = next(s for s in target.sections if s.comp == "lzma")
+    decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
     inner = bytes(
-        lzma.decompress(
-            patched[lzma_sec.off + 0x18 : lzma_sec.off + lzma_sec.hdr_size + lzma_sec.body_size],
-            format=lzma.FORMAT_ALONE,
+        decomp.decompress(
+            patched[lzma_sec.off + 0x18 : lzma_sec.off + lzma_sec.hdr_size + lzma_sec.body_size]
         )
     )
     assert ADV_REPLACEMENT in inner
@@ -258,7 +261,11 @@ def test_lzma_section_header_carries_decoded_size(patcher):
     decoded_size = int.from_bytes(section[4 + 20 + 5 : 4 + 20 + 13], "little")
     assert decoded_size == len(payload)
     stream = section[4 + 20 :]
-    assert lzma.decompress(stream, format=lzma.FORMAT_ALONE) == payload
+    # The section stream is decoded exactly the way the patcher itself decodes LZMA
+    # sections — via LZMADecompressor — not with the strict module-level decoder,
+    # whose EOS-tail behaviour differs between liblzma builds.
+    decomp = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
+    assert decomp.decompress(stream) == payload
 
 
 def test_file_alignment_follows_attribute_table(patcher):
