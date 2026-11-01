@@ -322,3 +322,22 @@ Practical consequences shipped in the app:
   raw byte edits are not, and the HAP bit only neuters the engine.
 - Field absent (CSME ≤ 10) → treat dumped-from-running-machine regions as
   Initialized (Dirty EXTR) by default.
+
+
+## Bundled ME Analyzer: corrupt-EFS resilience (v0.4.37)
+
+User-reported defect: running ME Analyzer on a Lenovo P14s Gen 2 dump (CSME
+15.0.55, TGP-LP) crashed at `efs_anl` line 8748
+(`dat_pages_final = [dat_page_all[v] for v in sys_idx_values]`) because the EFS
+System Page Indexes CRC-32 had already been flagged invalid (0xFFFFFFFF) and the
+computed index offset swept FF garbage as "index values" (`173, 73, 227, 255, ...`).
+Upstream MEA (v1.312.0 r378, platomav) has the same code path.
+
+Integrated fix (vendored):
+- `MEA.py efs_anl`: when the System Page Indexes CRC-32 validation fails, the
+  analyzer no longer crashes; it logs
+  *"EFS System Page Indexes CRC-32 detected a corrupted index; continuing with
+  sequential Data Page order!"* and rebuilds `dat_pages_final` sequentially, so
+  the rest of the report (Family/Version/SKU/File System State/...) survives.
+- The rest of the pipeline is untouched; upstream-parity behavior for valid EFS
+  images is unchanged (CRC-32 pass → index-ordered parsing).

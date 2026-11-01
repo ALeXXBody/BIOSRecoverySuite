@@ -8745,7 +8745,15 @@ def efs_anl(mod_f_path, part_start, part_end, vol_ftbl_id, vol_ftbl_pl) :
     
     # Sort Data Pages based on the order of the System Page Index Values
     # For example: 0C 01 07 03 00 [...] --> 0C = 1st Page, 07 = 3rd Page, 03 = 4th Page etc
-    dat_pages_final = [dat_page_all[v] for v in sys_idx_values]
+    # Guard: on corrupted EFS System Pages (CRC-32 already flagged above) the index
+    # area can hold garbage such as 0xFF-filled values, so sorting over them used to
+    # raise IndexError and crash the whole analyzer run, hiding every remaining
+    # field (Fixed here: degrade to sequential Data Pages order and continue).
+    if sys_idx_crc32_int != sys_idx_crc32_mea :
+        efs_anl_msg(col_r + 'Error: EFS System Page Indexes CRC-32 detected a corrupted index; continuing with sequential Data Page order!' + col_e, err_stor, True)
+        dat_pages_final = dat_page_all[:sys_dat_count]
+    else :
+        dat_pages_final = [dat_page_all[v] for v in sys_idx_values]
     
     # Parse the ordered Data Pages
     for page_idx in range(sys_dat_count) :

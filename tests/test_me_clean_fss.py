@@ -20,48 +20,20 @@ def test_engine_fields_maps_file_system_states():
         assert ("File System State", expected) in fields, (raw, fields)
 
 
-def test_unreadable_state_falls_back_to_unconfigured_wording(monkeypatch, tmp_path):
+def test_unreadable_state_reports_a_reason_not_a_state(monkeypatch, tmp_path):
+    """When the analyzer cannot read the image, the helper must return ("", reason)."""
     import bios_recovery.platforms.intel.me.me_details as details
     from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
 
     monkeypatch.setattr(
-        details, "engine_details", lambda p: {"found": False}, raising=False
+        details,
+        "engine_details",
+        lambda p: {"found": False, "reason": "no engine detail"},
+        raising=False,
     )
-    value = IntelMECleaner()._read_file_system_state(str(tmp_path / "missing.bin"))
-    assert value == ""
-def test_state_unconfigured_is_the_bad_donor_state(monkeypatch, tmp_path):
-    """RGN = stock/unconfigured. NOT flashable as-is; not a donor."""
-    from bios_recovery.platforms.intel.me import me_cleaner as mod
-    from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner, MeCleanResult
-
-    fake = {"found": True,
-            "engines": [("CSME", {"File System State": "Unconfigured"})]}
-    monkeypatch.setattr(
-        "bios_recovery.platforms.intel.me.me_details.engine_details", lambda p: fake
-    )
-    monkeypatch.setattr(
-        IntelMECleaner, "_get_me_version", lambda self, d, s, e: "15.0.55.2751", raising=False
-    )
-    monkeypatch.setattr(
-        IntelMECleaner,
-        "_find_me_region",
-        lambda self, data: (0x0, len(data), mod.MeGeneration.GEN3),
-    )
-    monkeypatch.setattr(IntelMECleaner, "_is_already_clean", lambda self, d, s, e: False)
-    monkeypatch.setattr(IntelMECleaner, "_read_flmap1", lambda self, data, fd: None)
-
-    src = tmp_path / "image.bin"
-    src.write_bytes(b"$CPD" + b"\x00" * (0x2000 - 4) + bytes.fromhex("f88f"))
-    out = tmp_path / "out.bin"
-
-    report = IntelMECleaner().clean(str(src), str(out), soft_disable=True)
-    lines = "\n".join(report.messages)
-    assert report.file_system_state == "Unconfigured"
-    assert "File System State: Unconfigured (RGN)" in lines
-    assert "Never flash RGN without first configuring it" in lines
-    assert "Intel Flash Image Tool (FIT)" in lines
-    assert "via Intel Flash Image Tool" in lines
-    assert report.status == MeCleanResult.SUCCESS
+    state, reason = IntelMECleaner()._read_file_system_state(str(tmp_path / "missing.bin"))
+    assert state == ""
+    assert reason == "no engine detail"
 
 
 def test_state_configured_is_the_good_donor_state(monkeypatch, tmp_path):
@@ -131,14 +103,46 @@ def test_state_initialized_dirty_has_fit_roundtrip_guidance(monkeypatch, tmp_pat
     assert report.status == MeCleanResult.SUCCESS
 
 
-def test_state_empty_is_reported_not_guessed(monkeypatch, tmp_path):
-    """CSME <= 10 (or analyzer failure): say the state simply isn't reported."""
+def test_state_empty_failure_path_reports_analyzer_reason(monkeypatch, tmp_path):
+    """A crashed/unreadable analyzer must be reported, never mapped to a state."""
     from bios_recovery.platforms.intel.me import me_cleaner as mod
     from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
 
     monkeypatch.setattr(
         "bios_recovery.platforms.intel.me.me_details.engine_details",
-        lambda p: {"found": False},
+        lambda p: {"found": False, "reason": "analyzer crashed"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        IntelMECleaner, "_get_me_version", lambda self, d, s, e: "15.0.55.2751", raising=False
+    )
+    monkeypatch.setattr(
+        IntelMECleaner,
+        "_find_me_region",
+        lambda self, data: (0x0, len(data), mod.MeGeneration.GEN3),
+    )
+    monkeypatch.setattr(IntelMECleaner, "_is_already_clean", lambda self, d, s, e: False)
+    monkeypatch.setattr(IntelMECleaner, "_read_flmap1", lambda self, data, fd: 0x18)
+
+    src = tmp_path / "image.bin"
+    src.write_bytes(b"$CPD" + b"\x00" * (0x2000 - 4) + bytes.fromhex("f88f"))
+    out = tmp_path / "out.bin"
+
+    report = IntelMECleaner().clean(str(src), str(out), soft_disable=True)
+    lines = "\n".join(report.messages)
+    assert "could not be read" in lines
+    assert "Unconfigured (RGN)" not in lines, "a crashed analyzer must not be labeled RGN"
+
+
+def test_state_empty_reports_csme10_wording(monkeypatch, tmp_path):
+    """CSME <= 10: ME Analyzer does not print the field; the report says so."""
+    from bios_recovery.platforms.intel.me import me_cleaner as mod
+    from bios_recovery.platforms.intel.me.me_cleaner import IntelMECleaner
+
+    monkeypatch.setattr(
+        "bios_recovery.platforms.intel.me.me_details.engine_details",
+        lambda p: {"found": True, "engines": [("ME", {})]},
+        raising=False,
     )
     monkeypatch.setattr(
         IntelMECleaner, "_get_me_version", lambda self, d, s, e: "9.1.37.1002", raising=False

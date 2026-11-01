@@ -174,18 +174,28 @@ class IntelMECleaner:
         # decision-relevant value: it says whether the region carries a configured
         # engine state or a fresh/unconfigured one and drives the report's advice,
         # exactly like ME Analyzer prints it in its own report.
-        file_system_state = self._read_file_system_state(input_path)
+        file_system_state, fss_reason = self._read_file_system_state(input_path)
         report.file_system_state = file_system_state
         from bios_recovery.platforms.intel.me.me_details import _FILE_SYSTEM_STATE_LABELS
 
-        shown = _FILE_SYSTEM_STATE_LABELS.get(
-            file_system_state,
-            "Error (analyzer could not parse the filesystem)"
-            if file_system_state == "Error"
-            else file_system_state or "-",
-        )
-        report.messages.append(f"File System State: {shown}")
-        if file_system_state == "Unconfigured":
+        if fss_reason:
+            # The analyzer genuinely failed to read this image: report the failure
+            # rather than guessing a state, and point at the info page for residuals.
+            report.messages.append(
+                f"File System State: could not be read — {fss_reason}"
+            )
+            shown = "could not be read"
+        else:
+            shown = _FILE_SYSTEM_STATE_LABELS.get(
+                file_system_state,
+                "Error (analyzer could not parse the filesystem)"
+                if file_system_state == "Error"
+                else file_system_state or "-",
+            )
+            report.messages.append(f"File System State: {shown}")
+        if fss_reason:
+            pass  # failure already reported above; do not invent a state
+        elif file_system_state == "Unconfigured":
             # Win-Raid guide semantics: RGN = stock/unconfigured factory image. It is
             # NOT directly flashable, and an "RGN donor" is not a donor at all.
             report.messages.append(
@@ -220,7 +230,7 @@ class IntelMECleaner:
                 "must confirm Configured afterwards), not raw byte edits and not "
                 "the HAP bit."
             )
-        elif file_system_state == "":
+        elif file_system_state == "" and not fss_reason:
             # CSME <= 10 (or analyzer hiccup): ME Analyzer does not print the field.
             report.messages.append(
                 "File System State not reported (ME Analyzer supplies it only for "
@@ -732,30 +742,31 @@ class IntelMECleaner:
         except (OSError, ValueError):
             return False
 
-    def _read_file_system_state(self, file_path: str) -> str:
-        """ME Analyzer's File System State word ("Unconfigured"/"Configured"/"Initialized").
+    def _read_file_system_state(self, file_path: str) -> tuple[str, str]:
+        """(state, reason): ME Analyzer's File System State word.
 
-        Uses the engine-detail path (the analyzer already computes MFS parse state). The
-        exact state lives only in CSME 11+ engines; "" is returned when the analyzer
-        cannot read the region or the generation predates the field — the report then
-        says so explicitly instead of guessing a state.
+        Uses the engine-detail path (the analyzer already computes MFS parse state).
+        ``(state, "")`` on success; ``("", reason)`` when the analyzer could not
+        produce engine detail at all so the report states the *actual* failure
+        instead of inventing a state.
         """
         try:
             from bios_recovery.platforms.intel.me.me_details import engine_details
 
             info = engine_details(file_path)
-        except Exception:
-            return ""
+        except Exception as e:
+            return "", f"ME Analyzer crashed/raised ({e})"
         if not info or not info.get("found"):
-            return ""
+            reason = info.get("reason") if isinstance(info, dict) else None
+            return "", reason or "no engine data in the image"
         for _name, entry in info.get("engines", []):
             value = entry.get("File System State")
             if value:
                 text = re.sub(r"\x1b\[[0-9;]*m", "", str(value)).strip()
                 # Keep the raw analyzer word without ANSI colour or the parenthetical.
                 text = text.split(" (")[0]
-                return text
-        return ""
+                return text, ""
+        return "", ""
 
     def _is_already_clean(self, data: bytes, me_start: int, me_end: int) -> bool:
         fpt_off = self._find_fpt(data, me_start, me_end)
