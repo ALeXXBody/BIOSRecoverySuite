@@ -13,7 +13,9 @@ This engine:
 """
 
 import os
+import struct
 import tempfile
+from typing import Optional
 
 from bios_recovery.core.bios_analyzer import BiosAnalyzer
 from bios_recovery.core.me_manifest import engine_version as detect_me_version_in_blob
@@ -39,6 +41,48 @@ class MEInjector:
             "size": me.size if me else 0,
             "version": result.me_version or blob_version,
         }
+
+    @staticmethod
+    def _fpt_layout(region: bytes) -> Optional[list[tuple[bytes, int, int]]]:
+        """The FPT partition rows of an ME region image, or None when absent.
+
+        Rows are (name, offset, size); entries with no data (zero offsets/sizes)
+        are skipped. Two regions with the same engine layout produce the exact
+        same list — the precondition used before replacing a target's ME.
+        """
+        n = 0
+        pos = region.find(b"$FPT")
+        if pos < 0:
+            return None
+        n = int.from_bytes(region[pos + 4 : pos + 8], "little")
+        if not 1 <= n <= 64 or pos + 0x20 + n * 0x20 > len(region):
+            return None
+        out = []
+        for i in range(n):
+            e = region[pos + 0x20 + i * 0x20 : pos + 0x20 + (i + 1) * 0x20]
+            base, size = struct.unpack_from("<II", e, 8)
+            if base in (0, 0xFFFFFFFF) or size in (0, 0xFFFFFFFF):
+                continue
+            out.append((e[:4], base, size))
+        return out
+
+    @staticmethod
+    def _layout_diff_names(
+        target: list[tuple[bytes, int, int]], clean: list[tuple[bytes, int, int]]
+    ) -> str:
+        """Short, human reasons for why two FPT layouts differ (names first)."""
+        t_names = [e[0].rstrip(b"\x00").decode("latin-1") or "----" for e in target]
+        c_names = [e[0].rstrip(b"\x00").decode("latin-1") or "----" for e in clean]
+        if t_names != c_names:
+            return (
+                f"target partitions {','.join(t_names[:6])} vs clean image "
+                f"{','.join(c_names[:6])}"
+            )
+        for (tn, t_off, t_size), (cn, c_off, c_size) in zip(target, clean):
+            if (t_off, t_size) != (c_off, c_size):
+                name = tn.rstrip(b"\x00").decode("latin-1") or "----"
+                return f"partition {name} offsets/sizes differ"
+        return ""
 
     def inject(self, image_path: str, clean_me_path: str, output_path: str) -> dict:
         try:
@@ -84,6 +128,41 @@ class MEInjector:
             warn = "clean image does not look like ME firmware (no $MN2 marker)"
         else:
             warn = None
+
+        # Layout precondition: the clean blob must carry the SAME engine partition
+        # layout as the target's ME region (identical FPT rows — names, order,
+        # offsets, sizes). A blob from a different engine generation (e.g. an CSME
+        # 16 LT update image with an FPT that lists FTPR, over a CSME 15 LT target
+        # whose FPT does not) produces a dead engine and bricks recovery paths, so
+        # it is refused instead of blindly spliced. The supported route for a wrong
+        # layout is the Intel Flash Image Tool round-trip (licence-protected: not
+        # bundled, the app only says which FIT is needed).
+        target_layout = self._fpt_layout(image[me.offset : me.offset + me.size])
+        clean_layout = self._fpt_layout(clean)
+        if target_layout is not None and clean_layout is not None and target_layout != clean_layout:
+            from bios_recovery.platforms.intel.me.fit_check import check_image
+
+            fit_hint = ""
+            try:
+                fit = check_image(image_path)
+                if fit.needed_tool and fit.confidence:
+                    fit_hint = (
+                        f" The supported route for a wrong layout is the Intel Flash "
+                        f"Image Tool round-trip ({fit.needed_tool}); your library's "
+                        "matching tool is listed under 'Tools for this image'."
+                    )
+            except Exception:
+                fit_hint = (
+                    " The supported route for a wrong layout is the Intel Flash "
+                    "Image Tool round-trip."
+                )
+            diff_names = self._layout_diff_names(target_layout, clean_layout)
+            bad_part = diff_names if diff_names else "the partition table rows differ"
+            return {
+                "success": False,
+                "message": f"clean image has a different engine layout ({bad_part}); "
+                "nothing written" + fit_hint,
+            }
 
         region = image[me.offset : me.offset + me.size]
         cur_version = result.me_version or detect_me_version_in_blob(region)

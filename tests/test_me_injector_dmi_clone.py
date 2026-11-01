@@ -14,10 +14,20 @@ def _read(path):
 
 
 def _make_clean_me(size: int = 0x3FF000, version=(9, 5)) -> bytes:
+    """A clean ME blob that shares the target image's FPT layout.
+
+    The injector refuses blobs whose engine partition layout differs from the
+    target (that refusal is what makes a CSME-16-style blob over a CSME-15 target
+    impossible), so the test blob carries the same FPT rows the fixture target
+    has (FTPR/LOCL/ROMB/EFFS at the same offsets) and the manifest version is
+    what varies.
+    """
     blob = bytearray(bytes((i * 13 + 7) & 0xFF for i in range(size)))
+    target = build_intel_ifd_image()
+    me, me_size = 0x1000, 0x200000 - 0x1000  # fixture ME region bounds (me..gbe)
     fpt = 0x10
-    blob[fpt : fpt + 4] = b"$FPT"
-    struct.pack_into("<I", blob, fpt + 4, 2)
+    entries = target[me + fpt : me + fpt + 0x20 * 7]  # header + 6 rows
+    blob[fpt : fpt + len(entries)] = entries
     # Real manifest layout: tag at base+0x1C, version u16x4 at base+0x24
     marker = 0x501C
     blob[marker : marker + 4] = b"$MN2"

@@ -359,3 +359,23 @@ and do I own it?* — so the output now:
 The Intel-tool *licensing* disclaimer from earlier work still applies: the app
 only *probes* the user's own tool copies to tell which one fits the image;
 nothing is bundled or downloaded (Intel FIT/MFIT are licence-protected).
+
+## ME Injector: same-layout precondition (v0.4.41)
+
+User-verified defect (two 32 MB images, same descriptor): the app's "Inject Clean
+ME" grafted a library blob whose engine layout was *different* onto the target.
+Detection: the app-built image had an FPT at ME+0x10 listing
+`PSVN/UEP/FTPR/FTUP/DLMP/IVBP/MFS/NFTP/ROMB/UTOK/HVMP/RBEP/FLOG/EFS/RSTR/IMDP`
+(CSME-16-style LT update image, FTPR in the table) while the **FIT-built
+outimage** from the *same* target keeps the CSME-15 LT layout
+(`PSVN/UEP/IVBP/MFS/UTOK/HVMP/FLOG/EFS/RSTR/IMDP/FITC`, FTPR inside `$CPD` only).
+FitCheck's lease-reminder from before still holds: FIT/MFIT are
+licence-protected, so the app cannot *perform* the FIT glue itself.
+
+Integration: `MEInjector.inject()` now requires the clean blob's $FPT rows
+(name + offset + size, empty entries skipped) to equal the target's. A mismatch
+is refused with (a) the participating partition names, and (b) the owned-tool
+hint from `fit_check` ("needs FIT 15.0; matching tool: FIT 15.0.35.1951
+(Windows)"). Existing behavior for same-layout blobs (region padding,
+build-verify, descriptor intact, BIOS untouched) is unchanged and covered by
+the regression tests.
