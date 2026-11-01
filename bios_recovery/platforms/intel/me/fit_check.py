@@ -56,12 +56,12 @@ class FitCheck:
         return f"{family} {self.needed_version}".strip()
 
     def lines(self) -> list[str]:
-        """Short, plain result: what this image needs and what is in the library.
+        """Short, plain result: what this image needs and what matches.
 
         The output answers exactly one question — "which Intel tool does this
-        image need, and do I have it?" — so incompatible entries are summarised,
-        not enumerated: a library holding dozens of FIT builds (plus unidentified
-        ones) used to bury the useful rows under a wall of noise.
+        image need, and do I have it?" — and nothing else. When nothing matches,
+        a single line says what to add; the library's remaining entries are not
+        part of the answer and are not printed.
         """
         name = os.path.basename(self.image) or self.image
         head = f"ME:    {self.me_version or 'not found'}"
@@ -69,12 +69,6 @@ class FitCheck:
             head += f" - needs {self.needed_tool}"
 
         matching_rows = _unique_rows([t for t in self.tools if t.compatible and t.version])
-        # Unidentified entries carry no version, so they can never match anything;
-        # they are summarised instead of listed line by line.
-        unidentified = [t for t in self.tools if not t.version]
-        others = _unique_rows(
-            [t for t in self.tools if t.version and not t.compatible]
-        )
 
         out = [f"Image: {name}", head, ""]
         out.append(
@@ -82,25 +76,6 @@ class FitCheck:
             if matching_rows
             else "Matching tool: none"
         )
-        if others:
-            kept = others[:6]
-            summary = ", ".join(t.label() for t in kept)
-            if len(others) > len(kept):
-                summary += f" (+{len(others) - len(kept)} more)"
-            out.append("In your library (not fitting): " + summary)
-        if unidentified:
-            # Family is still visible even though the version is not, so the entry
-            # is summarized without being hidden.
-            fams = {}
-            for t in unidentified:
-                fams[t.family or "FIT"] = fams.get(t.family or "FIT", 0) + 1
-            fam_str = ", ".join(
-                f"{f} ×{n}" if n > 1 else f for f, n in sorted(fams.items())
-            )
-            out.append(
-                f"Unidentified library entries (ignored): {len(unidentified)} — "
-                f"{fam_str} (no readable version; exclude them or place them elsewhere)"
-            )
         if not matching_rows:
             out.append("")
             where = f"the CSME {self.needed_version} System Tools" if self.needed_version else (

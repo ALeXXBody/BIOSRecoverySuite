@@ -1,23 +1,26 @@
-"""The "Tools for this image" output must not bury the answer.
+"""The "Tools for this image" output is exactly three lines when a match exists.
 
-The feature answers one question — "which Intel tool does this image need, and
-do I own it?" — so the report keeps: the image, the needed tool, the matching
-tool, a summarised incompatible list, and an aggregated unidentified count.
-A library holding dozens of FIT builds used to produce a wall of noise rows.
+The user's contract, verbatim:
+    Image: Lenovo P14s U2201 good.bin
+    ME:    15.0.55.2751 - needs FIT 15.0
+
+    Matching tool: FIT 15.0.35.1951 (Windows)
+Anything the library holds beyond the matching tool is not part of the answer
+and is not printed.
 """
 
 from bios_recovery.platforms.intel.me.fit_check import FitCheck, ToolRow
 
 
-def _row(family, version, platform="Windows", path="/x", compatible=True, reason=""):
+def _row(family, version, platform="Windows", compatible=True):
     return ToolRow(
         family=family,
         version=version,
         platform=platform,
-        release=reason,
-        path=path,
+        release="",
+        path="/x",
         compatible=compatible,
-        reason=reason,
+        reason="",
     )
 
 
@@ -32,43 +35,35 @@ def _check_with(rows):
     )
 
 
-def test_matches_first_and_keeps_the_report_short():
-    rows = [_row("FIT", "15.0.35.1951", compatible=True)] + [
+def test_exact_contract_with_a_match():
+    rows = [_row("FIT", "15.0.35.1951")] + [
         _row("FIT", f"11.8.{i}.1", compatible=False) for i in range(9)
     ]
     lines = _check_with(rows).lines()
-    text = "\n".join(lines)
-    assert "Matching tool: FIT 15.0.35.1951 (Windows)" in text
-    # Only a handful of incompatible rows are named; the rest are collapsed.
-    assert "(+3 more)" in text
-    assert lines[0] == "Image: Lenovo P14s U2201 good.bin"
-
-
-def test_duplicate_library_entries_do_not_repeat():
-    rows = [
-        _row("FIT", "15.0.35.1951", compatible=True),
-        _row("FIT", "15.0.35.1951", compatible=True),
-        _row("FIT", "13.30.0.1065", compatible=False),
-        _row("FIT", "13.30.0.1065", compatible=False),
+    assert lines == [
+        "Image: Lenovo P14s U2201 good.bin",
+        "ME:    15.0.55.2751 - needs FIT 15.0",
+        "",
+        "Matching tool: FIT 15.0.35.1951 (Windows)",
     ]
-    text = "\n".join(_check_with(rows).lines())
-    assert text.count("FIT 15.0.35.1951") == 1
-    assert text.count("FIT 13.30.0.1065") == 1
 
 
-def test_unidentified_entries_are_summarized_not_listed():
+def test_identical_entries_do_not_duplicate_the_matching_line():
     rows = [
-        _row("FIT", "", platform="Linux", compatible=False),
-        _row("FIT", "", platform="Linux", compatible=False),
-        _row("unidentified", "", platform="unknown", compatible=False),
+        _row("FIT", "15.0.35.1951"),
+        _row("FIT", "15.0.35.1951"),
     ]
-    text = "\n".join(_check_with(rows).lines())
-    assert "Unidentified library entries (ignored): 3" in text
-    assert "(not identified)" not in text
+    assert _check_with(rows).lines().count("Matching tool: FIT 15.0.35.1951 (Windows)") == 1
 
 
-def test_clean_high_needs_message_only_mentions_what_is_missing():
-    ffc = _check_with([])
-    lines = ffc.lines()
-    assert ("No Intel tools found. Add the CSME 15.0 System Tools folder in "
-            "Settings.") in "\n".join(lines)
+def test_no_match_says_what_to_add_and_nothing_else():
+    text = "\n".join(_check_with([_row("FIT", "", platform="Linux", compatible=False)]).lines())
+    assert "Add the CSME 15.0 System Tools folder in Settings." in text
+    assert "Matching tool: none" in text
+    # nothing else about the library contents
+    assert "not identified" not in text
+
+
+def test_empty_library_message_stays():
+    lines = _check_with([]).lines()
+    assert lines[-1] == "No Intel tools found. Add the CSME 15.0 System Tools folder in Settings."

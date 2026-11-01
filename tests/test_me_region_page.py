@@ -342,7 +342,7 @@ def test_check_tools_lists_an_unidentified_tool_instead_of_hiding_it(qapp, tmp_p
     page.check_tools()
     text = page.output.toPlainText()
     assert "Matching tool: none" in text
-    # Unidentified entries must never be silently hidden: the summary names
-    # the family and the count.
-    assert "Unidentified library entries (ignored): 1" in text
+    # The strict contract: the answer is only the image/needs/match lines plus
+    # what to add. Library details beyond that are not printed.
+    assert "Unidentified" not in text
     assert "FIT" in text
