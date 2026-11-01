@@ -89,9 +89,17 @@ class FitCheck:
                 summary += f" (+{len(others) - len(kept)} more)"
             out.append("In your library (not fitting): " + summary)
         if unidentified:
+            # Family is still visible even though the version is not, so the entry
+            # is summarized without being hidden.
+            fams = {}
+            for t in unidentified:
+                fams[t.family or "FIT"] = fams.get(t.family or "FIT", 0) + 1
+            fam_str = ", ".join(
+                f"{f} ×{n}" if n > 1 else f for f, n in sorted(fams.items())
+            )
             out.append(
-                f"Unidentified library entries (ignored): {len(unidentified)} "
-                "(no readable version; exclude them or place them elsewhere)"
+                f"Unidentified library entries (ignored): {len(unidentified)} — "
+                f"{fam_str} (no readable version; exclude them or place them elsewhere)"
             )
         if not matching_rows:
             out.append("")
