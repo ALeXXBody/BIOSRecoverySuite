@@ -114,7 +114,7 @@ def failure_reason(result) -> str:
     if 'is missing!' in output:
         # A packaging problem, not a problem with the image: say which one it is.
         return "The bundled ME Analyzer is incomplete; reinstall the suite."
-    return f"{_UNREADABLE} Analyzer output: {failure_reason(result)}"
+    return _UNREADABLE
 
 
 def engine_details(path: str) -> Dict[str, Any]:
