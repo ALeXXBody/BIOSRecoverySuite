@@ -1,6 +1,7 @@
 """Intel ME/TXE/CSME cleaning engine - strips and neuters management firmware."""
 
 import os
+import re
 import struct
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -37,6 +38,7 @@ class MeCleanReport:
     modules_removed: int = 0
     hap_bit_set: bool = False
     soft_disable: bool = False
+    file_system_state: str = ""
     output_path: str = ""
     messages: list[str] = field(default_factory=list)
 
@@ -167,6 +169,64 @@ class IntelMECleaner:
             generation=me_gen,
             original_size=original_size,
         )
+
+        # File System State — ME Analyzer's RGN/EXTR/Dirty-EXTR line — the clean's
+        # decision-relevant value: it says whether the region carries a configured
+        # engine state or a fresh/unconfigured one and drives the report's advice,
+        # exactly like ME Analyzer prints it in its own report.
+        file_system_state = self._read_file_system_state(input_path)
+        report.file_system_state = file_system_state
+        from bios_recovery.platforms.intel.me.me_details import _FILE_SYSTEM_STATE_LABELS
+
+        shown = _FILE_SYSTEM_STATE_LABELS.get(
+            file_system_state,
+            "Error (analyzer could not parse the filesystem)"
+            if file_system_state == "Error"
+            else file_system_state or "-",
+        )
+        report.messages.append(f"File System State: {shown}")
+        if file_system_state == "Unconfigured":
+            # Win-Raid guide semantics: RGN = stock/unconfigured factory image. It is
+            # NOT directly flashable, and an "RGN donor" is not a donor at all.
+            report.messages.append(
+                "Unconfigured (RGN) — stock factory image, never configured by any "
+                "OEM. Never flash RGN without first configuring it for the target "
+                "system via Intel Flash Image Tool (FIT), the way the reference "
+                "guide requires. If a *donor* dump reads RGN, it is not a usable "
+                "donor: a working machine's ME region reads Configured or "
+                "Initialized, and presenting RGN to the platform is what produces "
+                "the blank ME Firmware Version line in BIOS."
+            )
+        elif file_system_state == "Configured":
+            # EXTR-A: OEM-configured via FIT, not yet bound to a physical PCH — the
+            # correct donor state for a clean deployment on another system.
+            report.messages.append(
+                "Configured (EXTR) — Type A donor: OEM settings applied via FIT "
+                "(official OEM BIOS/streamed package), NOT bound to any machine's "
+                "hardware identifiers (PCH serial / UUID / AMT config / event "
+                "logs). This is the donor state you want for a clean deployment "
+                "on another system."
+            )
+        elif file_system_state == "Initialized":
+            # Dirty EXTR: dumped from a running system; the Engine coprocessor wrote
+            # system-specific initialization into DATA. The bad donor state.
+            report.messages.append(
+                "Initialized (Dirty EXTR) — Type B donor: dumped from a machine "
+                "that RAN. The engine coprocessor wrote the full unique hardware "
+                "information of that PCH into the filesystem (serial, UUID, AMT "
+                "config, event logs). On another system this has a high chance "
+                "of second-boot problems and sleep failures; the supported way "
+                "to revert is the Intel Flash Image Tool round-trip (MEAnalyzer "
+                "must confirm Configured afterwards), not raw byte edits and not "
+                "the HAP bit."
+            )
+        elif file_system_state == "":
+            # CSME <= 10 (or analyzer hiccup): ME Analyzer does not print the field.
+            report.messages.append(
+                "File System State not reported (ME Analyzer supplies it only for "
+                "CSME 11+). A dumped region from a running system must be treated "
+                "as Initialized (Dirty EXTR) by default."
+            )
 
         fpt_offset = self._find_fpt(data, me_start, me_end)
         entries = (
@@ -671,6 +731,31 @@ class IntelMECleaner:
                 return False
         except (OSError, ValueError):
             return False
+
+    def _read_file_system_state(self, file_path: str) -> str:
+        """ME Analyzer's File System State word ("Unconfigured"/"Configured"/"Initialized").
+
+        Uses the engine-detail path (the analyzer already computes MFS parse state). The
+        exact state lives only in CSME 11+ engines; "" is returned when the analyzer
+        cannot read the region or the generation predates the field — the report then
+        says so explicitly instead of guessing a state.
+        """
+        try:
+            from bios_recovery.platforms.intel.me.me_details import engine_details
+
+            info = engine_details(file_path)
+        except Exception:
+            return ""
+        if not info or not info.get("found"):
+            return ""
+        for _name, entry in info.get("engines", []):
+            value = entry.get("File System State")
+            if value:
+                text = re.sub(r"\x1b\[[0-9;]*m", "", str(value)).strip()
+                # Keep the raw analyzer word without ANSI colour or the parenthetical.
+                text = text.split(" (")[0]
+                return text
+        return ""
 
     def _is_already_clean(self, data: bytes, me_start: int, me_end: int) -> bool:
         fpt_off = self._find_fpt(data, me_start, me_end)

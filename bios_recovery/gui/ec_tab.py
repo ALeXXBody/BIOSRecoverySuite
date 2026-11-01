@@ -260,16 +260,20 @@ class ECTab(QWidget):
             if analysis.checksum_valid
             else ("invalid/trailing" if analysis.checksum_valid is False else "n/a")
         )
+        ec_ver = analysis.ec_version or "(not found — see note in the report)"
         lines = [
             "EC firmware found",
             f"  Offset: 0x{analysis.offset:X}",
             f"  Size:   0x{analysis.size:X} ({analysis.size:,} bytes)",
             f"  Controller: {analysis.controller_name}",
+            f"  EC firmware version: {ec_ver}",
             f"  Magic: {analysis.magic}",
             f"  KBC_CONFIG markers: {'yes' if analysis.has_kbc_config else 'no'}",
             f"  XOR checksum: {checksum}",
             f"  Password/security flags found: {len(analysis.password_flags)}",
         ]
+        if analysis.ec_version_note:
+            lines.append(f"  Note: {analysis.ec_version_note}")
         for flag in analysis.password_flags[:40]:
             lines.append(f"    [{flag['name']}] at 0x{flag['offset_in_image']:X}")
         if off_override is not None or size_override is not None:

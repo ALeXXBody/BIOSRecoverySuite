@@ -24,6 +24,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from bios_recovery.core.safety import SameFileError, ensure_distinct, write_file_atomic
+from bios_recovery.platforms.ec.ec_version import scan_ec_firmware_version
 
 
 class ECController(Enum):
@@ -70,6 +71,9 @@ class ECAnalysis:
     password_flags: list[dict] = field(default_factory=list)
     has_kbc_config: bool = False
     checksum_valid: Optional[bool] = None
+    ec_version: str = ""
+    ec_version_note: str = ""
+    ec_version_offset: int = -1
     raw: bytes = b""
     message: str = ""
 
@@ -700,6 +704,17 @@ class ECPatcher:
                 search = idx + 1
 
         analysis.checksum_valid = self._check_xor_checksum(ec_data)
+
+        ver = scan_ec_firmware_version(ec_data)
+        if ver is not None:
+            analysis.ec_version = ver.version
+            analysis.ec_version_note = ver.note
+            analysis.ec_version_offset = ver.offset
+            analysis.message = (
+                f"EC firmware version token: {ver.version}"
+                if ver.version
+                else ver.note
+            )
         return analysis
 
     def _controller_evidence(self, ec_data: bytes) -> tuple[ECController, list[str]]:

@@ -365,6 +365,7 @@ def _format_clean(report) -> list:
         f"Status: {report.status.name}",
         f"ME Version: {report.me_version}",
         f"ME Type: {report.me_type}",
+        f"File System State: {report.file_system_state or 'Unconfigured (RGN)'}",
         f"Original Size: {report.original_size:#x}",
         f"Cleaned Size: {report.cleaned_size:#x}",
         f"Partitions Removed: {report.partitions_removed}",

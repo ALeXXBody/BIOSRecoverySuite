@@ -38,6 +38,20 @@ _ENGINE_ONLY = ("File System State", "Flash Image Tool", "OEM Configuration")
 
 _UNREADABLE = "This image has no engine data ME Analyzer could read."
 
+# ME Analyzer reports the raw word; the analyzer's own documentation gives the short
+# forms users quote (Unconfigured = RGN, Configured = EXTR, Initialized = Dirty EXTR).
+_FILE_SYSTEM_STATE_LABELS = {
+    "Unconfigured": "Unconfigured (RGN)",
+    "Configured": "Configured (EXTR)",
+    "Initialized": "Initialized (Dirty EXTR)",
+}
+
+
+def _pretty(label: str, key: str, text: str) -> str:
+    if key == "File System State":
+        return _FILE_SYSTEM_STATE_LABELS.get(text, text)
+    return text
+
 
 def engine_entries(report: Any) -> List[Tuple[str, Dict[str, Any]]]:
     """Engine entries of a report, in report order, each with its section name.
@@ -70,7 +84,7 @@ def engine_fields(entry: Dict[str, Any]) -> List[Tuple[str, str]]:
         text = str(value).strip()
         if not text or text == "NaN":
             continue
-        lines.append((label, text))
+        lines.append((label, _pretty(label, key, text)))
     return lines
 
 

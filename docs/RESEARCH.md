@@ -274,3 +274,51 @@ from the good & booting machine, plus me_cleaner's own source as armature:
 
 Nothing more exists that any mainstream tool does on this generation beyond the
 HAP-bit soft-disable; bigger "cleanings" are undocumented surgery and not shipped.
+
+## File System State (CSME 11+): RGN / EXTR / Dirty EXTR — three-source reference
+
+The ME Cleaner surfaces ME Analyzer's File System State and gives state-specific
+guidance. Semantics were cross-checked against independent sources before
+integrating; sources kept here for future maintainers:
+
+1. **ME Analyzer source** (vendored, `bios_recovery/third_party/mea/MEA.py`):
+   `msg_pt.add_row(['File System State', mfs_state])` is only reached for
+   `variant in ('CSME','CSTXE','CSSPS','GSC')` — i.e. CSME 11+ / TXE 3+. For ME < 10
+   engines the row is absent; the word values come from the parsed MFS state:
+   no init files → `Unconfigured`, config-only → `Configured`, initialized files →
+   `Initialized`, unparseable MFS → colored `Error`.
+
+2. **Win-Raid guide "Clean Dumped Intel ME/TXE Regions with Data Initialization"**
+   (platomav): quoted definitions —
+   *"Unconfigured means that the Engine firmware image is the stock one Intel
+   provides and not configured by the OEM at all (RGN)"*;
+   *"Configured means that the OEM has applied model specific settings and the
+   Engine region is ready for deployment (EXTR)"*;
+   *"Initialized means that the Engine region comes from a system which was
+   already running and thus the Engine co-processor has further configured the
+   DATA section ... (system specific or dirty EXTR)"* — and the operating rule:
+   *"Never flash RGN or 3rd-party EXTR firmware to the Engine firmware region of
+   the system's SPI/BIOS chip without first configuring them for your specific
+   system (EXTR) via FIT."*
+
+3. **Win-Raid thread "How to distinguish between RGN and EXTR using MEA"**:
+   EXTR has two kinds. **Type A** (from OEM official BIOS update packages) is
+   configured but NOT bound to a specific machine — *"low failure rate when used
+   to build a clean BIOS"*. **Type B** (dump of a powered-on machine) carries
+   *"the full unique hardware information of that PCH written in, such as the
+   PCH serial number, UUID, AMT configuration, platform event logs, error
+   history"* and *"used to build a clean BIOS ... high chance of causing issues
+   like second-boot problems and sleep failures"*.
+
+4. **erra4electronics "Clean ME CSME v16+"**: repeats the same three-state
+   definition and extends it to CSME 16+.
+
+Practical consequences shipped in the app:
+- Unconfigured (RGN) → never flash as-is; requires FIT configuration (RGN→EXTR);
+  an "RGN donor" is not a donor. (Blank ME Firmware Version in BIOS is this
+  exact state.)
+- Configured (EXTR-A) → the donor state to look for.
+- Initialized (Dirty EXTR-B) → the FIT round-trip is the supported revert;
+  raw byte edits are not, and the HAP bit only neuters the engine.
+- Field absent (CSME ≤ 10) → treat dumped-from-running-machine regions as
+  Initialized (Dirty EXTR) by default.
