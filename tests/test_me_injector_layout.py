@@ -8,8 +8,6 @@ replacement; a layout mismatch is refused with the FIT round-trip guidance.
 
 import struct
 
-import pytest
-
 from bios_recovery.platforms.intel.me.me_injector import MEInjector
 from tests.fixture_builder import build_intel_ifd_image
 

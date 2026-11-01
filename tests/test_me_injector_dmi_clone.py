@@ -24,7 +24,7 @@ def _make_clean_me(size: int = 0x3FF000, version=(9, 5)) -> bytes:
     """
     blob = bytearray(bytes((i * 13 + 7) & 0xFF for i in range(size)))
     target = build_intel_ifd_image()
-    me, me_size = 0x1000, 0x200000 - 0x1000  # fixture ME region bounds (me..gbe)
+    me = 0x1000  # fixture ME region start (me..gbe)
     fpt = 0x10
     entries = target[me + fpt : me + fpt + 0x20 * 7]  # header + 6 rows
     blob[fpt : fpt + len(entries)] = entries
