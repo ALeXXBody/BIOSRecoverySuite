@@ -341,3 +341,21 @@ Integrated fix (vendored):
   the rest of the report (Family/Version/SKU/File System State/...) survives.
 - The rest of the pipeline is untouched; upstream-parity behavior for valid EFS
   images is unchanged (CRC-32 pass → index-ordered parsing).
+
+## "Tools for this image" — report noise fix (v0.4.38)
+
+User report: with a large Intel tools library, the check produced a wall of
+"Other tools: ..." rows including every unidentified FIT/MFIT copy, burying the
+one line that matters (the matching tool for the image's CSME version). The
+feature's own contract is one question — *which Intel tool does this image need
+and do I own it?* — so the output now:
+
+- de-duplicates identical tools (the matching row appeared twice);
+- keeps compatible rows first, capped at six; the remainder collapse into
+  "(+N more)";
+- summarizes unidentified entries (no readable version) into one count line —
+  they can never match anything, so enumerating them is noise.
+
+The Intel-tool *licensing* disclaimer from earlier work still applies: the app
+only *probes* the user's own tool copies to tell which one fits the image;
+nothing is bundled or downloaded (Intel FIT/MFIT are licence-protected).

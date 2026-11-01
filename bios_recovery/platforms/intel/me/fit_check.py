@@ -56,22 +56,44 @@ class FitCheck:
         return f"{family} {self.needed_version}".strip()
 
     def lines(self) -> list[str]:
-        """Short, plain result: what this image needs and what is in the library."""
+        """Short, plain result: what this image needs and what is in the library.
+
+        The output answers exactly one question — "which Intel tool does this
+        image need, and do I have it?" — so incompatible entries are summarised,
+        not enumerated: a library holding dozens of FIT builds (plus unidentified
+        ones) used to bury the useful rows under a wall of noise.
+        """
         name = os.path.basename(self.image) or self.image
         head = f"ME:    {self.me_version or 'not found'}"
         if self.needed_tool:
             head += f" - needs {self.needed_tool}"
-        matching = [t for t in self.tools if t.compatible]
-        others = [t for t in self.tools if not t.compatible]
+
+        matching_rows = _unique_rows([t for t in self.tools if t.compatible and t.version])
+        # Unidentified entries carry no version, so they can never match anything;
+        # they are summarised instead of listed line by line.
+        unidentified = [t for t in self.tools if not t.version]
+        others = _unique_rows(
+            [t for t in self.tools if t.version and not t.compatible]
+        )
+
         out = [f"Image: {name}", head, ""]
         out.append(
-            "Matching tool: " + ", ".join(t.label() for t in matching)
-            if matching
+            "Matching tool: " + ", ".join(t.label() for t in matching_rows)
+            if matching_rows
             else "Matching tool: none"
         )
         if others:
-            out.append("Other tools:   " + ", ".join(t.label() for t in others))
-        if not matching:
+            kept = others[:6]
+            summary = ", ".join(t.label() for t in kept)
+            if len(others) > len(kept):
+                summary += f" (+{len(others) - len(kept)} more)"
+            out.append("In your library (not fitting): " + summary)
+        if unidentified:
+            out.append(
+                f"Unidentified library entries (ignored): {len(unidentified)} "
+                "(no readable version; exclude them or place them elsewhere)"
+            )
+        if not matching_rows:
             out.append("")
             where = f"the CSME {self.needed_version} System Tools" if self.needed_version else (
                 "the matching Intel System Tools"
@@ -81,6 +103,19 @@ class FitCheck:
             else:
                 out.append(f"Add {where} folder in Settings.")
         return out
+
+
+def _unique_rows(rows: list[ToolRow]) -> list[ToolRow]:
+    """Tools de-duplicated by (family, version, platform), first occurrence kept."""
+    seen = set()
+    out = []
+    for t in rows:
+        key = (t.family, t.version, t.platform)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out
 
 
 def check_image(image_path: str) -> FitCheck:
